@@ -1,6 +1,6 @@
 # Desktop 差异分类与修复优先级清单
 
-当前全量验收结论见 [原 161 项最终验收汇总与收尾清单](oshell-desktop-final-acceptance.md)（[逐项 CSV](oshell-desktop-final-acceptance.csv)）。该汇总合并 P1/P2/P3、保留项验证、[C03/I22 缺口修复](oshell-desktop-gap-closure-validation.md)及[Windows 37 项补证记录](oshell-desktop-windows-evidence-validation.md)，区分实际缺口、缺环境及尚缺验收证据；本表继续保留最初 43 项分类与分批处理历史，不用某个修复用例通过替代整项验收。
+当前全量验收结论见 [原 161 项最终验收汇总与收尾清单](oshell-desktop-final-acceptance.md)（[逐项 CSV](oshell-desktop-final-acceptance.csv)）。该汇总合并 P1/P2/P3、保留项验证、[C03/I22 缺口修复](oshell-desktop-gap-closure-validation.md)、[Windows 37 项补证记录](oshell-desktop-windows-evidence-validation.md)及[CI 修复记录](oshell-desktop-ci-repair-validation.md)，区分实际缺口、缺环境及尚缺验收证据；本表继续保留最初 43 项分类与分批处理历史，不用某个修复用例通过替代整项验收。
 
 整理日期：2026-10-25。仅处理[上轮差异清单](oshell-desktop-gap-analysis.md)中的 **43 个“存在差异”SF 条目**，范围仍为 [OShell 固定功能基线](oshell-feature-inventory.md) `OShell-0.2.92-scope-1` 的 13 域、161 项，原版提交 `3f4efd9c70c82323f4e20180117c928227000580`。原版依据见[源码分析记录](oshell-source-analysis.md)，Desktop 证据列至各项生产源码入口。
 

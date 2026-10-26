@@ -1,8 +1,10 @@
 # Desktop 原 161 项最终验收汇总与收尾清单
 
-日期：2026-10-25。范围严格保持 **OShell-0.2.92-scope-1 / 13 域 / 161 个 SF 条目**，参考 OShell 0.2.92 提交 `3f4efd9c70c82323f4e20180117c928227000580`。[固定基线](oshell-feature-inventory.md)不改；[历史差异表](oshell-desktop-gap-analysis.md)及 [43 项处置记录](oshell-desktop-remediation-plan.md)保留历史身份。全量可筛选结果见 [161 项 CSV](oshell-desktop-final-acceptance.csv)。
+更新日期：2026-10-26。范围严格保持 **OShell-0.2.92-scope-1 / 13 域 / 161 个 SF 条目**，参考 OShell 0.2.92 提交 `3f4efd9c70c82323f4e20180117c928227000580`。[固定基线](oshell-feature-inventory.md)不改；[历史差异表](oshell-desktop-gap-analysis.md)及 [43 项处置记录](oshell-desktop-remediation-plan.md)保留历史身份。全量可筛选结果见 [161 项 CSV](oshell-desktop-final-acceptance.csv)。
 
-这是截至当前证据的验收汇总，**不是全项目验收完成声明**。本轮针对原 37 项 Windows 缺证据条目，12 项完成有限补证并通过；25 项因桌面会话无法持续连接，按用户“记录窗口项待验收”的要求保留。发现并修复的 SF-C10 隧道关闭失败占用问题仍归原条目，未扩大范围；详见[本轮补证报告](oshell-desktop-windows-evidence-validation.md)。其余 124 行逐项记录不变。上轮 [C03/I22 修复](oshell-desktop-gap-closure-validation.md)保留历史证据。未提交、推送或触发 Actions；HEAD `62a620541680b687cedf89f8e48adcdb77576e33` 不是含全部未提交修改的完整快照。
+这是截至当前证据的验收汇总，**不是全项目验收完成声明**。2026-10-25 针对原 37 项 Windows 缺证据条目，12 项完成有限补证并通过；25 项因桌面会话无法持续连接，按用户“记录窗口项待验收”的要求保留。发现并修复的 SF-C10 隧道关闭失败占用问题仍归原条目，未扩大范围；详见[该轮补证报告](oshell-desktop-windows-evidence-validation.md)。该轮其余 124 行逐项记录不变。上轮 [C03/I22 修复](oshell-desktop-gap-closure-validation.md)保留历史证据。上述累积改动随后已按用户授权提交为 `9b0c87583867b80d4c403a20fdb5a4c5f3175195`，推送并手动触发 Actions；历史报告中的未提交声明对应当时状态。
+
+2026-10-26 已检查提交 `9b0c875` 的失败流水线，完成 [CI 本地修复与验证](oshell-desktop-ci-repair-validation.md)。SF-I18/I22 补充失败与修复证据，当前数量不变；Linux 实际复验仍未完成。用户已授权提交本次 CI 修复并触发流水线，实际结果以修复提交对应的运行记录为准。
 
 ## 状态口径与数量
 
@@ -37,7 +39,7 @@
 
 ## 证据与限制
 
-本轮最新证据见[Windows 补证报告](oshell-desktop-windows-evidence-validation.md)：7 个包完整回归通过，专项 Agent、真实 SSH/SFTP、图片边界、实际 ZIP 签名准备另有通过记录；`go vet` 通过。新增的两项远端提醒/图片解码测试在整包回归编译后加入，另行定向通过。本轮只有 SF-C10 改动生产逻辑，其余为测试与记录。UI.Tester 和两窗口模型只证明生产状态/事件链，不替代真实窗口、IME 或 GPU。
+2026-10-25 的证据见[Windows 补证报告](oshell-desktop-windows-evidence-validation.md)：7 个包完整回归通过，专项 Agent、真实 SSH/SFTP、图片边界、实际 ZIP 签名准备另有通过记录；当时所选包的 `go vet` 通过。新增的两项远端提醒/图片解码测试在整包回归编译后加入，另行定向通过。该轮只有 SF-C10 改动生产逻辑，其余为测试与记录。2026-10-26 的 CI 失败及扩大到全部应用包的 vet 复验见 [CI 修复报告](oshell-desktop-ci-repair-validation.md)。UI.Tester 和两窗口模型只证明生产状态/事件链，不替代真实窗口、IME 或 GPU。
 
 上轮两项缺口证据仍见[修复记录](oshell-desktop-gap-closure-validation.md)；其中终端 URL 时间预算的历史失败与复测保留，本轮 7 包完整回归没有该失败。其他 124 条不因本轮整包通过自动关闭。
 
@@ -320,11 +322,11 @@ python3 scripts/terminal_runtime.py --target linux/amd64 -- go test ./internal/c
 | SF-I15 | 屏幕与历史 | 已通过 | 主/备用屏、边界、reflow、保存光标和裁剪有限回归通过。 | 无；仅具体新证据触发重开 |
 | SF-I16 | 编辑与擦除 | 已通过 | 参数、区域/重叠、宽字/链接/语义编辑的固定回归通过。 | 无；仅具体新证据触发重开 |
 | SF-I17 | 颜色与属性 | 已通过 | 有限颜色/属性及 Invisible 像素、复制、日志通过；保留有意修正。 | 无；仅具体新证据触发重开 |
-| SF-I18 | 键盘协议 | 待验收（缺证据） | 合成字节矩阵通过；物理 AltGr/布局、IME 与按下/重复/释放消费待验。 本轮未完成真实窗口有限用例：捕获/激活失败，用户确认目前无法保持会话；维持待验收，原步骤不变。 | Windows 交互 |
+| SF-I18 | 键盘协议 | 待验收（缺证据） | 合成字节矩阵通过；物理 AltGr/布局、IME 与按下/重复/释放消费待验。 本轮未完成真实窗口有限用例：捕获/激活失败，用户确认目前无法保持会话；维持待验收，原步骤不变。 2026-10-26 CI 补证：两条 Windows AltGr 用例已按 Go 平台后缀隔离，通用延迟文本矩阵保留跨平台；Windows 定向及最终 DLL 整包复验通过，真实键盘/IME 仍待验。 | Windows 交互 |
 | SF-I19 | 鼠标与焦点 | 待验收（缺证据） | 合成跟踪/焦点与捕获清理通过；真鼠标多按钮、隐藏/迁移/释放未验。 本轮未完成真实窗口有限用例：捕获/激活失败，用户确认目前无法保持会话；维持待验收，原步骤不变。 | Windows 交互 |
 | SF-I20 | 查询与状态 | 待验收（缺证据） | 固定回复、响铃回调及进度状态通过；原生宿主反馈/实际进度显示与超时待验。 本轮未完成真实窗口有限用例：捕获/激活失败，用户确认目前无法保持会话；维持待验收，原步骤不变。 | Windows 交互 |
 | SF-I21 | 刷新与重置 | 待验收（缺证据） | 重置矩阵和软件帧通过；终端实际 GPU/软件同步输出、解除同步及重置画面联验未留证。 本轮未完成真实窗口有限用例：捕获/激活失败，用户确认目前无法保持会话；维持待验收，原步骤不变。 | 图形联验 |
-| SF-I22 | 终端图片 | 待验收（缺环境） | Windows 四介质已支持；新增命名共享内存的跨进程、RGB/RGBA/PNG 像素、范围/类型拒绝、替换/删除及释放通过；Win32 对象在最后句柄关闭后消失。Linux 四介质、原版介质/GPU 对照及实际窗口 GPU 联验待验。 | 图片共享内存（平台补验）、图形联验、Linux 图形 |
+| SF-I22 | 终端图片 | 待验收（缺环境） | Windows 四介质已支持；新增命名共享内存的跨进程、RGB/RGBA/PNG 像素、范围/类型拒绝、替换/删除及释放通过；Win32 对象在最后句柄关闭后消失。Linux 四介质、原版介质/GPU 对照及实际窗口 GPU 联验待验。 2026-10-26 CI 发现 Linux 关闭 SIMD 时未链接 libc，导致 t=s 返回 ENOTSUP；已显式链接 libc/librt，交叉编译及 ELF 符号检查通过，Linux 实际像素/清理复验仍待验。Windows 测试映射写入的 vet 问题已修复并回归通过。 | 图片共享内存（平台补验）、图形联验、Linux 图形 |
 | SF-I23 | Unicode 图形占位 | 待验收（缺证据） | 占位符/缺失/裁剪/身份软件像素通过；实际终端 GPU 与软件两路径同 ID 替换/缩放对照待补。 本轮未完成真实窗口有限用例：捕获/激活失败，用户确认目前无法保持会话；维持待验收，原步骤不变。 | 图形联验 |
 | SF-I24 | 双向文字 | 待验收（缺环境） | 六模式及软件图通过；Windows 实窗 IME/选择和 Linux 显示待验。 | 图形联验、Linux 图形 |
 | SF-I25 | 特殊行显示 | 待验收（缺证据） | 逻辑/软件图回归通过；GPU/软件实际双宽双高行、校准/重排及命中联验待补。 本轮未完成真实窗口有限用例：捕获/激活失败，用户确认目前无法保持会话；维持待验收，原步骤不变。 | 图形联验 |
@@ -421,8 +423,6 @@ python3 scripts/terminal_runtime.py --target linux/amd64 -- go test ./internal/c
 
 ## 便携包与范围校验
 
-本轮已重新构建 0.3.3 Windows 单文件便携包并更新固定 `dist`，含 SF-C10 修复。EXE SHA256：`318ae8cbc1fe026aac0e58fcba8031f00d7c8e1c88fc4dc93740c69997f4610f`；ZIP：`2571a71b024b52507bd4893759d68beb2e3faabda7106ae27655a7e275e13ce8`。ZIP CRC/单 EXE 内容、内嵌 DLL 一致、实际 ZIP 签名准备及私钥排除通过；固定目录原有 11 个数据/配置文件摘要不变。
+最新固定便携包由 2026-10-26 CI 修复后本机构建更新，版本仍为 0.3.3。EXE SHA256：`4e731900df46c00c0f6e5ab3e1003835d8fa8577feff0aad41eb232527a12c84`；ZIP：`d0530b11a09fe35db56bee9760b3fc0ecc2eee83ef8e5fcdaf96799ad25a6b03`。ZIP 内容、内嵌资源、签名准备及独立进程/数据锁启动通过，原 11 个数据/配置文件集合和摘要不变。**本轮没有真实窗口显示、正常退出或交互通过证据。** 详细结果和首次回归失败/复验记录见 [CI 修复报告](oshell-desktop-ci-repair-validation.md)。
 
-独立空白目录已验证进程存活、数据锁建立、内嵌 DLL 从隔离缓存加载且不依赖旁置 DLL。**真实窗口就绪检查失败；本轮未验证可见显示、正常退出或单实例恢复，不沿用上轮通过冒充本轮执行。** 仅清理本次新建、无连接的测试进程；没有结束用户会话。详情见[本轮报告](oshell-desktop-windows-evidence-validation.md)。
-
-固定基线 SHA256：`0fe41373faccf99453302fa6242ab5aaa27e7e084d03462eae3683ae810a30b1`；历史差异 CSV：`b580dc8b3071f60c5d0f1ba30d42f5d8c527777cb9de76ac904f4f4d1d345edc`。本次完整性核对见 `validation/windows37/checklist-verification.json`。161 个 ID/名称/域/基线验收要求不变；全量 CSV 仅更新原 37 项，其余 124 行不变。43 项处置 CSV 未改，P1/P2/P3=9/18/3、保留项 13 的历史分类不变；C10 是原 161 项内回归发现，不新增到历史 43 项。
+固定基线 SHA256：`0fe41373faccf99453302fa6242ab5aaa27e7e084d03462eae3683ae810a30b1`；历史差异 CSV：`b580dc8b3071f60c5d0f1ba30d42f5d8c527777cb9de76ac904f4f4d1d345edc`。161 个 ID/名称/域/基线验收要求和当前状态不变；相对提交 9b0c875，全量 CSV 仅补充 I18/I22 证据，其他 159 行不变。历史行为清单只同步移动后的测试源路径。43 项处置分类/优先级仍保持 P1/P2/P3=9/18/3、保留项 13。核对见 `validation/ci-fix/checklist-verification.json`。

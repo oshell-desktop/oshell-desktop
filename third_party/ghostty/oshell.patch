@@ -12976,3 +12976,22 @@ index 3f6b501..cfa8086 100644
  };
  
  fn decodePngWuffs(
+diff --git a/src/build/GhosttyZig.zig b/src/build/GhosttyZig.zig
+--- a/src/build/GhosttyZig.zig
++++ b/src/build/GhosttyZig.zig
+@@ -123,11 +123,14 @@
+         // no-libcxx mode (HWY_NO_LIBCXX / SIMDUTF_NO_LIBCXX) so we
+         // don't need libcpp. System-provided simdutf headers still
+         // use C++ stdlib headers, so we need libcpp in that case.
+-        .link_libc = if (cfg.simd) true else null,
++        .link_libc = if (cfg.simd or cfg.target.result.os.tag == .linux) true else null,
+         .link_libcpp = if (cfg.simd and
+             b.systemIntegrationOption("simdutf", .{}) and
+             cfg.target.result.abi != .msvc) true else null,
+     });
++    // SF-I22: POSIX shared-memory symbols live in librt on glibc < 2.34.
++    // The OShell runtime disables SIMD, but still needs libc for t=s.
++    if (cfg.target.result.os.tag == .linux) vt.linkSystemLibrary("rt", .{});
+     vt.addOptions("build_options", general_options);
+     vt_options.add(b, vt);
+ 

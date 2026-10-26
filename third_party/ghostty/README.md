@@ -155,3 +155,5 @@
 - SF-I22（P2，不变更 ABI 62）：Windows 生产入口启用 Kitty 文件与临时文件介质，打开前拒绝不安全 Windows 路径，打开后继续校验规范路径、普通文件、读取范围与临时目录；成功读入临时文件后按既有规则删除。Windows 实际像素绘制、临时清理、缺失/越界拒绝及单文件内嵌库均已验证。P2 当时的共享内存 ENOTSUP 缺口由下述更新补齐；Linux 实际端到端仍待环境。
 
 - SF-I22（共享内存补齐，保持 ABI 62）：既有 `t=s` 在 Windows 读取当前登录会话的 Win32 命名映射。`/name`、`name`、`Local\name` 对应同一个 `Local\name`，不引入新控制字段或后台服务；拒绝 Global/路径/设备名空间、非提交映射及文件/映像映射。只读打开并查询实际 section 大小，继续执行原 S/O 和 400 MiB 限额，复制后释放自身视图/句柄，再走原图片解码/缓存/绘制。Windows 没有 POSIX unlink 语义：发送方收到回复后关闭自身映射，最后一个句柄/视图关闭后对象消失；接收方不关闭他人句柄，也不保留共享指针。不能将此描述为实现了 Windows `shm_open` 或能访问远端/Linux 共享内存。真实独立生产者、像素、删除/替换及失败资源释放测试见 `kitty_shared_windows_test.go` 和 `shared_media_windows_test.go`。
+
+- SF-I22（2026-10-26 CI 修复，ABI 62 不变）：Linux 即使关闭 SIMD 仍显式链接 libc，并为 glibc 2.28 目标链接 librt，避免 POSIX 共享内存入口因 builtin.link_libc=false 被编译掉。修复后 Linux 交叉编译及 shm_open/shm_unlink 导入检查通过，实际 Linux 像素与清理仍待复验；Windows 链接条件不变。详见 `docs/oshell-desktop-ci-repair-validation.md`。

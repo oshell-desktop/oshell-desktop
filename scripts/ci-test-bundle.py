@@ -13,6 +13,10 @@ BUNDLE = ROOT / 'validation/windows-tests'
 CORE = 'oshell-desktop/internal/core'
 RACE = [CORE, 'oshell-desktop/internal/terminal/internal/pty', 'oshell-desktop/internal/zmodem']
 PARSERS = ['github.com/jlaffaye/ftp', 'github.com/pkg/sftp']
+# The full core suite includes real 600,000-round password derivations and
+# exceeds three minutes. Keep a finite budget shared by both normal suites;
+# race shards retain their separate, existing budget.
+REGRESSION_TIMEOUT = '8m'
 
 
 def run(command, **kwargs):
@@ -84,7 +88,7 @@ def execute_windows(shard):
     for item in manifest['tests']:
         if item['race'] and item['package'] == CORE:
             continue
-        run([BUNDLE / item['binary'], '-test.v', '-test.paniconexit0', '-test.count=1', '-test.timeout=5m', '-test.run', item['pattern']],
+        run([BUNDLE / item['binary'], '-test.v', '-test.paniconexit0', '-test.count=1', '-test.timeout=' + REGRESSION_TIMEOUT, '-test.run', item['pattern']],
             cwd=ROOT / item['directory'])
     for script in ['test-build.py', 'test-terminal-runtime.py', 'test-configuration-contract.py', 'test-core-shards.py', 'test-ci-bundle.py']:
         run([sys.executable, ROOT / 'scripts' / script], cwd=ROOT)
@@ -142,7 +146,7 @@ def linux(shard=None):
     os.environ['MYGO_GHOSTTY_VT'] = str(prepare('linux/amd64'))
     os.environ['OSHELL_REQUIRE_WIDTH_EXTENSION'] = '1'
     run(['go', 'test', '-race', '-count=1', '-timeout=5m', *RACE[1:]], cwd=ROOT)
-    run(['xvfb-run', '-a', 'dbus-run-session', '--', 'go', 'test', '-count=1', '-timeout=180s', './...'], cwd=ROOT)
+    run(['xvfb-run', '-a', 'dbus-run-session', '--', 'go', 'test', '-count=1', '-timeout=' + REGRESSION_TIMEOUT, './...'], cwd=ROOT)
     run(['go', 'test', '-count=1', *PARSERS, '-run', 'Test(UNIXMetadata|OwnerHints|Parse)'], cwd=ROOT)
     for script in ['test-build.py', 'test-terminal-runtime.py', 'test-core-shards.py', 'test-configuration-contract.py', 'test-ci-bundle.py']:
         run([sys.executable, ROOT / 'scripts' / script], cwd=ROOT)

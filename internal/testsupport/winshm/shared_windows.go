@@ -49,7 +49,15 @@ func NewFile(t testing.TB, file windows.Handle, data []byte, size uint32, protec
 		if err != nil {
 			t.Fatal(err)
 		}
-		copy(unsafe.Slice((*byte)(unsafe.Pointer(m.view)), len(data)), data)
+		// MapViewOfFile returns a native address, not a Go pointer. Keep it
+		// as uintptr and let the Windows API copy into the mapped region.
+		var written uintptr
+		if err = windows.WriteProcessMemory(windows.CurrentProcess(), m.view, &data[0], uintptr(len(data)), &written); err != nil {
+			t.Fatal(err)
+		}
+		if written != uintptr(len(data)) {
+			t.Fatalf("short shared-memory write: %d of %d", written, len(data))
+		}
 	}
 	return m
 }
