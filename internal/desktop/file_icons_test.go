@@ -27,8 +27,11 @@ func TestFileIconsRespectMetadataBeforeExtension(t *testing.T) {
 		kind string
 	}{
 		{"assets.png", os.ModeDir | 0755, "目录"}, {"shortcut.zip", os.ModeSymlink | os.ModeDir | 0777, "链接"},
-		{"ARCHIVE.TAR.GZ", 0644, "压缩包"}, {"photo.PNG", 0644, "图片"}, {"script.sh", 0755, "代码"},
+		{"ARCHIVE.TAR.GZ", 0644, "压缩包"}, {"photo.PNG", 0644, "图片"}, {"script.sh", 0755, "脚本"},
 		{".env", 0600, "配置"}, {"report.pdf", 0644, "PDF"}, {"binary", 0755, "可执行"}, {"unknown", 0644, "文件"}, {"socket", os.ModeSocket, "特殊文件"},
+		{"CMakeLists.txt", 0644, "代码"}, {".env.production", 0600, "配置"}, {"KNOWN_HOSTS", 0600, "配置"},
+		{"README", 0644, "文本"}, {"report.csv", 0644, "表格"}, {"slides.pptx", 0644, "演示文稿"},
+		{"app.rpm", 0644, "安装包"}, {"font.woff2", 0644, "字体"}, {"key.pem", 0600, "证书 / 密钥"}, {"state.sqlite3", 0600, "数据库"},
 	} {
 		style := presentFile(iconFileInfo{tc.name, tc.mode})
 		if style.kind != tc.kind || style.icon == nil {

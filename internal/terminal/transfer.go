@@ -27,14 +27,21 @@ type protocolSession struct {
 
 func newTransferController(t *Terminal) *transferController { return &transferController{term: t} }
 func (t *Terminal) Available() bool {
+	open, paused := t.inputStatus()
+	return open && !paused
+}
+
+// inputStatus distinguishes a live view whose transport is temporarily owned
+// by a transfer from a connection that can no longer take input at all.
+func (t *Terminal) inputStatus() (open, paused bool) {
 	select {
 	case <-t.done:
-		return false
+		return false, false
 	default:
 	}
 	t.in.mu.Lock()
 	defer t.in.mu.Unlock()
-	return !t.in.paused && !t.in.closed
+	return !t.in.closed, t.in.paused
 }
 func (t *Terminal) CancelTransfer() {
 	if t.transfers != nil {
@@ -94,7 +101,7 @@ func (c *transferController) start(upload bool, prefix []byte) {
 	session := &protocolSession{ctx: ctx, cancel: cancel, done: make(chan struct{})}
 	session.pipe = newProtocolPipe(ctx, session.done, func(p []byte) (int, error) { return c.term.in.raw(ctx, p) })
 	c.active = session
-	c.term.in.pause(true)
+	c.term.in.pauseWithCancel(true, session.cancel)
 	go func() {
 		session.err = c.term.opts.TransferHandler(ctx, upload, session.pipe)
 		session.pipe.finish()

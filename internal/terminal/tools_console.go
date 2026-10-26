@@ -13,6 +13,7 @@ import (
 )
 
 type ToolsConsole struct {
+	epoch        atomic.Uint64
 	mu           sync.Mutex
 	process      *pty.PTY
 	processName  string
@@ -93,7 +94,7 @@ func (c *ToolsConsole) run() {
 			continue
 		case "exit", "quit":
 			return
-		case "help":
+		case "help", "?":
 			io.WriteString(c.writer, strings.Join(core.LocalTools, "、")+"\r\n支持参数和引号，不解析管道、重定向或变量；Ctrl+C 中断工具。\r\n")
 			continue
 		case "tools":
@@ -116,6 +117,7 @@ func (c *ToolsConsole) run() {
 		}
 		cols, rows := c.cols, c.rows
 		c.starting = true
+		c.epoch.Add(1)
 		c.mu.Unlock()
 		dir, _ := os.UserHomeDir()
 		proc, e := pty.Start(pty.Options{Path: command.Path, Args: append([]string{command.Path}, command.Arguments...), Dir: dir, Env: environment(nil), Cols: cols, Rows: rows})
@@ -133,6 +135,7 @@ func (c *ToolsConsole) run() {
 			proc.Close()
 			return
 		}
+		c.epoch.Add(1)
 		c.process = proc
 		c.processName = strings.ToLower(command.Name)
 		changed := c.stateChanged
@@ -143,6 +146,7 @@ func (c *ToolsConsole) run() {
 		c.managed.Store(command.ManagedInputAllowed())
 		code := drainToolProcess(c.writer, proc)
 		c.mu.Lock()
+		c.epoch.Add(1)
 		c.process = nil
 		c.processName = ""
 		changed = c.stateChanged

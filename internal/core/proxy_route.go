@@ -37,6 +37,7 @@ func (t *transport) connectProxyRoute(ctx context.Context, p Profile, cred Crede
 	if e != nil {
 		return e
 	}
+	t.observeSocket(socket)
 	if !t.track(socket) {
 		return fmt.Errorf("连接已关闭")
 	}

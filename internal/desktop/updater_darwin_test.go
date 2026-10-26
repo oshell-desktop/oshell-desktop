@@ -85,7 +85,10 @@ func TestUpdateInstallationWaitsForAllWindowModals(t *testing.T) {
 		{"standalone SCP", func(a *App) { a.features.scpDraft = &standaloneSCPDraft{open: true} }},
 		{"sync diagnostics", func(a *App) { a.features.sharedSync.logsOpen = true }},
 		{"vault operation", func(a *App) { a.features.vaultBusy = true }},
-		{"terminal search", func(a *App) { a.features.findOpen = true }},
+		{"terminal search", func(a *App) {
+			p := &pane{search: terminalSearchState{open: true}}
+			a.tabs = []*tab{{root: &node{pane: p}, active: p}}
+		}},
 		{"shortcut capture", func(a *App) { a.features.settingsCapture = "copy" }},
 	}
 	for _, item := range cases {
@@ -106,6 +109,9 @@ func TestUpdateInstallationWaitsForAllWindowModals(t *testing.T) {
 					t.Fatal("pending modal did not block install")
 				}
 				target.features = featureState{}
+				for _, p := range target.allPanes() {
+					p.search.open = false
+				}
 				if owner.updateDialogsOpen() {
 					t.Fatal("dismissed modal kept install blocked")
 				}

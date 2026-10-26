@@ -131,26 +131,26 @@ func TestSearchNextPreviousRefreshesWithoutModal(t *testing.T) {
 	tt := ui.NewTester(a.view, 900, 600)
 	p.term.Feed([]byte("first hit\r\nsecond hit\r\nthird hit"))
 	tt.Frame()
-	a.features.findQuery = "hit"
+	p.search.query = "hit"
 	a.navigateSearch(1)
-	waitOperator(t, a, func() bool { return !a.features.findBusy })
-	if a.features.findIndex != 0 || a.features.findOpen {
-		t.Fatal(a.features.findError)
+	waitOperator(t, a, func() bool { return !p.search.busy })
+	if p.search.index != 0 || p.search.open {
+		t.Fatal(p.search.err)
 	}
 	a.navigateSearch(1)
-	waitOperator(t, a, func() bool { return !a.features.findBusy })
-	if a.features.findIndex != 1 {
+	waitOperator(t, a, func() bool { return !p.search.busy })
+	if p.search.index != 1 {
 		t.Fatal("next failed")
 	}
 	p.term.Feed([]byte("\r\nfourth hit"))
 	a.navigateSearch(-1)
-	waitOperator(t, a, func() bool { return !a.features.findBusy })
-	if a.features.findIndex != 0 {
+	waitOperator(t, a, func() bool { return !p.search.busy })
+	if p.search.index != 0 {
 		t.Fatal("previous after output failed")
 	}
 	a.navigateSearch(-1)
-	waitOperator(t, a, func() bool { return !a.features.findBusy })
-	if a.features.findIndex != 3 {
+	waitOperator(t, a, func() bool { return !p.search.busy })
+	if p.search.index != 3 {
 		t.Fatal("wrap failed")
 	}
 }

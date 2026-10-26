@@ -144,7 +144,7 @@ func (f *recordedFileSystem) run(ctx context.Context, source, target string, upl
 		info, statErr = f.RemoteFileSystem.Lstat(source)
 	}
 	total := int64(-1)
-	if statErr == nil && info != nil && info.Mode().IsRegular() {
+	if statErr == nil && core.RemoteFileTypeKnown(info) && info.Mode().IsRegular() {
 		total = info.Size()
 		if canResume && r.checkpoint == nil {
 			f.log.update(r, func() { r.checkpoint = &core.SFTPCheckpoint{Source: source, Target: target, Upload: upload} })

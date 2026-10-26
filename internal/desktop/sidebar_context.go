@@ -3,6 +3,7 @@ package desktop
 import (
 	"path"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -11,6 +12,7 @@ import (
 // A context exists only while dispatching a sidebar menu or shortcut. Shared
 // session actions see this target without borrowing the manager's selection.
 type sidebarMenuContext struct {
+	rows  []sessionRow
 	row   sessionRow
 	valid bool
 	group string
@@ -55,8 +57,23 @@ func (a *App) withSidebarContext(id string, action func()) bool {
 	if id != "" && !valid {
 		return false // A menu can outlive a configuration refresh.
 	}
+	if id == "" {
+		a.sidebar.selection.Clear()
+	} else if !a.sidebar.selection.Has(id) {
+		a.sidebar.selection.Clear()
+		a.sidebar.selection.Add(id)
+	}
+	var rows []sessionRow
+	for key := range a.sidebar.selection.All() {
+		if len(a.sidebar.visible) > 0 && !slices.Contains(a.sidebar.visible, key) {
+			continue
+		}
+		if r, ok := a.sidebarRow(key); ok {
+			rows = append(rows, r)
+		}
+	}
 	previous := a.sidebar.context
-	a.sidebar.context = &sidebarMenuContext{row: row, valid: valid, group: row.group}
+	a.sidebar.context = &sidebarMenuContext{rows: rows, row: row, valid: valid, group: row.group}
 	defer func() { a.sidebar.context = previous }()
 	a.sidebar.selected = id
 	action()
@@ -82,11 +99,13 @@ func (a *App) sidebarContextMenu(c *ui.Context, m *ui.Menu, id string) {
 }
 
 func (a *App) sidebarItemActions(c *ui.Context, item ui.Element, id string) {
-	if item.Clicked() {
-		a.sidebar.selected = id
-	}
+
 	item.ContextMenu(func(m *ui.Menu) { a.sidebarContextMenu(c, m, id) })
 	item.HandleInput(func(ev ui.InputEvent) bool {
+		if ev.Kind == ui.InputPointerDown && ev.Button == 0 {
+			a.selectSidebar(id, ev.Mods)
+			return false
+		}
 		if ev.Kind != ui.InputKeyDown {
 			return false
 		}
@@ -116,6 +135,8 @@ func (a *App) revealSidebar(id string) {
 		return
 	}
 	a.sidebar.query, a.sidebar.selected = "", id
+	a.sidebar.selection.Clear()
+	a.sidebar.selection.Add(id)
 	if a.sidebar.open == nil {
 		a.sidebar.open = map[string]*bool{}
 	}

@@ -102,11 +102,12 @@ type SyncDiagnosticEntry struct {
 	Failure    *SyncSafeFailure `json:"failure,omitempty"`
 }
 type SyncSummary struct {
-	Scope            string     `json:"scope"`
-	LastAttempt      *time.Time `json:"lastAttempt,omitempty"`
-	LastSuccess      *time.Time `json:"lastSuccess,omitempty"`
-	Outcome          SyncEvent  `json:"outcome,omitempty"`
-	LocalFingerprint string     `json:"localFingerprint,omitempty"`
+	Scope            string           `json:"scope"`
+	LastAttempt      *time.Time       `json:"lastAttempt,omitempty"`
+	LastSuccess      *time.Time       `json:"lastSuccess,omitempty"`
+	Outcome          SyncEvent        `json:"outcome,omitempty"`
+	LocalFingerprint string           `json:"localFingerprint,omitempty"`
+	Failure          *SyncSafeFailure `json:"failure,omitempty"`
 }
 type SyncDiagnosticDocument struct {
 	Version int                   `json:"version"`
@@ -144,6 +145,9 @@ func (d SyncDiagnostics) read() (SyncDiagnosticDocument, error) {
 		return SyncDiagnosticDocument{}, errors.New("同步诊断日志格式无效")
 	}
 	if doc.Summary.Scope != "" && !safeDigest(doc.Summary.Scope) || doc.Summary.LocalFingerprint != "" && !safeDigest(doc.Summary.LocalFingerprint) || doc.Summary.Outcome != "" && doc.Summary.Outcome.Title() == "" {
+		return SyncDiagnosticDocument{}, errors.New("同步诊断摘要无效")
+	}
+	if doc.Summary.Failure != nil && doc.Summary.Failure.Title() == "" {
 		return SyncDiagnosticDocument{}, errors.New("同步诊断摘要无效")
 	}
 	for _, entry := range doc.Entries {
@@ -213,10 +217,14 @@ func (d SyncDiagnostics) record(event SyncEvent, manual bool, duration time.Dura
 		doc.Summary = SyncSummary{Scope: d.scope()}
 	}
 	doc.Summary.Outcome = event
+	if event == SyncFailed {
+		doc.Summary.Failure = entry.Failure
+	}
 	if event == SyncStarted {
 		doc.Summary.LastAttempt = &now
 	}
 	if event == SyncCompleted || event == SyncUnchanged {
+		doc.Summary.Failure = nil
 		doc.Summary.LastSuccess = &now
 		doc.Summary.LocalFingerprint = fingerprint
 	}
@@ -262,6 +270,9 @@ func (e *SharedSyncEngine) Diagnostics() SyncDiagnostics {
 	return SyncDiagnostics{Directory: e.Store.Dir, Target: e.Replica.Target, Backend: backend}
 }
 func (e *SharedSyncEngine) diagnosticFingerprint() string {
+	if e.Selection != nil {
+		return SyncLocalFingerprint(e.Store, e.Vault, *e.Selection)
+	}
 	return SyncLocalFingerprint(e.Store, e.Vault)
 }
 
@@ -282,7 +293,8 @@ func (d SyncDiagnostics) SummaryForTarget(doc SyncDiagnosticDocument) SyncSummar
 	}
 	return doc.Summary
 }
-func SyncLocalFingerprint(store *Store, vault *Vault) string {
+func SyncLocalFingerprint(store *Store, vault *Vault, selection ...SyncContentSelection) string {
+	scope := syncSelection(selection)
 	if store == nil || vault == nil {
 		return ""
 	}
@@ -324,8 +336,12 @@ func SyncLocalFingerprint(store *Store, vault *Vault) string {
 			entries[id] = entry
 		}
 	}
-	// Hash only session data, their encrypted credentials and master protection.
-	// WebDAV credentials and client-only settings do not make sessions dirty.
+	if !scope.Sessions {
+		cfg.Profiles, cfg.Proxies, cfg.Directories, cfg.Links, cfg.LinkRootOrder = nil, nil, nil, nil, nil
+		entries = nil
+	}
+	// Hash selected categories, their encrypted credentials and master protection.
+	// WebDAV credentials and unselected/device-only settings never make it dirty.
 	body, err := json.Marshal(struct {
 		Profiles    []Profile
 		Proxies     []ProxyProfile
@@ -339,6 +355,13 @@ func SyncLocalFingerprint(store *Store, vault *Vault) string {
 	vault.mu.Unlock()
 	if err != nil {
 		return ""
+	}
+	if scope.ClientSettings || scope.QuickCommands || scope.SessionDefaults {
+		extra, err := json.Marshal(sessionSyncDocument(SharedDocument{Preferences: preferencesForShared(cfg), HighlightSets: cfg.HighlightSets, QuickCommands: cfg.QuickCommands, Defaults: cfg.SessionDefaults, Links: SharedLinks{Visible: cfg.Settings.LinksVisible}}, SyncContentSelection{ClientSettings: scope.ClientSettings, QuickCommands: scope.QuickCommands, SessionDefaults: scope.SessionDefaults}))
+		if err != nil {
+			return ""
+		}
+		body = append(body, extra...)
 	}
 	hash := sha256.Sum256(body)
 	return hex.EncodeToString(hash[:])

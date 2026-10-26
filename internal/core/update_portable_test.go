@@ -6,8 +6,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
@@ -82,8 +80,9 @@ func TestReleaseDownloadIntegrity(t *testing.T) {
 				}
 			}))
 			defer srv.Close()
-			digest := sha256.Sum256(data)
-			u := &ReleaseUpdate{asset: releaseAsset{URL: srv.URL, Size: int64(len(data)), Digest: "sha256:" + hex.EncodeToString(digest[:])}}
+			u, _, _ := signedPortableFixture(t, "windows-amd64", "0.3.2", data)
+			// Route this verified fixture to the local transport server only.
+			u.asset.URL, u.verified.archive.URL = srv.URL, srv.URL
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			if kind == "cancel" {

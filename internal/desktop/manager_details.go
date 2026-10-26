@@ -29,6 +29,10 @@ func (a *App) managerRows() []sessionRow {
 // Consume the entire parent click sequence. Its second click arrives over a
 // different row after navigation and must never open that row's connection.
 func (a *App) managerCellInput(row sessionRow, ev ui.InputEvent) bool {
+	if ev.Kind == ui.InputPointerCancel {
+		a.managerParentClick = false
+		return true
+	}
 	if ev.Button != 0 {
 		return false
 	}

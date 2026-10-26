@@ -35,7 +35,7 @@ func TestPasswordMenuRoutesThroughUnlockAndExistingActions(t *testing.T) {
 	}
 	a.features.vaultOpen = false
 	a.passwordMenuAction("lock")
-	if !a.passwordLocked() || a.features.vaultAction != "unlock" {
+	if !a.passwordLocked() || a.workspaceLocked() {
 		t.Fatal("lock menu did not lock")
 	}
 	a.passwordMenuAction("remove")

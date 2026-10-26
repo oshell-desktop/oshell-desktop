@@ -31,6 +31,24 @@ var ErrClipboardChanged = platform.ErrClipboardChanged
 // after the owning application exits. Providers have still been materialized.
 var ErrClipboardPersistence = platform.ErrClipboardPersistence
 
+// Generation reports native clipboard changes, including replacement followed
+// by restoration of identical content. Unsupported backends return false.
+func (ClipboardModule) Generation() (uint64, bool) {
+	needsApp("Clipboard.Generation")
+	type stamp struct {
+		value uint64
+		valid bool
+	}
+	s := clipboardNativeValue(func() stamp {
+		if c, ok := backend().Clipboard().(interface{ Generation() (uint64, bool) }); ok {
+			value, valid := c.Generation()
+			return stamp{value, valid}
+		}
+		return stamp{}
+	})
+	return s.value, s.valid
+}
+
 // Clipboard state is main-thread only. User release hooks are deferred until
 // native callbacks unwind, including callbacks made during Write itself.
 type clipboardLifetime struct {

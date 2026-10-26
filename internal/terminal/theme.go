@@ -71,26 +71,20 @@ func (th *Theme) dark() bool {
 	return 299*int(b.R)+587*int(b.G)+114*int(b.B) < 128*1000
 }
 
-// palette returns the 256 colors of the theme: its 16, the 6×6×6 cube and
-// the 24 grays of xterm.
+// palette derives extended colors from the theme in Lab, matching OShell's
+// default SwiftTerm strategy. The first 16 ANSI colors stay unchanged.
 func (th *Theme) palette() *[256]vt.RGB {
 	var p [256]vt.RGB
 	for i, c := range th.Palette {
 		p[i] = rgb(c)
 	}
-	levels := [6]uint8{0, 95, 135, 175, 215, 255}
-	for i := range 216 {
-		p[16+i] = vt.RGB{R: levels[i/36], G: levels[i/6%6], B: levels[i%6]}
-	}
-	for i := range 24 {
-		v := uint8(8 + 10*i)
-		p[232+i] = vt.RGB{R: v, G: v, B: v}
-	}
+	fillLabPalette(&p, rgb(th.Background), rgb(th.Foreground))
 	return &p
 }
 
 // apply makes the theme the terminal's defaults.
 func (th *Theme) apply(t *vt.Terminal) {
+	t.SetDerivedPalette(fillLabPalette)
 	var cursor *vt.RGB
 	if th.Cursor.A > 0 {
 		c := rgb(th.Cursor)

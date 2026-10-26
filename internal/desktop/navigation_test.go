@@ -8,6 +8,45 @@ import (
 	"time"
 )
 
+func TestQuickSwitchScopeAndStableSelection(t *testing.T) {
+	a := parityApp(t)
+	first, _ := operatorPane(t, a, "opened one")
+	second, _ := operatorPane(t, a, "opened two")
+	profile := core.NewProfile()
+	profile.Name = "saved fixture"
+	profile.Host = "example.invalid"
+	a.config.Profiles = []core.Profile{profile}
+	a.showQuickSwitch()
+	f := &a.features.switcher
+	f.scope = "opened"
+	entries := a.switchEntries()
+	if len(entries) != 2 {
+		t.Fatal("opened scope", entries)
+	}
+	f.selectionKey = entries[1].key()
+	f.reconcileSelection([]switchEntry{entries[1], entries[0]})
+	if f.selected != 0 {
+		t.Fatal("selection did not follow identity")
+	}
+	f.query = "one"
+	entries = a.switchEntries()
+	f.reconcileSelection(entries)
+	if len(entries) != 1 || entries[f.selected].Pane != first {
+		t.Fatal("removed selection not reset")
+	}
+	f.query = ""
+	f.scope = "saved"
+	entries = a.switchEntries()
+	if len(entries) != 1 || entries[0].Pane != nil || entries[0].Profile.ID != profile.ID {
+		t.Fatal("saved scope", entries)
+	}
+	f.scope = "all"
+	entries = a.switchEntries()
+	if len(entries) != 3 || entries[1].Pane != second {
+		t.Fatal("all scope", entries)
+	}
+}
+
 func TestPaneZoomKeepsLayoutAndQuickSwitchRevealsHiddenGroup(t *testing.T) {
 	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
 	first, _ := operatorPane(t, a, "prod.example")

@@ -25,6 +25,9 @@ func (ed *editor) selectAll() { ed.editorSelection = editorSelection{caret: ed.b
 // wants reports whether the editor handles a key, rather than letting it
 // reach shortcuts.
 func (ed *editor) wants(k keyEvent) bool {
+	if k.key >= KeyF13 && k.key <= KeyF35 {
+		return false
+	}
 	m := k.mods &^ Shift
 	if ed.readOnly {
 		// Selecting and copying; the arrows without Shift scroll.

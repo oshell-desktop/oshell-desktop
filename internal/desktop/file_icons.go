@@ -34,32 +34,35 @@ func presentFile(entry os.FileInfo) filePresentation {
 	if mode&os.ModeSymlink != 0 {
 		return makeStyle("链接", linkIcon, "#8B78C6")
 	}
+	if !core.RemoteFileTypeKnown(entry) {
+		return makeStyle("未知", documentFileIcon, "#7B91A6")
+	}
 	if entry.IsDir() {
 		return makeStyle("目录", folderIcon, "#428BC1")
 	}
 	if !mode.IsRegular() {
 		return makeStyle("特殊文件", settingsIcon, "#8A8196")
 	}
-	switch strings.ToLower(path.Ext(entry.Name())) {
-	case ".zip", ".tar", ".gz", ".bz2", ".xz", ".7z", ".rar", ".tgz", ".zst":
-		return makeStyle("压缩包", archiveFileIcon, "#B58132")
-	case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".heic", ".bmp", ".tiff":
-		return makeStyle("图片", imageFileIcon, "#4C9B70")
-	case ".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a":
-		return makeStyle("音频", audioFileIcon, "#AF72AE")
-	case ".mp4", ".mov", ".mkv", ".avi", ".webm":
-		return makeStyle("视频", mediaFileIcon, "#AF72AE")
-	case ".go", ".py", ".js", ".ts", ".tsx", ".jsx", ".c", ".h", ".cpp", ".rs", ".swift", ".java", ".sh", ".bash", ".zsh", ".ps1":
-		return makeStyle("代码", codeFileIcon, "#508FA6")
-	case ".json", ".yaml", ".yml", ".toml", ".ini", ".conf", ".cfg", ".xml", ".env":
-		return makeStyle("配置", settingsIcon, "#8B78C6")
-	case ".pdf":
-		return makeStyle("PDF", documentFileIcon, "#C06A60")
-	case ".txt", ".md", ".log", ".csv", ".rtf", ".doc", ".docx":
-		return makeStyle("文档", documentFileIcon, "#7B91A6")
+	name := strings.ToLower(entry.Name())
+	kind := ""
+	switch name {
+	case "dockerfile", "makefile", "gnumakefile", "cmakelists.txt", "jenkinsfile", "vagrantfile":
+		kind = "代码"
+	case ".bashrc", ".zshrc", ".profile", ".bash_profile", ".zprofile":
+		kind = "脚本"
+	case ".env", ".gitignore", ".gitattributes", ".editorconfig", ".npmrc", ".vimrc", "config", "known_hosts", "authorized_keys":
+		kind = "配置"
+	case "readme", "license", "licence", "copying", "changelog", "authors", "notice":
+		kind = "文本"
 	}
-	if strings.EqualFold(entry.Name(), ".env") {
-		return makeStyle("配置", settingsIcon, "#8B78C6")
+	if strings.HasPrefix(name, ".env.") {
+		kind = "配置"
+	}
+	if kind == "" {
+		kind = fileExtensionKinds[strings.ToLower(path.Ext(name))]
+	}
+	if style, ok := fileKindStyles[kind]; ok {
+		return style
 	}
 	if mode.Perm()&0111 != 0 {
 		return makeStyle("可执行", terminalIcon, "#509975")
@@ -79,8 +82,40 @@ func fileAttributeHint(entry os.FileInfo, kind string) string {
 	if entry.Mode().IsRegular() && entry.Mode().Perm()&0111 != 0 {
 		text += "\n具有执行权限"
 	}
-	if !entry.IsDir() {
+	if !core.RemoteFileTypeKnown(entry) {
+		text += "\n服务器未提供类型和大小；可尝试进入目录"
+	} else if !entry.IsDir() {
 		text += fmt.Sprintf("\n大小：%s（%d 字节）", bytesLabel(entry.Size()), entry.Size())
 	}
 	return text + "\n修改时间：" + fileModifiedDetail(entry)
 }
+
+var fileKindStyles = map[string]filePresentation{
+	"文本": {"文本", documentFileIcon, ui.Hex("#7B91A6")}, "代码": {"代码", codeFileIcon, ui.Hex("#428BC1")},
+	"脚本": {"脚本", terminalIcon, ui.Hex("#509975")}, "配置": {"配置", settingsIcon, ui.Hex("#8B78C6")},
+	"压缩包": {"压缩包", archiveFileIcon, ui.Hex("#B58132")}, "图片": {"图片", imageFileIcon, ui.Hex("#8B78C6")},
+	"音频": {"音频", audioFileIcon, ui.Hex("#C06A60")}, "视频": {"视频", mediaFileIcon, ui.Hex("#8B78C6")},
+	"PDF": {"PDF", documentFileIcon, ui.Hex("#C06A60")}, "文档": {"文档", documentFileIcon, ui.Hex("#428BC1")},
+	"表格": {"表格", documentFileIcon, ui.Hex("#509975")}, "演示文稿": {"演示文稿", documentFileIcon, ui.Hex("#B58132")},
+	"数据库": {"数据库", settingsIcon, ui.Hex("#509975")}, "安装包": {"安装包", archiveFileIcon, ui.Hex("#B58132")},
+	"字体": {"字体", documentFileIcon, ui.Hex("#428BC1")}, "证书 / 密钥": {"证书 / 密钥", settingsIcon, ui.Hex("#B58132")},
+}
+var fileExtensionKinds = func() map[string]string {
+	out := map[string]string{}
+	for kind, extensions := range map[string]string{
+		"文本":  "txt log md markdown rst rtf",
+		"代码":  "swift c h cc cpp hpp m mm rs go java kt scala js jsx ts tsx vue html htm css scss sql",
+		"脚本":  "sh bash zsh fish py rb pl lua php ps1 bat cmd",
+		"配置":  "json jsonc yaml yml toml ini conf config cfg xml plist properties service env",
+		"压缩包": "zip tar gz tgz bz2 tbz2 xz txz zst 7z rar lz lz4 jar war",
+		"图片":  "png jpg jpeg gif webp svg ico icns heic tif tiff bmp avif",
+		"音频":  "mp3 wav flac aac m4a ogg opus aiff", "视频": "mp4 mov mkv avi webm m4v mpeg",
+		"PDF": "pdf", "文档": "doc docx odt pages", "表格": "xls xlsx csv tsv ods numbers", "演示文稿": "ppt pptx odp",
+		"数据库": "db sqlite sqlite3 mdb", "安装包": "dmg pkg deb rpm msi exe apk iso", "字体": "ttf otf woff woff2", "证书 / 密钥": "pem crt cer key p12 pfx pub",
+	} {
+		for _, ext := range strings.Fields(extensions) {
+			out["."+ext] = kind
+		}
+	}
+	return out
+}()

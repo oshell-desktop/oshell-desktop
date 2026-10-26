@@ -44,6 +44,9 @@ func (a *App) managerContextMenu(c *ui.Context, m *ui.Menu, id string) {
 		return
 	}
 	chosen := a.selectedManagerRows()
+	if a.pinsMenu(m, chosen) {
+		return
+	}
 	mutable := a.managerSelectionMutable()
 	count := a.managerConnectCount()
 	if len(chosen) > 1 {

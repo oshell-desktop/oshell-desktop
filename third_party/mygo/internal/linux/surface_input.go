@@ -32,8 +32,6 @@ func (s *surface) connectSystem(data ptr) {
 	systemOnce.Do(initSystemSurface)
 	surfaceAreas[s.area] = s
 	connect(s.area, "destroy", cbSurfaceAreaDestroy, data)
-	connect(s.im, "retrieve-surrounding", cbIMRetrieveSurrounding, data)
-	connect(s.im, "delete-surrounding", cbIMDeleteSurrounding, data)
 	s.acceptFileDrops(data)
 }
 
@@ -46,20 +44,26 @@ func initSystemSurface() {
 	b := func() *Backend { return theBackend }
 	cbIMRetrieveSurrounding = purego.NewCallback(func(im, data ptr) bool {
 		s := b().surfaceOf(data)
-		if s == nil || !s.input.Active {
+		if !s.acceptIMInput(im) {
 			return false
 		}
 		text, cursor := s.surrounding()
+		if !s.acceptIMInput(im) {
+			return false
+		}
 		gtkIMContextSetSurrounding(im, cs(text), int32(len(text)), int32(cursor))
 		return true
 	})
 	cbIMDeleteSurrounding = purego.NewCallback(func(im ptr, offset, n int32, data ptr) bool {
 		s := b().surfaceOf(data)
-		if s == nil || !s.input.Active || n < 0 {
+		if !s.acceptIMInput(im) || n < 0 {
 			return false
 		}
 		if client := s.input.Client; client != nil {
 			r := platform.ClientDeleteRange(client, int(offset), int(n))
+			if !s.acceptIMInput(im) || s.input.Client != client {
+				return false
+			}
 			client.ReplaceText(&r, "")
 			return true
 		}

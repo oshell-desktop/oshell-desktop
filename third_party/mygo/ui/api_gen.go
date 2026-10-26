@@ -3065,6 +3065,21 @@ func (_handle Element) FontWeight(w int) Element {
 	return wrapElement(_node.FontWeight(w))
 }
 
+// FunctionalInput preserves layout, non-printing and keypad events for a custom
+// HandleInput element using TextCaret, such as a terminal. On Linux, plain
+// control-character IME commits retain their functional key identity; real
+// composition remains text. The handler must accept a press (return true)
+// to receive its paired release. Ordinary editors should leave this disabled.
+func (_handle Element) FunctionalInput(enabled bool) Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.FunctionalInput(enabled))
+}
+
 // Gap puts space between children, and between the lines of a wrapping
 // container or the tracks of a grid.
 func (_handle Element) Gap(v float32) Element {
@@ -3606,6 +3621,19 @@ func (_handle Element) Modal() Element {
 	_ctx := _node.c
 	_ = _ctx
 	return wrapElement(_node.Modal())
+}
+
+// NoSpellcheck asks native input methods not to spell-check this editor.
+// It does not mask text or restrict characters. Call it each frame, including
+// while temporarily revealing a password. Input method support varies.
+func (_handle Element) NoSpellcheck() Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.NoSpellcheck())
 }
 
 // NoWrap keeps each line of the element's text whole, breaking it only at

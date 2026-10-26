@@ -124,6 +124,10 @@ func TestMixedSSHAndSOCKSRoute(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	host, port := c.ObservedPeer()
+	if host != gatewayProfile.Host || port != gatewayProfile.Port {
+		t.Fatalf("observed peer must be first local TCP hop: %s:%d", host, port)
+	}
 	echoConn(t, c, "mixed-route\n")
 	c.Close()
 	if !called[first.ID()] || !called[second.ID()] || target.auth.Load() != 1 || gateway.auth.Load() != 1 {

@@ -1,5 +1,7 @@
 package ui
 
+import "time"
+
 // InputKind is the kind of an InputEvent.
 type InputKind uint8
 
@@ -9,7 +11,10 @@ const (
 	// Repeat marks the auto-repeat of a key held down. A key that types
 	// text comes before the text, an InputText event, on macOS and
 	// Windows; on Linux, only the text comes while the element takes text
-	// (TextCaret).
+	// (TextCaret), except keys requested with FunctionalInput outside
+	// a composition. Layout-aware printable keys carry Unshifted and their
+	// synchronous Text commit together unless TextPending requests a separate
+	// InputText (as on Windows).
 	InputKeyDown InputKind = iota + 1
 	InputKeyUp
 	// InputText is text typed, or committed by an input method.
@@ -23,9 +28,11 @@ const (
 	InputCommand
 	// InputPointerDown and InputPointerUp report Button pressed or
 	// released at X, Y, with Clicks the count of quick successive presses
-	// (2 for a double click). Once the element takes an InputPointerDown,
+
+	// (2 for a double click). Counts belong to the window sequence, so replacing
+	// an element under the pointer does not restart them. Once the element takes an InputPointerDown,
 	// the pointer's moves and its release come to it wherever they are,
-	// and the release comes when the window loses the keyboard too.
+	// and InputPointerCancel comes if capture or the window focus is lost.
 	InputPointerDown
 	InputPointerUp
 	// InputPointerMove reports the pointer at X, Y, with Button held, or
@@ -34,15 +41,36 @@ const (
 	// InputScroll scrolls by DX, DY DIPs at X, Y; Precise marks
 	// touchpads, which scroll by pixels rather than by lines.
 	InputScroll
+	// InputCancel immediately clears pending keyboard/composition state when a
+	// FunctionalInput handler loses focus. It is not a key release or text commit,
+	// and is delivered even if focus returns before the next frame is rendered.
+	InputCancel
+	// InputPointerCancel ends capture without copying, activating, or dropping.
+	InputPointerCancel
 )
 
 // InputEvent is input an element takes as it comes (HandleInput).
 type InputEvent struct {
-	Kind   InputKind
-	Key    Key
-	Mods   Modifiers
-	Repeat bool
-	// Text of InputText, InputCompose and InputCommand, and Caret the
+	// Unshifted identifies a layout-aware printable key. On key-down Text is
+	// its synchronous IME commit (possibly empty for Ctrl/Alt shortcuts).
+	// A zero value retains the platform's ordinary key-then-text path.
+	Unshifted rune
+	// TextPending preserves the platform's separate text/IME commit after a
+	// layout-aware key-down. False means Text is already the complete commit.
+	TextPending bool
+	// Shifted and BaseLayout are optional Unicode layout identities, independent
+	// of committed Text. They also accompany key-up when available.
+	Shifted, BaseLayout rune
+	// Literal marks a layout-composed InputText that must remain literal text.
+	Literal bool
+	Kind    InputKind
+	Key     Key
+	Mods    Modifiers
+	Repeat  bool
+	// Keypad distinguishes numeric keypad events without changing their
+	// logical Key used by ordinary controls and shortcuts.
+	Keypad bool
+	// Text of InputText, InputCompose, InputCommand or layout-aware InputKeyDown, and Caret the
 	// rune of an InputCompose's caret.
 	Text  string
 	Caret int
@@ -52,6 +80,15 @@ type InputEvent struct {
 	// middle.
 	Button int
 	Clicks int
+	// PointerDown may carry the source event clock, independent of dispatch delay.
+	// Compare timestamps only within one surface. Zero is valid when present.
+	HasTimestamp bool
+	Timestamp    time.Duration
+	// Host double-click settings at this press; the flag permits a valid zero interval.
+	// Distances are maximum axis deltas in DIPs.
+	HasDoubleClickSettings                     bool
+	DoubleClickInterval                        time.Duration
+	DoubleClickDistanceX, DoubleClickDistanceY float32
 	// DX and DY are what InputScroll scrolls by; positive DY moves the view
 	// down the content.
 	DX, DY  float32
@@ -81,6 +118,16 @@ func (e *node) HandleInput(fn func(ev InputEvent) bool) *node {
 // InputText and Compose events (HandleInput) bring the text.
 func (e *node) TextCaret(r Rect) *node {
 	e.caret, e.takesText = r, true
+	return e
+}
+
+// FunctionalInput preserves layout, non-printing and keypad events for a custom
+// HandleInput element using TextCaret, such as a terminal. On Linux, plain
+// control-character IME commits retain their functional key identity; real
+// composition remains text. The handler must accept a press (return true)
+// to receive its paired release. Ordinary editors should leave this disabled.
+func (e *node) FunctionalInput(enabled bool) *node {
+	e.functionalInput = enabled
 	return e
 }
 

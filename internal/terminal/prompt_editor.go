@@ -110,7 +110,7 @@ func clusters(text string) []string {
 func (e *promptEditor) text() string    { return strings.Join(e.line, "") }
 func (e *promptEditor) set(text string) { e.line = clusters(text); e.pos = len(e.line) }
 func (e *promptEditor) insert(text string) {
-	if len(e.text())+len(text) > 64<<10 {
+	if len(e.text())+len(text) > 8192 {
 		return
 	}
 	prefix := strings.Join(e.line[:e.pos], "") + text

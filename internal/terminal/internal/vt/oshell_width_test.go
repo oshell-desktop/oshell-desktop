@@ -1,10 +1,16 @@
 package vt
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestOShellAmbiguousWidth(t *testing.T) {
 	loadLib(t)
-	if oshellABI != 1 {
+	if oshellABI < 1 || oshellABI > 62 {
+		if os.Getenv("OSHELL_REQUIRE_WIDTH_EXTENSION") == "1" {
+			t.Fatal("required OShell width extension is absent")
+		}
 		t.Skip("requires OShell native extension")
 	}
 	for _, tc := range []struct {

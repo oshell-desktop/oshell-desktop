@@ -126,7 +126,7 @@ func (h *applicationHub) forwardExtendedTerminalKey(event objc.ID, code uint16, 
 	}
 	window := event.Send(objc.RegisterName("window"))
 	for _, a := range h.windows {
-		if a.win == nil || objc.ID(a.win.NativeHandle()) != window || a.passwordLocked() || a.settingsOpen || a.modalActive() || a.features.findOpen {
+		if a.win == nil || objc.ID(a.win.NativeHandle()) != window || a.workspaceLocked() || a.settingsOpen || a.modalActive() || a.hasOpenTerminalSearch() {
 			continue
 		}
 		// Configured shortcuts remain owned by their native menu bindings.

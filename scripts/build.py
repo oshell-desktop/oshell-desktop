@@ -10,6 +10,7 @@ import tempfile
 import tarfile
 import zipfile
 from single_file import embedded_resources
+from terminal_runtime import native_manifest
 
 ROOT = Path(__file__).resolve().parent.parent
 TARGETS = ('windows/amd64', 'linux/amd64')
@@ -76,6 +77,12 @@ def build(target, output, archive=False, single_file=False):
     goos, arch = target.split('/')
     if single_file and target != 'windows/amd64':
         raise SystemExit('Single-file packaging supports Windows amd64 only.')
+    with native_manifest(target):
+        return build_prepared(target, output, archive, single_file)
+
+
+def build_prepared(target, output, archive=False, single_file=False):
+    goos, arch = target.split('/')
     generated = ROOT / 'mygo.ts'
     previous = generated.read_bytes() if generated.exists() else None
     with tempfile.TemporaryDirectory(prefix='oshell-build-') as folder:
@@ -119,7 +126,7 @@ def build(target, output, archive=False, single_file=False):
             destination = output / f'{goos}-{arch}'
             for installer in product.glob('OShell Desktop Setup *.exe'):
                 installer.unlink()
-            (product / '使用说明.txt').write_text('Windows amd64 绿色便携版\n完整解压后直接双击 OShell Desktop.exe。无需安装、启动脚本或管理员权限。\n配置、凭据、主机指纹等数据文件保存在 EXE 同级目录。移动时复制整个文件夹。\n请保留 oshell-portable 标记和 ghostty-vt.dll，并放在可写目录。\n旧版配置请先关闭旧版，再将原数据目录的完整数据文件复制过来；不要覆盖程序文件。\n更新时请先完全退出旧版，只替换程序文件，保留原配置、凭据、密钥及 state-transaction.json；新版启动会自动恢复未完成的保存。\n当前 Windows 终端库暂不支持歧义字符双宽扩展，请保持该选项关闭。\n', encoding='utf-8-sig')
+            (product / '使用说明.txt').write_text('Windows amd64 绿色便携版\n完整解压后直接双击 OShell Desktop.exe。无需安装、启动脚本或管理员权限。\n配置、凭据、主机指纹等数据文件保存在 EXE 同级目录。移动时复制整个文件夹。\n请保留 oshell-portable 标记和 ghostty-vt.dll，并放在可写目录。\n旧版配置请先关闭旧版，再将原数据目录的完整数据文件复制过来；不要覆盖程序文件。\n更新时请先完全退出旧版，只替换程序文件，保留原配置、凭据、密钥及 state-transaction.json；新版启动会自动恢复未完成的保存。\n', encoding='utf-8-sig')
             (product / 'oshell-portable').write_text('OShell portable mode: data stays beside the executable.\n', encoding='utf-8')
 
         publish(product, destination)

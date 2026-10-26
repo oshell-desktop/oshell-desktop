@@ -9,7 +9,6 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"oshell-desktop/internal/core"
-	"oshell-desktop/internal/terminal"
 )
 
 type tunnelEditor struct {
@@ -17,6 +16,7 @@ type tunnelEditor struct {
 	Port, TargetPort string
 }
 type featureState struct {
+	shortcutSystemNotice                                                                                    string
 	sessionClose                                                                                            *sessionCloseRequest
 	localConflict                                                                                           localConflictState
 	managerReturn                                                                                           *managerReturnState
@@ -77,8 +77,6 @@ type featureState struct {
 	pasteText                 string
 	pasteTargets              []pasteDestination
 	highlightOpen             bool
-	terminalMatches           []terminal.Match
-	searchPane                *pane
 
 	closePending, allowClose                                        bool
 	filePane                                                        *pane
@@ -98,18 +96,16 @@ type featureState struct {
 	reloadAfterUnlock                                               bool
 	vaultMenuAfterUnlock                                            string
 	vaultAction, master, masterAgain, masterCurrent, vaultError     string
-	findOpen, findRegex, findCase, findBusy, findLimited            bool
-	findQuery, findText, findError                                  string
-	findMatches                                                     []core.SearchMatch
-	findIndex                                                       int
-	findGeneration                                                  int
-	findList                                                        ui.ListState
 	commandsOpen                                                    bool
 	directoryOpen                                                   bool
 	directoryAction, directorySource, directoryName, directoryError string
 }
 
 func (a *App) initConnectionEditor() {
+	a.draftTitleMode = a.sessionTitleMode(a.draft)
+	if _, exists := a.profileByID(a.draft.ID); !exists {
+		a.draftTitleMode = a.localUI.DefaultTitleMode
+	}
 	a.initSessionPassword()
 	a.features.editorKind = a.draft.Kind
 	a.features.directoryPicker = directoryPickerState{}
@@ -166,7 +162,7 @@ func (a *App) connectionEditor(c *ui.Context) {
 							selectValue(c, "协议", &a.draft.Kind, [][2]string{{"ssh", "SSH 终端"}, {"sftp", "SFTP 文件会话"}, {"ftp", "FTP 文件会话（明文）"}})
 							a.syncEditorProtocol()
 							if a.draft.Kind == "ssh" {
-								selectValue(c, "主机识别", &a.draft.TitleMode, [][2]string{{"shellIntegration", "Shell 集成（推荐）"}, {"activeProbe", "主动探测（允许执行只读命令）"}, {"passive", "仅被动识别"}})
+								selectValue(c, "标签标题（仅本机）", &a.draftTitleMode, sessionTitleModes)
 							}
 						})
 						field("名称", &a.draft.Name)
@@ -239,8 +235,9 @@ func (a *App) connectionEditor(c *ui.Context) {
 						ui.Checkbox(c, &a.draft.KeepAlive.TCP, "启用 TCP KeepAlive")
 						ui.Divider(c)
 						ui.Checkbox(c, &a.draft.KeepAlive.IdleEnabled, "空闲时发送字符串").Disabled(a.draft.Kind != "ssh")
-						field("空闲间隔（秒）", &a.features.idleInterval)
-						field("空闲字符串", &a.draft.KeepAlive.IdleText)
+						idleDisabled := a.draft.Kind != "ssh" || !a.draft.KeepAlive.IdleEnabled
+						ui.Field(c, "空闲间隔（秒）", func() { ui.TextInput(c, &a.features.idleInterval) }).Disabled(idleDisabled)
+						ui.Field(c, "空闲字符串", func() { ui.TextInput(c, &a.draft.KeepAlive.IdleText) }).Disabled(idleDisabled)
 						ui.Text(c, `支持 \n、\r、\t、\e 和 \\；修改在新连接中生效。`).FontSize(11).TextColor(c.Theme().TextMuted)
 					}).Gap(10)
 				}

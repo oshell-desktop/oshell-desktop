@@ -153,6 +153,7 @@ const (
 	layoutSetFontWeight        = 32
 	layoutSetFontStyle         = 33
 	layoutSetFontSize          = 35
+	layoutSetInlineObject      = 39
 	layoutSetTypography        = 40
 	layoutDraw                 = 58
 	layoutGetLineMetrics       = 59
@@ -744,9 +745,32 @@ func collect(run *dwGlyphRun, desc *dwGlyphRunDescription) {
 }
 
 func (e *dwrite) shape(text []rune, style Style, spans []Span, width float32, rtl, wholeWords bool) []shapedLine {
+	return e.shapeIndent(text, style, spans, width, 0, rtl, wholeWords)
+}
+
+func (e *dwrite) shapeIndent(text []rune, style Style, spans []Span, width, indent float32, rtl, wholeWords bool) []shapedLine {
 	format := e.format(style)
 	if format == 0 || len(text) == 0 {
 		return nil
+	}
+	var object *dwIndentObject
+	var pin runtime.Pinner
+	if indent > 0 {
+		// Keep the complete paragraph in one DirectWrite layout. An invisible
+		// inline object reserves the first fragment without discarding BiDi
+		// state or paired-bracket context at the continuation boundary.
+		mark := rune('\u200e')
+		if rtl {
+			mark = '\u200f'
+		}
+		text = append([]rune{'\ufffc', mark}, text...)
+		spans = slices.Clone(spans)
+		for i := range spans {
+			spans[i].End += 2
+		}
+		object = newDWIndentObject(indent)
+		pin.Pin(object)
+		defer pin.Unpin() // registered before release(layout): COM releases first
 	}
 	u16, index := utf16Text(text)
 	var layout uintptr
@@ -765,6 +789,17 @@ func (e *dwrite) shape(text []rune, style Style, spans []Span, width float32, rt
 	}
 	call(layout, formatSetWordWrapping, wrapping)
 	e.typeset(layout, style, spans, text)
+	if object != nil {
+		// Neither synthetic character belongs to the visible text. In
+		// particular the direction mark must not acquire tracking advance.
+		if l1 := queryInterface(layout, &iidIDWriteTextLayout1); l1 != 0 {
+			method[func(this uintptr, leading, trailing, minAdvance float32, r uintptr) uintptr](l1, layout1SetCharacterSpacing)(l1, 0, 0, 0, uintptr(2)<<32)
+			release(l1)
+		}
+		if failed(call(layout, layoutSetInlineObject, uintptr(unsafe.Pointer(object)), uintptr(1)<<32)) {
+			return nil
+		}
+	}
 	if rtl {
 		// Trailing alignment keeps the lines at the left, as left-to-right
 		// lines are.
@@ -805,6 +840,9 @@ func (e *dwrite) shape(text []rune, style Style, spans []Span, width float32, rt
 		var hit dwHitTestMetrics
 		call(layout, layoutHitTestTextPosition, uintptr(r.pos), 0, uintptr(unsafe.Pointer(&x)), uintptr(unsafe.Pointer(&y)), uintptr(unsafe.Pointer(&hit)))
 		lines[li].runs = append(lines[li].runs, e.run(r, x, index))
+	}
+	if object != nil {
+		stripIndentPrefix(lines)
 	}
 	return lines
 }

@@ -55,19 +55,8 @@ func TestComposeOver(hwnd uintptr, text string, caret int, commit bool, from, le
 	if s == nil {
 		return false
 	}
-	if from >= 0 {
-		doc, _, _, _ := TestDocumentFeed(hwnd)
-		units := utf16Units(doc)
-		head := uint32(unsafe.Sizeof(reconvertString{}))
-		buf := make([]uint32, (int(head)+len(units)*2+3)/4)
-		rs := (*reconvertString)(unsafe.Pointer(&buf[0]))
-		a, b := unitOffset(doc, from), unitOffset(doc, from+length)
-		*rs = reconvertString{Size: head + uint32(len(units))*2, StrLen: uint32(len(units)), StrOffset: head,
-			CompStrLen: uint32(b - a), CompStrOffset: uint32(a) * 2, TargetStrLen: uint32(b - a), TargetStrOffset: uint32(a) * 2}
-		copy(unsafe.Slice((*uint16)(unsafe.Add(unsafe.Pointer(rs), head)), len(units)), units)
-		if r, _, _ := procSendMessageW.Call(s.hwnd, wmImeRequest, imrConfirmReconvertString, uintptr(unsafe.Pointer(rs))); r == 0 {
-			return false
-		}
+	if from >= 0 && !TestConfirmReconversion(hwnd, from, length) {
+		return false
 	}
 	// Input methods compose in contexts out of the test's reach: send what
 	// WM_IME_COMPOSITION would.
@@ -76,6 +65,36 @@ func TestComposeOver(hwnd uintptr, text string, caret int, commit bool, from, le
 	} else {
 		s.composed(platform.SurfaceEvent{Kind: platform.TextComposition, Text: text, Caret: caret})
 	}
+	return true
+}
+
+// TestConfirmReconversion leaves delivery to TestComposeOver, allowing tests
+// to change a client document between native confirmation and composition.
+func TestConfirmReconversion(hwnd uintptr, from, length int) bool {
+	s := surfaceByHandle(hwnd)
+	if s == nil || from < 0 || length < 0 {
+		return false
+	}
+	doc, _, _, _ := TestDocumentFeed(hwnd)
+	units := utf16Units(doc)
+	head := uint32(unsafe.Sizeof(reconvertString{}))
+	buf := make([]uint32, (int(head)+len(units)*2+3)/4)
+	rs := (*reconvertString)(unsafe.Pointer(&buf[0]))
+	a, b := unitOffset(doc, from), unitOffset(doc, from+length)
+	*rs = reconvertString{Size: head + uint32(len(units))*2, StrLen: uint32(len(units)), StrOffset: head,
+		CompStrLen: uint32(b - a), CompStrOffset: uint32(a) * 2, TargetStrLen: uint32(b - a), TargetStrOffset: uint32(a) * 2}
+	copy(unsafe.Slice((*uint16)(unsafe.Add(unsafe.Pointer(rs), head)), len(units)), units)
+	r, _, _ := procSendMessageW.Call(s.hwnd, wmImeRequest, imrConfirmReconvertString, uintptr(unsafe.Pointer(rs)))
+	return r != 0
+}
+
+// TestEndComposition sends the native end-before-commit boundary separately.
+func TestEndComposition(hwnd uintptr) bool {
+	s := surfaceByHandle(hwnd)
+	if s == nil {
+		return false
+	}
+	procSendMessageW.Call(s.hwnd, wmImeEndComp, 0, 0)
 	return true
 }
 

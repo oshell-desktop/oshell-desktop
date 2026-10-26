@@ -95,12 +95,6 @@ func ParseToolCommand(text string) (LocalToolCommand, error) {
 	if !found {
 		return out, fmt.Errorf("不支持的工具；输入 help 查看工具列表")
 	}
-	for _, arg := range words[1:] {
-		switch arg {
-		case "|", "||", "&&", ";", ">", ">>", "<", "&":
-			return out, fmt.Errorf("请一次运行一个工具；不解析管道、重定向或变量")
-		}
-	}
 	executable := words[0]
 	if strings.ContainsAny(executable, "/\\") && !filepath.IsAbs(executable) {
 		return out, fmt.Errorf("工具路径必须是绝对路径")

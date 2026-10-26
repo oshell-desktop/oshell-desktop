@@ -40,6 +40,7 @@ type editor struct {
 	composeCaret       int
 	composeSelected    TextInputRange
 	compositionActive  bool // one undo transaction for preedit and its commit
+	noSpellcheck       bool
 	client             *widgetTextInput
 	value              *string
 	nativeDirty        bool

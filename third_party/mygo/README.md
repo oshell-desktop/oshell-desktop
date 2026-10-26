@@ -119,3 +119,21 @@ selection without replacing its UI runtime. GPU failure keeps the existing softw
 fallback. The implementation is in `ui/renderer_preference.go`; `ui/window.go` honors
 the preference when creating a GPU renderer. No platform backend APIs were changed.
 The window, including its chrome drawn by MyGo, shares one renderer.
+
+`Painter.GlyphsScaled` supports independent horizontal and vertical scaling for
+terminal line modes. GPU and software renderers use the destination glyph size;
+ordinary glyphs retain their existing rasterization and fast path.
+
+`Painter.BitmapSubpixel` retains fractional destination geometry for terminal
+images, including partial edge coverage in software and GPU scenes. Ordinary
+`Painter.Image` and image widgets keep their existing pixel snapping.
+
+OShell also exposes `Painter.BitmapRegionSubpixel` for normalized fractional source regions. Terminal Unicode image placeholders intersect in double precision before submitting cell-sized geometry, sharing a bitmap and its sampling across adjacent cells without allocating cropped textures.
+
+OShell pointer adaptation: surface presses include host double-click interval and axis distances in DIPs (with an explicit presence flag for zero intervals). Windows reads user32, GTK reads the widget settings, and AppKit supplies its own interval/click count. `InputPointerCancel` ends lost capture or window focus without release actions. Input handlers must stop their pointer gesture on this event; `Tester.CancelPointer` exercises the same route. Native data drag sessions retain ownership until their own completion.
+
+Press events additionally preserve optional source `Timestamp` and `HasTimestamp`; zero is valid. Event queue delays do not change ordinary-control or OShell word-click timing. Windows/GTK 32-bit millisecond wrap is expanded per surface, and AppKit uses NSEvent time. The source 32-bit clock cannot disambiguate an entire 49.7-day interval.
+
+Click counts are resolved once per window before custom handlers, survive row replacement, and are shared by ordinary controls and OShell selection. Native counts remain authoritative. Matching releases retain the press count; a drag outside the host rectangle resets the Windows/GTK estimate. Physical multi-window equivalence remains unverified.
+
+OShell GTK terminal input reports an independent physical `BaseLayout` identity: X11 uses XKB position names, and Wayland uses GDK evdev keycodes. Unknown positions are omitted. Held identities survive layout changes through release; IME and AltGr text remain text. XKB name tables are owned copies, invalidated on keymap changes, and disconnected/released when the surface is destroyed. Actual X11/Wayland desktop validation remains pending.

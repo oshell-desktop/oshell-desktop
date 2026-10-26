@@ -38,7 +38,7 @@ func validPaste(text string) bool {
 }
 
 func (a *App) requestPaste(source *pane, text string) {
-	if a.passwordLocked() || source == nil || source.closed || source.term == nil || text == "" {
+	if a.workspaceLocked() || source == nil || source.closed || source.term == nil || text == "" {
 		return
 	}
 	if !validPaste(text) {
@@ -75,7 +75,7 @@ func (a *App) requestPaste(source *pane, text string) {
 // Validate every captured destination before changing any terminal viewport.
 // Closing/reconnecting/moving a pane while the preview is open invalidates it.
 func (a *App) dispatchPaste(targets []pasteDestination, text string) bool {
-	if a.passwordLocked() || !validPaste(text) || len(targets) == 0 {
+	if a.workspaceLocked() || !validPaste(text) || len(targets) == 0 {
 		return false
 	}
 	current := map[*pane]bool{}
@@ -224,17 +224,4 @@ func (a *App) inputDialogs(c *ui.Context) {
 		})
 	})
 	a.highlightsDialog(c)
-}
-func (a *App) revealSearch() {
-	f := &a.features
-	if f.searchPane == nil || f.searchPane.closed || f.findIndex < 0 || f.findIndex >= len(f.terminalMatches) {
-		return
-	}
-	if e := f.searchPane.term.Reveal(f.terminalMatches[f.findIndex]); e != nil {
-		f.findError = e.Error()
-		f.findOpen = true
-		return
-	}
-	f.findOpen = false
-	f.searchPane.focus.Focus()
 }

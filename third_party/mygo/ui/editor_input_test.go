@@ -98,6 +98,42 @@ func TestWidgetInputPrivacyAndReadonly(t *testing.T) {
 	}
 }
 
+func TestPasswordCompositionEndBeforeCommit(t *testing.T) {
+	for _, visibility := range [][2]bool{{true, true}, {true, false}, {false, true}, {false, false}} {
+		value := "base-"
+		hidden := visibility[0]
+		tt := coreNewTester(func(c *context) {
+			e := coreTextInput(c, &value).Fill().AutoFocus()
+			if hidden {
+				e.Password()
+			}
+		}, 300, 120)
+		client := tt.h.ime.Client
+		client.SetMarkedText(nil, "候補😀", TextInputRange{Start: 4, End: 4})
+		var order platform.InputComposition
+		order.End(client)
+		hidden = visibility[1]
+		tt.Frame()
+		if !order.Replace(client, nil, "新") {
+			t.Fatalf("visibility=%v valid password result rejected", visibility)
+		}
+		tt.Frame()
+		if value != "base-新" {
+			t.Fatalf("visibility=%v password composition duplicated or misplaced: %q", visibility, value)
+		}
+		if hidden {
+			if exposed, _ := client.TextForRange(TextInputRange{End: 1000}); exposed != "" {
+				t.Fatal("committed password exposed to IME")
+			}
+		}
+		tt.Key(Cmd, KeyZ)
+		if value != "base-" {
+			t.Fatalf("password composition lost single-step undo: %q", value)
+		}
+		tt.rt.close()
+	}
+}
+
 func TestWidgetBidiSelectionCopyReplaceAndUndo(t *testing.T) {
 	for _, multiline := range []bool{false, true} {
 		s := "abc אבג def"

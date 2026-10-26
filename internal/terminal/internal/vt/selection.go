@@ -24,6 +24,7 @@ const (
 
 	gestureDataDragged    = 1
 	gestureDataAutoscroll = 2
+	gestureDataAnchor     = 4
 )
 
 // Gesture turns presses and drags of the pointer into selections as
@@ -97,14 +98,31 @@ func (g *Gesture) Free(t *Terminal) {
 }
 
 func (g *Gesture) apply(t *Terminal, ev uintptr) (Selection, bool) {
-	s := Selection{size: unsafe.Sizeof(Selection{})}
-	return s, ok(call(fnGestureEvent, g.h, t.h, ev, uintptr(unsafe.Pointer(&s))))
+	s := Selection{size: selectionCSize}
+	found := ok(call(fnGestureEvent, g.h, t.h, ev, uintptr(unsafe.Pointer(&s))))
+	if oshellABI >= 55 && oshellABI <= 62 {
+		var logical logicalSelection
+		if ok(call(fnGestureGet, g.h, t.h, 1000, uintptr(unsafe.Pointer(&logical)))) {
+			s.logical = &logical
+			return s, true
+		}
+	}
+	return s, found
 }
 
 // Press presses the pointer on cell ref at x, y pixels, at time ns of a
 // monotonic clock. A double or triple click selects at once.
 func (g *Gesture) Press(t *Terminal, ref GridRef, x, y float64, ns uint64) (Selection, bool) {
+	return g.PressWithShift(t, ref, x, y, ns, false)
+}
+
+// PressWithShift preserves and extends an active OShell selection on a single
+// Shift click. Repeated word/line clicks keep their own selection behavior.
+func (g *Gesture) PressWithShift(t *Terminal, ref GridRef, x, y float64, ns uint64, shift bool) (Selection, bool) {
 	pos := surfacePosition{x, y}
+	if oshellABI >= 56 && oshellABI <= 62 {
+		call(fnGestureEventSet, g.press, 1000, uintptr(unsafe.Pointer(&shift)))
+	}
 	call(fnGestureEventSet, g.press, gestureOptRef, uintptr(unsafe.Pointer(&ref)))
 	call(fnGestureEventSet, g.press, gestureOptPosition, uintptr(unsafe.Pointer(&pos)))
 	call(fnGestureEventSet, g.press, gestureOptTime, uintptr(unsafe.Pointer(&ns)))
@@ -112,14 +130,18 @@ func (g *Gesture) Press(t *Terminal, ref GridRef, x, y float64, ns uint64) (Sele
 }
 
 // PressCount starts an explicitly chosen cell/word/line gesture, retaining
-// Ghostty's word-aware drag and soft-wrap handling after the final press.
+// word-aware dragging and OShell's physical-row selection after the final press.
 func (g *Gesture) PressCount(t *Terminal, ref GridRef, x, y float64, ns uint64, count int) (Selection, bool) {
+	return g.PressCountWithShift(t, ref, x, y, ns, count, false)
+}
+
+func (g *Gesture) PressCountWithShift(t *Terminal, ref GridRef, x, y float64, ns uint64, count int, shift bool) (Selection, bool) {
 	g.Reset(t)
 	count = max(1, min(count, 3))
 	var selection Selection
 	var ok bool
 	for i := 0; i < count; i++ {
-		selection, ok = g.Press(t, ref, x, y, ns+uint64(i))
+		selection, ok = g.PressWithShift(t, ref, x, y, ns+uint64(i), shift && i+1 == count)
 		if i+1 < count {
 			g.Release(t, &ref)
 		}
@@ -186,3 +208,29 @@ func (g *Gesture) Autoscroll(t *Terminal) int {
 
 // Reset forgets the gesture's clicks.
 func (g *Gesture) Reset(t *Terminal) { call(fnGestureReset, g.h, t.h) }
+
+// Anchored distinguishes an empty drag range from an invalid gesture after
+// a screen switch or anchor eviction. A borrowed pin never escapes this call.
+func (g *Gesture) Anchored(t *Terminal) bool {
+	ref := GridRef{size: unsafe.Sizeof(GridRef{})}
+	return ok(call(fnGestureGet, g.h, t.h, gestureDataAnchor, uintptr(unsafe.Pointer(&ref))))
+}
+
+// WordRange returns owned, half-open buffer cell coordinates for a word press.
+// Unlike search indices these stay in cells, including wide and combined text.
+func (s Selection) WordRange() (startRow, startCol, endRow, endCol int, ok bool) {
+	if s.logical == nil || s.logical[4] == 0 || s.logical[12]&2 == 0 {
+		return
+	}
+	return int(s.logical[1]), int(s.logical[0]), int(s.logical[3]), int(s.logical[2]), true
+}
+
+// BufferIdentity mirrors OShell's display Buffer object identity. RIS replaces
+// only its normal buffer; clearing or re-entering the alternate buffer does not.
+func (t *Terminal) BufferIdentity() (id [2]uint64, ok bool) {
+	if oshellABI < 57 || oshellABI > 62 {
+		return
+	}
+	ok = t.get(1006, unsafe.Pointer(&id)) == nil
+	return
+}

@@ -58,6 +58,7 @@ type sessionRow struct {
 }
 
 func (a *App) buildManagerRows() []sessionRow {
+	cfg := a.presentationConfig()
 	var folders, profiles []sessionRow
 	seen := map[string]bool{}
 	query := core.NewSessionQuery(a.query)
@@ -69,7 +70,7 @@ func (a *App) buildManagerRows() []sessionRow {
 		return a.managerSearchScope == "all" || a.managerGroup == "" || group == a.managerGroup || strings.HasPrefix(group, a.managerGroup+"/")
 	}
 	if len(terms) > 0 {
-		for _, d := range a.config.AllDirectories() {
+		for _, d := range cfg.AllDirectories() {
 			if d != a.managerGroup && inScope(d) && query.Matches(core.NormalizeSessionSearch("/"+d)) {
 				folders = append(folders, sessionRow{id: "folder:" + d, name: path.Base(d), group: d, folder: true})
 			}
@@ -80,7 +81,7 @@ func (a *App) buildManagerRows() []sessionRow {
 		if a.managerGroup != "" {
 			prefix = a.managerGroup + "/"
 		}
-		for _, d := range a.config.AllDirectories() {
+		for _, d := range cfg.AllDirectories() {
 			if d == a.managerGroup || !strings.HasPrefix(d, prefix) {
 				continue
 			}
@@ -113,11 +114,11 @@ func (a *App) buildManagerRows() []sessionRow {
 		profiles = append(profiles, r)
 	}
 	sources := map[string]core.Profile{}
-	for _, p := range a.config.Profiles {
+	for _, p := range cfg.Profiles {
 		sources[p.ID] = p
 		add(sessionRow{id: p.ID, name: p.Name, group: p.Group, profile: p})
 	}
-	for _, l := range a.config.Links {
+	for _, l := range cfg.Links {
 		if p, ok := sources[l.ProfileID]; ok {
 			g := "Links"
 			if l.Folder != "" {
@@ -130,6 +131,7 @@ func (a *App) buildManagerRows() []sessionRow {
 	sort.SliceStable(folders, func(i, j int) bool { return order.CompareString(folders[i].name, folders[j].name) < 0 })
 	sort.SliceStable(profiles, func(i, j int) bool { return order.CompareString(profiles[i].name, profiles[j].name) < 0 })
 	result := append(folders, profiles...)
+	a.sortPinnedRows(result)
 	if !a.managerAll && a.managerGroup != "" {
 		parent := path.Dir(a.managerGroup)
 		if parent == "." {
@@ -152,6 +154,7 @@ func (a *App) enterRow(row sessionRow) {
 	a.request(row.profile, 0)
 }
 func (a *App) managerView(c *ui.Context) {
+	defer a.resumeDeferredUpdate() // Modal teardown may happen after drain during this frame.
 	a.drain()
 	if a.managerRename != nil && c.Shortcut(0, ui.KeyEscape) {
 		a.managerRename = nil
@@ -259,7 +262,7 @@ func (a *App) managerView(c *ui.Context) {
 		a.managerList.Key = func(i int) any { return rows[i].id }
 		a.managerList.Label = func(i int) string { return rows[i].name }
 
-		columns := []ui.TableColumn{{Title: "名称", Width: 210, MinWidth: 160}, {Title: "协议", Width: 64, MinWidth: 56}, {Title: "主机", Width: 190, MinWidth: 140}, {Title: "用户名", Width: 100, MinWidth: 80}, {Title: "端口", Width: 60, MinWidth: 56}, {Title: "目录", Width: 160, MinWidth: 100}, {ID: "actions", Width: 48, MinWidth: 48, Align: ui.Center, Fixed: true}}
+		columns := []ui.TableColumn{{Title: "名称", Width: 210, MinWidth: 160}, {Title: "协议", Width: 64, MinWidth: 56}, {Title: "主机", Width: 190, MinWidth: 140}, {Title: "用户名", Width: 100, MinWidth: 80}, {Title: "端口", Width: 60, MinWidth: 56}, {ID: "actions", Width: 48, MinWidth: 48, Align: ui.Center, Fixed: true}}
 		table := ui.Table(c, a.managerList, columns, len(rows), func(row, col int) {
 			r := rows[row]
 			p := r.profile
@@ -269,7 +272,7 @@ func (a *App) managerView(c *ui.Context) {
 				textColor = c.Theme().AccentText
 				iconColor = textColor
 			}
-			if col == 6 {
+			if col == 5 {
 				if !r.parent && !(r.folder && r.group == "Links") {
 					rowIconButton(c, "编辑 "+r.name, editIcon, iconColor).OnClick(func() {
 						if r.folder {
@@ -287,7 +290,7 @@ func (a *App) managerView(c *ui.Context) {
 				if a.managerNameEditor(c, r) {
 					return
 				}
-				style := sessionIconFor(p.Kind, r.linkID != "", r.folder, r.parent)
+				style := sessionIconFor(p.Kind, r.linkID != "" || r.folder && r.group == "Links", r.folder, r.parent)
 				tip := sessionListTooltip(p, r.linkID != "")
 				if r.folder {
 					tip = style.label + "\n/" + r.group
@@ -316,9 +319,7 @@ func (a *App) managerView(c *ui.Context) {
 			}
 			if r.folder {
 				ui.Row(c).FillWidth().Height(32).HandleInput(func(ev ui.InputEvent) bool { return a.managerCellInput(r, ev) }).ContextMenu(func(m *ui.Menu) { a.managerContextMenu(c, m, r.id) }).Children(func() {
-					if col == 5 && !r.parent && len(query.Terms) > 0 {
-						ui.RichText(c, managerSearchSpans("/"+managerParent(r.group), query)...).SingleLine().Tooltip("/" + managerParent(r.group)).TextColor(textColor)
-					}
+
 				})
 				return
 			}
@@ -341,8 +342,6 @@ func (a *App) managerView(c *ui.Context) {
 				if p.Kind == "local" {
 					s = "—"
 				}
-			case 5:
-				s = "/" + r.group
 			}
 			ui.Row(c).FillWidth().Height(32).HandleInput(func(ev ui.InputEvent) bool { return a.managerCellInput(r, ev) }).ContextMenu(func(m *ui.Menu) { a.managerContextMenu(c, m, r.id) }).Children(func() {
 				ui.RichText(c, managerSearchSpans(s, query)...).SingleLine().Tooltip(s).TextColor(textColor)

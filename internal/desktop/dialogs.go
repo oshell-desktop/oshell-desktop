@@ -12,6 +12,7 @@ import (
 )
 
 func (a *App) dialogs(c *ui.Context) {
+	a.imagePasteDialog(c)
 	a.connectionEditor(c)
 	ui.Modal(c, &a.authOpen, func() {
 		ui.Column(c).Width(440).Gap(14).Children(func() {

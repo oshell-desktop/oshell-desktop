@@ -19,6 +19,7 @@ type sessionIconStyle struct {
 	image              *ui.SVG
 	label, light, dark string
 	badge              string
+	shortcut           bool
 }
 
 func sessionIconFor(kind string, shortcut, folder, parent bool) sessionIconStyle {
@@ -26,7 +27,7 @@ func sessionIconFor(kind string, shortcut, folder, parent bool) sessionIconStyle
 		return sessionIconStyle{image: sessionParentIcon, label: "上一级目录", light: "#666B75", dark: "#B3B8C2"}
 	}
 	if folder {
-		return sessionIconStyle{image: sessionFolderIcon, label: "目录", light: "#9C6E1F", dark: "#E8BA5C"}
+		return sessionIconStyle{shortcut: shortcut, image: sessionFolderIcon, label: "目录", light: "#9C6E1F", dark: "#E8BA5C"}
 	}
 	style := sessionIconStyle{badge: "SSH", label: "SSH · 远程终端", light: "#1F66BF", dark: "#80B5FF"}
 	switch kind {
@@ -38,8 +39,7 @@ func sessionIconFor(kind string, shortcut, folder, parent bool) sessionIconStyle
 		style = sessionIconStyle{badge: "FTP", label: "FTP · 文件传输", light: "#A95312", dark: "#FFB573"}
 	}
 	if shortcut {
-		style.image, style.light, style.dark = linkIcon, "#057D91", "#5CCFE0"
-		style.badge = ""
+		style.shortcut = true
 		style.label = "Link · 快捷引用 · " + style.label
 	}
 	return style
@@ -50,6 +50,11 @@ func (s sessionIconStyle) draw(c *ui.Context, selected bool) {
 	if c.Theme().Dark {
 		color = ui.Hex(s.dark)
 	}
+	corner := func() {
+		if s.shortcut {
+			ui.Box(c).Absolute().Right(-3).Bottom(-3).Size(12, 12).Radius(3).Background(c.Theme().Background).Children(func() { ui.Icon(c, linkIcon).Size(12, 12).FontSize(12).TextColor(ui.Hex("#168B9E")) })
+		}
+	}
 	if s.badge != "" {
 		// An opaque theme base keeps the badge legible on selected rows too.
 		ui.Box(c).Size(36, 20).Shrink(0).Radius(5).Background(c.Theme().Background).Label(s.label).Children(func() {
@@ -57,6 +62,7 @@ func (s sessionIconStyle) draw(c *ui.Context, selected bool) {
 				Background(color.Alpha(0.10)).Border(1, color.Alpha(0.30)).Children(func() {
 				ui.Text(c, s.badge).FontSize(10).FontWeight(600).SingleLine().TextColor(color)
 			})
+			corner()
 		})
 		return
 	}
@@ -65,6 +71,7 @@ func (s sessionIconStyle) draw(c *ui.Context, selected bool) {
 	}
 	ui.Row(c).Size(36, 20).Shrink(0).AlignItems(ui.Center).Justify(ui.Center).Label(s.label).Children(func() {
 		ui.Icon(c, s.image).FontSize(20).Size(20, 20).Shrink(0).TextColor(color)
+		corner()
 	})
 }
 

@@ -1,6 +1,15 @@
 package desktop
 
-import "github.com/egoist/mygo/ui"
+import (
+	"github.com/egoist/mygo/ui"
+	"os"
+	"oshell-desktop/internal/core"
+	"path"
+)
+
+func fileCanNavigate(info os.FileInfo) bool {
+	return info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !core.RemoteFileTypeKnown(info)
+}
 
 func (a *App) fileContextMenu(menu *ui.Menu, p *pane, name string) {
 	if p == nil || p.closed || p.files == nil {
@@ -28,6 +37,16 @@ func (a *App) fileContextMenu(menu *ui.Menu, p *pane, name string) {
 	}
 	selected := f.selectedNames()
 	active := !f.busy && f.client != nil && (p.ftp != nil || p.conn != nil && p.conn.Alive())
+	if len(selected) == 1 {
+		for _, entry := range f.entries {
+			if entry.Name() == selected[0] && fileCanNavigate(entry) {
+				if menu.Item("进入目录").Disabled(!active).Chosen() {
+					a.loadFiles(p, path.Join(f.dir, entry.Name()))
+				}
+				break
+			}
+		}
+	}
 	if menu.Item("下载…").Disabled(!active || len(selected) == 0).Chosen() {
 		a.download(p)
 	}

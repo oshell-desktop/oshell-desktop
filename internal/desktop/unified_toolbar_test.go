@@ -133,7 +133,7 @@ func TestUnifiedHeaderSyncWithoutTerminal(t *testing.T) {
 	if err := tt.Click("多设备同步"); err != nil {
 		t.Fatal(err)
 	}
-	if !a.settingsOpen || a.features.settingsTab != 3 || len(a.tabs) != 0 {
-		t.Fatal("sync entry required a terminal or opened the wrong settings")
+	if !a.syncMonitorOpen || a.settingsOpen || len(a.tabs) != 0 {
+		t.Fatal("sync entry required a terminal or did not open progress")
 	}
 }

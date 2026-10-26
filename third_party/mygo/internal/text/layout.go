@@ -66,6 +66,9 @@ type Params struct {
 	// Width wraps lines to this many DIPs; 0 or less only breaks lines at
 	// newlines.
 	Width float32
+	// FirstLineIndent reserves space on the left of only the first visual line.
+	// Continuation lines and later paragraphs use the full wrap width.
+	FirstLineIndent float32
 	// MaxLines truncates the text to that many lines, ending it with
 	// Ellipsis ("…" when empty); 0 is unlimited.
 	MaxLines int
@@ -699,8 +702,12 @@ func (s *System) layout(p Params) *cached {
 		}
 		start = end + 1
 	}
-	for _, line := range l.Lines {
-		l.Width = max(l.Width, line.Width)
+	for i, line := range l.Lines {
+		width := line.Width
+		if i == 0 {
+			width += firstLineIndent(p)
+		}
+		l.Width = max(l.Width, width)
 	}
 	l.Height = y
 	// Align each line within the wrap width, or the longest line.
@@ -711,6 +718,11 @@ func (s *System) layout(p Params) *cached {
 	for i := range l.Lines {
 		line := &l.Lines[i]
 		var dx float32
+		available := box
+		if i == 0 {
+			dx = firstLineIndent(p)
+			available -= dx
+		}
 		align := p.Align
 		if line.RTL {
 			switch align {
@@ -722,9 +734,9 @@ func (s *System) layout(p Params) *cached {
 		}
 		switch align {
 		case Center:
-			dx = (box - line.Width) / 2
+			dx += (available - line.Width) / 2
 		case End:
-			dx = box - line.Width
+			dx += available - line.Width
 		}
 		if dx != 0 {
 			line.X += dx
@@ -754,7 +766,11 @@ func (s *System) paragraph(out []Line, p Params, spans []Span, runes []rune, sta
 		if p.NoWrap {
 			width = 0
 		}
-		shaped = s.engine().shape(text, p.Style, spans, width, rtl, p.NoBreakWords)
+		if start == 0 && firstLineIndent(p) > 0 {
+			shaped = s.shapeIndented(text, p, spans, rtl)
+		} else {
+			shaped = s.engine().shape(text, p.Style, spans, width, rtl, p.NoBreakWords)
+		}
 	}
 	if len(shaped) == 0 {
 		shaped = []shapedLine{{end: len(text)}}

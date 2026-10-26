@@ -17,6 +17,13 @@ import (
 
 const clipboardLengthPrefix = "MyGo.Transfer.Length:"
 
+var procClipboardSequence = user32.NewProc("GetClipboardSequenceNumber")
+
+func (clipboard) Generation() (uint64, bool) {
+	n, _, _ := procClipboardSequence.Call()
+	return uint64(n), n != 0
+}
+
 func privateClipboardFormat(f transfer.Format) bool {
 	return f == platform.DragSessionFormat || f == "DataObject" || f == "Ole Private Data" || strings.HasPrefix(string(f), clipboardLengthPrefix)
 }

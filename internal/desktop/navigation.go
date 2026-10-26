@@ -16,13 +16,32 @@ type switchEntry struct {
 	Tab                   *tab
 }
 type switchState struct {
-	filesOnly bool
-	open      bool
-	query     string
-	selected  int
-	list      ui.ListState
-	restore   ui.Handle
-	wasOpen   bool
+	filesOnly    bool
+	open         bool
+	query        string
+	selected     int
+	list         ui.ListState
+	restore      ui.Handle
+	wasOpen      bool
+	scope        string
+	selectionKey string
+}
+
+func (entry switchEntry) key() string {
+	if entry.Pane != nil {
+		return "pane:" + entry.Pane.id
+	}
+	return "profile:" + strings.ToLower(entry.Profile.ID)
+}
+
+func (s *switchState) reconcileSelection(entries []switchEntry) {
+	s.selected = 0
+	for i, entry := range entries {
+		if entry.key() == s.selectionKey {
+			s.selected = i
+			break
+		}
+	}
 }
 
 func (a *App) togglePaneZoom() {
@@ -72,7 +91,7 @@ func (a *App) switchEntries() []switchEntry {
 	a.ensureGroups()
 	var result []switchEntry
 	for _, t := range a.tabs {
-		if a.features.switcher.filesOnly {
+		if a.features.switcher.filesOnly || a.features.switcher.scope == "saved" {
 			break
 		}
 		g := a.groupByID(t.group)
@@ -91,21 +110,26 @@ func (a *App) switchEntries() []switchEntry {
 			if g.hidden {
 				detail += " · 隐藏组"
 			}
+			if p.term != nil && p.term.InLocalToolsMode() {
+				detail += " · 已结束 / 本机工具"
+			} else {
+				detail += " · 运行中"
+			}
 			detail += " · " + p.profile.Name
 			if p.profile.Host != "" {
 				detail += " · " + p.profile.Username + "@" + p.profile.Address()
 			}
-			title := p.hostname
-			if title == "" {
-				title = p.profile.Name
-			}
+			title := a.paneDisplayTitle(p)
 			search := title + " " + detail + " " + p.profile.Group + " " + p.profile.Kind
 			result = append(result, switchEntry{title, detail, core.NormalizeSessionSearch(search + " " + core.SessionSearchMetadata(p.profile)), p, p.profile, t})
 		})
 	}
-	saved := append([]core.Profile(nil), a.config.Profiles...)
+	saved := a.presentationConfig().Profiles
 	sort.SliceStable(saved, func(i, j int) bool { return strings.ToLower(saved[i].Name) < strings.ToLower(saved[j].Name) })
 	for _, p := range saved {
+		if !a.features.switcher.filesOnly && a.features.switcher.scope == "opened" {
+			break
+		}
 		if a.features.switcher.filesOnly && p.Kind != "ssh" && p.Kind != "sftp" && p.Kind != "ftp" {
 			continue
 		}
@@ -131,6 +155,8 @@ func (a *App) showQuickSwitch() {
 	f.wasOpen = true
 	f.query = ""
 	f.selected = 0
+	f.scope = "all"
+	f.selectionKey = ""
 	f.restore = a.lastInputFocus
 }
 func (a *App) quickSwitchDialog(c *ui.Context) {
@@ -143,14 +169,15 @@ func (a *App) quickSwitchDialog(c *ui.Context) {
 			}
 			ui.Text(c, title).FontSize(18).Bold()
 			input := ui.TextInput(c, &f.query).Label("快速会话搜索").Placeholder("主机、IP、账号、端口、目录、标签组；空格分隔多个关键词").AutoFocus()
-			if input.Changed() {
-				f.selected = 0
+			if !f.filesOnly {
+				selectValue(c, "搜索范围", &f.scope, [][2]string{{"all", "全部"}, {"opened", "已打开终端"}, {"saved", "已保存"}})
 			}
 			entries := a.switchEntries()
 			total := len(entries)
 			if len(entries) > 200 {
 				entries = entries[:200]
 			}
+			f.reconcileSelection(entries)
 			open := func() {
 				if f.selected < 0 || f.selected >= len(entries) {
 					return
@@ -161,19 +188,23 @@ func (a *App) quickSwitchDialog(c *ui.Context) {
 				if entry.Pane != nil && !entry.Pane.closed {
 					a.activatePane(entry.Tab, entry.Pane)
 				} else if entry.Pane == nil {
+					profile, exists := a.profileByID(entry.Profile.ID)
+					if !exists {
+						return
+					}
 					if f.filesOnly && entry.Profile.Kind == "ssh" {
-						a.openSavedFileSession(entry.Profile)
+						a.openSavedFileSession(profile)
 					} else {
-						a.request(entry.Profile, 0)
+						a.request(profile, 0)
 					}
 				}
 			}
 			if c.Shortcut(0, ui.KeyDown) && len(entries) > 0 {
-				f.selected = (f.selected + 1) % len(entries)
+				f.selected = min(f.selected+1, len(entries)-1)
 				f.list.ScrollTo(f.selected, ui.Center)
 			}
 			if c.Shortcut(0, ui.KeyUp) && len(entries) > 0 {
-				f.selected = (f.selected + len(entries) - 1) % len(entries)
+				f.selected = max(f.selected-1, 0)
 				f.list.ScrollTo(f.selected, ui.Center)
 			}
 			if input.Submitted() {
@@ -192,11 +223,25 @@ func (a *App) quickSwitchDialog(c *ui.Context) {
 					open()
 				}
 			}).Height(300).Border(1, c.Theme().Border)
+			f.selectionKey = ""
+			if f.selected >= 0 && f.selected < len(entries) {
+				f.selectionKey = entries[f.selected].key()
+			}
 			ui.Row(c).Gap(8).Children(func() {
-				ui.Text(c, fmt.Sprintf("显示 %d / %d 个结果", len(entries), total)).TextColor(c.Theme().TextMuted)
+				status := fmt.Sprintf("显示 %d / %d 个结果", len(entries), total)
+				if !core.NewSessionQuery(f.query).Valid {
+					status = "搜索条件过长，请缩短关键词"
+				} else if total == 0 {
+					status = "没有匹配的会话"
+				}
+				ui.Text(c, status).TextColor(c.Theme().TextMuted)
 				ui.Spacer(c)
 				ui.Button(c, "取消").OnClick(func() { f.open = false })
-				ui.PrimaryButton(c, "打开 / 定位").Disabled(len(entries) == 0).OnClick(open)
+				action := "新建连接"
+				if f.selected >= 0 && f.selected < len(entries) && entries[f.selected].Pane != nil {
+					action = "切换到会话"
+				}
+				ui.PrimaryButton(c, action).Disabled(len(entries) == 0).OnClick(open)
 			})
 		})
 	})

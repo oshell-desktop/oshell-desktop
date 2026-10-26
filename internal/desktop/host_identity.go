@@ -9,8 +9,22 @@ import (
 )
 
 func (a *App) initializeHostname(p *pane) {
+	if p.titleMode == "" && p.profile.Kind == "local" {
+		if _, saved := a.profileByID(p.profile.ID); !saved {
+			p.titleMode = a.localUI.DefaultTitleMode
+			for _, existing := range a.allPanes() {
+				if existing != p && existing.profile.ID == p.profile.ID {
+					p.titleMode = a.paneTitleMode(existing)
+					break
+				}
+			}
+		}
+	}
 	p.hostname = p.profile.Name
-	p.hostObservation.Mode = p.profile.TitleMode
+	p.hostObservation.Mode = a.paneTitleMode(p)
+	if p.hostObservation.Mode == "sessionName" {
+		p.hostObservation.Mode = "shellIntegration"
+	}
 	if p.profile.Kind == "local" {
 		names, identity := core.LocalIdentitySnapshot()
 		p.localNames = names
@@ -27,8 +41,8 @@ func (a *App) showHostname(p *pane) {
 	if host := p.hostObservation.Identity.Hostname; host != "" {
 		p.hostname = host
 	}
-	if owner := a.ownerTab(p); owner != nil && owner.active == p {
-		owner.name = p.hostname
+	if owner := a.ownerTab(p); owner != nil {
+		owner.name = a.displayTabTitle(owner)
 	}
 	a.applyTerminalPreferences(p)
 }
@@ -293,7 +307,11 @@ func (a *App) useLocalHostIdentity(p *pane) {
 	names, identity := core.LocalIdentitySnapshot()
 	p.localNames = names.WithPrevious(p.localNames)
 	a.cancelHostProbe(p)
-	p.hostObservation = core.HostObservation{Mode: p.profile.TitleMode, Identity: identity}
+	mode := a.paneTitleMode(p)
+	if mode == "sessionName" {
+		mode = "shellIntegration"
+	}
+	p.hostObservation = core.HostObservation{Mode: mode, Identity: identity}
 	a.showHostname(p)
 }
 
@@ -303,6 +321,13 @@ func (a *App) tabConnectionDetails(t *tab) string {
 	}
 	details := "标签组：" + a.groupTitle(a.groupByID(t.group))
 	index := 0
-	a.walk(t.root, func(p *pane) { index++; details += fmt.Sprintf("\n\n分屏 %d\n%s", index, paneConnectionDetails(p)) })
+	a.walk(t.root, func(p *pane) {
+		index++
+		current := ""
+		if p == t.active {
+			current = "（当前）"
+		}
+		details += fmt.Sprintf("\n\n分屏 %d%s · %s\n%s", index, current, a.paneDisplayTitle(p), paneConnectionDetails(p))
+	})
 	return details
 }

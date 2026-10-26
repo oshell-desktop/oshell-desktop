@@ -142,6 +142,41 @@ func (a *textInputAdapter) UnmarkText() {
 		a.changed()
 	}
 }
+
+// BeginMarkedText separates native sequences without committing a preview.
+func (a *textInputAdapter) BeginMarkedText() {
+	if c, _ := a.client(); c != nil {
+		if w, ok := c.(*widgetTextInput); ok {
+			w.prepare()
+			if w.ed.compose == "" {
+				w.ed.compositionActive = false
+			}
+		}
+	}
+}
+
+// EndMarkedText is an internal native-input capability. It keeps password
+// document positions inside the widget rather than exposing them via queries.
+func (a *textInputAdapter) EndMarkedText() (func(string) bool, bool) {
+	c, _ := a.client()
+	if c == nil {
+		return nil, true
+	}
+	w, ok := c.(*widgetTextInput)
+	if !ok {
+		return nil, false
+	}
+	commit := w.endMarkedText()
+	a.changed()
+	return func(text string) bool {
+		current, _ := a.client()
+		if current != w || !commit(text) {
+			return false
+		}
+		a.changed()
+		return true
+	}, true
+}
 func (a *textInputAdapter) BoundsForRange(r platform.TextRange) (platform.RectF, platform.TextRange, bool) {
 	if c, s := a.client(); c != nil {
 		b, actual, ok := c.BoundsForRange(r)

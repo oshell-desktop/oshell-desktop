@@ -13,7 +13,8 @@
 // alternate screen of full-screen programs, the keyboard as legacy
 // sequences or the Kitty keyboard protocol, mouse reporting, bracketed
 // paste, focus reports, synchronized output, hyperlinks (OSC 8), titles,
-// the working directory (OSC 7) and the clipboard (OSC 52). Selecting with
+// the working directory (OSC 7). Remote clipboard access (OSC 52) is denied.
+// Selecting with
 // the pointer copies as Ghostty does: a drag selects cells, a double click
 // words and a triple click lines; Option (macOS) or Alt drags a rectangle.
 //
@@ -24,6 +25,7 @@
 package terminal
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -46,14 +48,18 @@ import (
 
 // Options configure a terminal.
 type Options struct {
-	CustomWordSelection bool
-	WordSeparators      string
-	ShiftWhitespace     bool
-	LocalToolsOnExit    bool
-	OnSessionEnd        func()
-	OnShellIdentity     func(core.HostIdentity)
-	OnDirectory         func(string)
-	PreferColorEmoji    bool
+	BeforeClipboardPaste func() bool
+	CustomWordSelection  bool
+	// Default enables OSC 133 clicks with no modifiers, as SwiftTerm does.
+	SemanticClickBehavior  SemanticClickBehavior
+	SemanticClickModifiers ui.Modifiers
+	WordSeparators         string
+	ShiftWhitespace        bool
+	LocalToolsOnExit       bool
+	OnSessionEnd           func()
+	OnShellIdentity        func(core.HostIdentity)
+	OnDirectory            func(string)
+	PreferColorEmoji       bool
 	// App-managed shortcuts suppress the widget default accelerators.
 	ManagedClipboardBindings   bool
 	AmbiguousCharactersAreWide bool
@@ -69,6 +75,7 @@ type Options struct {
 	OnUserPaste                                                      func(string)
 	BeforePaste                                                      func(string) bool
 	OnOutput                                                         func([]byte)
+	OnActivity                                                       func()
 	OnProcessState                                                   func()
 	CopyOnSelect, RightClickPaste, TrimCopyLeading, TrimCopyTrailing bool
 
@@ -139,6 +146,9 @@ const (
 // Terminal is a terminal emulator and the program it runs. Its methods are
 // safe from any goroutine.
 type Terminal struct {
+	progress              terminalProgress
+	outputActivity        core.OutputActivity
+	idleEditing           atomic.Bool
 	fallback              atomic.Pointer[sessionFallback]
 	probeEcho             *core.HostProbeEcho
 	integration           integrationScanner
@@ -155,9 +165,8 @@ type Terminal struct {
 	highlights       []compiledHighlight
 	highlightVersion uint64
 	logMu            sync.Mutex
-	logFile          *os.File
+	logFile          *outputLog
 	logPath          string
-	logError         error
 
 	opts Options
 	in   inputQueue
@@ -233,18 +242,15 @@ func New(opts Options) (*Terminal, error) {
 	t.term, err = vt.NewTerminal(80, 24, vt.Effects{
 		WritePTY:     func(p []byte) { t.in.push(append([]byte(nil), p...)) },
 		Bell:         func() { t.events.bells++ },
+		Progress:     t.setProgress,
 		TitleChanged: func() { t.events.title = true },
 		PwdChanged:   func() { t.events.directory = true },
 		RenderHold:   t.renderHold,
-		Clipboard: func(text string, primary bool) bool {
-			if !primary {
-				t.clipOut = append(t.clipOut, text)
-				t.redraw()
-			}
-			return !primary
-		},
-		Size: func() (int, int, int, int) { return t.size.cols, t.size.rows, t.size.cellW, t.size.cellH },
-		Dark: func() bool { return t.curTheme == nil || t.curTheme.dark() },
+		// SF-I27: remote OSC52 never owns the host clipboard. User-initiated
+		// copy/paste uses the view services independently of this callback.
+		Clipboard: func(string, bool) bool { return false },
+		Size:      func() (int, int, int, int) { return t.size.cols, t.size.rows, t.size.cellW, t.size.cellH },
+		Dark:      func() bool { return t.curTheme == nil || t.curTheme.dark() },
 		Notify: func(title, body string) {
 			t.events.notify = append(t.events.notify, [2]string{title, body})
 		},
@@ -252,9 +258,24 @@ func New(opts Options) (*Terminal, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Until a host view is focused, a connection must not be told it has focus.
+	t.term.SetFocus(false)
+	// Keep native pixel geometry in sync with the initial grid before a fast
+	// connection can send an inline image or query, even before the first view.
+	if err := t.term.Resize(t.size.cols, t.size.rows, t.size.cellW, t.size.cellH); err != nil {
+		t.term.Free()
+		return nil, err
+	}
 	if err := t.term.SetAmbiguousWidth(opts.AmbiguousCharactersAreWide); err != nil {
 		t.term.Free()
 		return nil, err
+	}
+	// Desktop supplies the user's terminal theme before connecting. Install it
+	// before the reader can process OSC colors or queries; the first frame must
+	// not reapply it and erase colors already set by the remote program.
+	if opts.Theme != nil {
+		opts.Theme.apply(t.term)
+		t.curTheme = opts.Theme
 	}
 	t.term.SetTerminfoName("xterm-256color")
 	// Grapheme clusters take the cells of their width, as in Ghostty:
@@ -321,6 +342,7 @@ func (t *Terminal) run() {
 				t.transfers.endSession()
 			}
 			t.StopLog()
+			t.clearProgress()
 			t.mu.Lock()
 			alternate := t.term != nil && t.term.AltScreen()
 			t.mu.Unlock()
@@ -468,6 +490,7 @@ func (t *Terminal) write(p []byte) {
 		p = t.probeEcho.Consume(p)
 	}
 	var title, directory string
+	visibleOutput := t.outputActivity.Consume(p)
 	if t.term != nil {
 		t.integration.scan(p, t.term.Write, func(identity core.HostIdentity) {
 			if !t.term.AltScreen() {
@@ -485,6 +508,9 @@ func (t *Terminal) write(p []byte) {
 	}
 	t.mu.Unlock()
 	t.observeOutput(p)
+	if visibleOutput && t.opts.OnActivity != nil {
+		t.opts.OnActivity()
+	}
 	if ev.directory && t.opts.OnDirectory != nil {
 		t.opts.OnDirectory(directory)
 	}
@@ -516,6 +542,7 @@ func (t *Terminal) fire(ev events, title string) {
 
 // ended marks the program ended, once its output did.
 func (t *Terminal) ended() {
+	t.clearProgress()
 	t.closeSrc()
 	if t.proc != nil {
 		code, _ := t.proc.Wait()
@@ -642,8 +669,25 @@ func (t *Terminal) Snapshot() []byte {
 // Send sends data to the program as if typed.
 func (t *Terminal) Send(data []byte) {
 	if len(data) > 0 {
-		t.in.push(append([]byte(nil), data...))
+		t.mu.Lock()
+		if t.sendInputLocked(data) {
+			t.noteIdleInput(data)
+		}
+		t.mu.Unlock()
 	}
+}
+
+// sendInputLocked serializes the submission scanner with PTY output parsing.
+// Register accepted input before the writer can deliver it to the program.
+func (t *Terminal) sendInputLocked(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	return t.in.pushBefore(append([]byte(nil), data...), func() {
+		if t.term != nil {
+			t.term.RegisterUserInput(data)
+		}
+	})
 }
 
 // Paste pastes text, bracketed when the program asks (mode 2004), so that
@@ -659,10 +703,14 @@ func (t *Terminal) paste(text string) bool {
 		t.mu.Unlock()
 		return false
 	}
-	data := vt.EncodePaste(text, t.term.Mode(vt.ModeBracketedPaste))
+	bracketed := t.term.Mode(vt.ModeBracketedPaste)
+	data := vt.EncodePaste(text, bracketed)
 	t.term.ScrollToBottom()
 	t.mu.Unlock()
 	t.Send(data)
+	if bracketed {
+		t.idleEditing.Store(true)
+	}
 	t.redraw()
 	return true
 }
@@ -685,6 +733,9 @@ func (t *Terminal) Close() error {
 		return nil
 	}
 	t.closed = true
+	if t.v != nil {
+		t.v.cancelSemanticClick()
+	}
 	src, proc, waiting := t.src, t.proc, t.launch != nil
 	t.launch = nil
 	if t.timer != nil {
@@ -719,6 +770,10 @@ func (t *Terminal) Close() error {
 	t.term = nil
 	t.rs.Free()
 	t.rs = nil
+	if t.v != nil {
+		t.v.graphics = nil
+		t.v.graphicBitmaps = nil
+	}
 	t.rmu.Unlock()
 	t.mu.Unlock()
 	t.redraw()
@@ -862,6 +917,7 @@ type inputQueue struct {
 	cond           *sync.Cond
 	queue          []inputPacket
 	closed, paused bool
+	cancelPaused   context.CancelFunc
 }
 
 func (q *inputQueue) init() {
@@ -870,23 +926,49 @@ func (q *inputQueue) init() {
 	}
 }
 func (q *inputQueue) push(p []byte) {
+	q.pushBefore(p, nil)
+}
+func (q *inputQueue) pushBefore(p []byte, before func()) bool {
+	var cancel context.CancelFunc
 	q.mu.Lock()
-	defer q.mu.Unlock()
+	defer func() {
+		q.mu.Unlock()
+		// Cancel the specific session that rejected this input, outside the
+		// queue lock. Do not enter transferController.mu while t.mu is held:
+		// PTY output parsing takes those locks in the opposite order.
+		if cancel != nil {
+			cancel()
+		}
+	}()
 	q.init()
+	if !q.closed && q.paused && bytes.IndexByte(p, 3) >= 0 {
+		cancel = q.cancelPaused
+	}
 	if !q.closed && !q.paused {
+		if before != nil {
+			before()
+		}
 		epoch := uint64(0)
 		if q.generation != nil {
 			epoch = q.generation()
 		}
 		q.queue = append(q.queue, inputPacket{data: p, generation: epoch})
 		q.cond.Signal()
+		return true
 	}
+	return false
 }
 func (q *inputQueue) pause(paused bool) {
+	q.pauseWithCancel(paused, nil)
+}
+
+func (q *inputQueue) pauseWithCancel(paused bool, cancel context.CancelFunc) {
 	q.mu.Lock()
 	q.init()
 	q.paused = paused
+	q.cancelPaused = nil
 	if paused {
+		q.cancelPaused = cancel
 		next := q.queue[:0]
 		for _, packet := range q.queue {
 			if packet.raw {
@@ -926,6 +1008,7 @@ func (q *inputQueue) close() {
 	q.mu.Lock()
 	q.init()
 	q.closed = true
+	q.cancelPaused = nil
 	for _, packet := range q.queue {
 		if packet.result != nil {
 			packet.result <- io.ErrClosedPipe

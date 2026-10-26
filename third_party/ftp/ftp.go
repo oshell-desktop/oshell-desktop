@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -694,6 +695,13 @@ func (c *ServerConn) Type(transferType TransferType) (err error) {
 }
 
 // NameList issues an NLST FTP command.
+const maxListingBytes = 4 << 20
+
+// ErrListingTooLarge is terminal: callers must not bypass it with a fallback.
+var ErrListingTooLarge = errors.New("FTP listing exceeds 4 MiB")
+
+var ErrListingEncoding = errors.New("FTP listing is not UTF-8")
+
 func (c *ServerConn) NameList(path string) (entries []string, err error) {
 	space := " "
 	if path == "" {
@@ -708,9 +716,18 @@ func (c *ServerConn) NameList(path string) (entries []string, err error) {
 
 	r := &Response{conn: conn, c: c}
 
-	scanner := bufio.NewScanner(c.options.wrapStream(r))
+	limited := &io.LimitedReader{R: c.options.wrapStream(r), N: maxListingBytes + 1}
+	scanner := bufio.NewScanner(limited)
+	scanner.Buffer(make([]byte, 4096), maxListingBytes+1)
 	for scanner.Scan() {
+		if !utf8.ValidString(scanner.Text()) {
+			errs = append(errs, ErrListingEncoding)
+			break
+		}
 		entries = append(entries, scanner.Text())
+	}
+	if limited.N == 0 {
+		errs = append(errs, ErrListingTooLarge)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -725,10 +742,24 @@ func (c *ServerConn) NameList(path string) (entries []string, err error) {
 
 // List issues a LIST FTP command.
 func (c *ServerConn) List(path string) (entries []*Entry, err error) {
+	return c.list(path, false, false)
+}
+
+// ListWithFallback rejects partial/unrecognized listings and retries MLSD with
+// LIST. The caller can then fall back to NLST without silently losing entries.
+func (c *ServerConn) ListWithFallback(path string) ([]*Entry, error) {
+	entries, err := c.list(path, false, true)
+	if err != nil && !errors.Is(err, ErrListingTooLarge) && !errors.Is(err, ErrListingEncoding) && c.mlstSupported && !c.options.forceListHidden {
+		return c.list(path, true, true)
+	}
+	return entries, err
+}
+
+func (c *ServerConn) list(path string, legacy, strict bool) (entries []*Entry, err error) {
 	var cmd string
 	var parser parseFunc
 
-	if c.mlstSupported && !c.options.forceListHidden {
+	if c.mlstSupported && !c.options.forceListHidden && !legacy {
 		cmd = "MLSD"
 		parser = parseRFC3659ListLine
 	} else {
@@ -752,13 +783,36 @@ func (c *ServerConn) List(path string) (entries []*Entry, err error) {
 
 	r := &Response{conn: conn, c: c}
 
-	scanner := bufio.NewScanner(c.options.wrapStream(r))
+	limited := &io.LimitedReader{R: c.options.wrapStream(r), N: maxListingBytes + 1}
+	scanner := bufio.NewScanner(limited)
+	scanner.Buffer(make([]byte, 4096), maxListingBytes+1)
 	now := time.Now()
 	for scanner.Scan() {
-		entry, errParse := parser(scanner.Text(), now, c.options.location)
-		if errParse == nil {
-			entries = append(entries, entry)
+		line := scanner.Text()
+		if strict && !utf8.ValidString(line) {
+			errs = append(errs, ErrListingEncoding)
+			break
 		}
+		if strings.TrimSpace(line) == "" || parserIsTotalLine(cmd, line) {
+			continue
+		}
+		entry, errParse := parser(line, now, c.options.location)
+		if errParse == nil {
+			if strict && strings.HasPrefix(cmd, "LIST") {
+				// Only RFC3659 carries an unambiguous UTC timestamp. Legacy
+				// ls/DIR dates omit a zone and sometimes a year; retain other
+				// metadata without publishing an invented instant.
+				if _, err := parseRFC3659ListLine(line, now, time.UTC); err != nil {
+					entry.Time = time.Time{}
+				}
+			}
+			entries = append(entries, entry)
+		} else if strict && len(errs) == 0 {
+			errs = append(errs, errors.New("unrecognized FTP listing"))
+		}
+	}
+	if limited.N == 0 {
+		errs = append(errs, ErrListingTooLarge)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -769,6 +823,10 @@ func (c *ServerConn) List(path string) (entries []*Entry, err error) {
 	}
 
 	return entries, errors.Join(errs...)
+}
+
+func parserIsTotalLine(command, line string) bool {
+	return strings.HasPrefix(command, "LIST") && strings.HasPrefix(line, "total ")
 }
 
 // GetEntry issues a MLST FTP command which retrieves one single Entry using the

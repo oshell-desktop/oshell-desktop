@@ -18,14 +18,15 @@ type headless struct {
 	img         raster.Renderer
 	// requested is set when the view asks for a frame, from any goroutine
 	// for invalidate.
-	requested atomic.Bool
-	dark      bool
-	prefs     platform.Preferences
-	clipboard string
-	cursor    Cursor
-	ime       platform.TextInputState
-	opened    []string
-	openErr   error
+	requested        atomic.Bool
+	dark             bool
+	prefs            platform.Preferences
+	clipboard        string
+	clipboardVersion uint64
+	cursor           Cursor
+	ime              platform.TextInputState
+	opened           []string
+	openErr          error
 	// later are what the view asked to run after the frame, as a window
 	// posts them to the main thread.
 	later  []func()
@@ -67,7 +68,7 @@ func (h *headless) requestFrame()                              { h.requested.Sto
 func (h *headless) setCursor(c Cursor)                         { h.cursor = c }
 func (h *headless) setTextInput(t platform.TextInputState)     { h.ime = t }
 func (h *headless) updateAccessibility(t *platform.AccessTree) { h.keepAccess(t) }
-func (h *headless) writeClipboard(s string)                    { h.clipboard = s }
+func (h *headless) writeClipboard(s string)                    { h.clipboard = s; h.clipboardVersion++ }
 func (h *headless) startDrag()                                 {}
 func (h *headless) setDropFormats([]transfer.Format)           {}
 func (h *headless) readClipboard() string {
@@ -442,7 +443,7 @@ func (t *Tester) TextCaret() (Rect, bool) {
 func (t *Tester) Clipboard() string { return t.h.clipboard }
 
 // SetClipboard sets the clipboard's text.
-func (t *Tester) SetClipboard(s string) { t.h.clipboard = s }
+func (t *Tester) SetClipboard(s string) { t.h.writeClipboard(s) }
 
 // Cursor returns the pointer shape the view shows.
 func (t *Tester) Cursor() Cursor { return t.h.cursor }
@@ -483,3 +484,6 @@ func (t *Tester) Focused(s string) bool {
 	}
 	return false
 }
+
+// CancelPointer simulates loss of pointer capture without a button release.
+func (t *Tester) CancelPointer() { t.send(platform.SurfaceEvent{Kind: platform.PointerCancel}) }

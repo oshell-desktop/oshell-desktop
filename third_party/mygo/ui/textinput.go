@@ -54,6 +54,7 @@ func textInputBase(c *context, value *string, multiline bool) *node {
 		ed.compose = ""
 	}
 	ed.readOnly, ed.password, ed.lines = false, false, [2]int{}
+	ed.noSpellcheck = false
 	ed.ranges = ed.ranges[:0]
 	e.onValueInput(stringInput)
 
@@ -139,6 +140,17 @@ func (e *node) Composing() bool {
 func (e *node) Password() *node {
 	if ed := e.st.editor; ed != nil && !ed.multiline {
 		ed.password = true
+		ed.noSpellcheck = true
+	}
+	return e
+}
+
+// NoSpellcheck asks native input methods not to spell-check this editor.
+// It does not mask text or restrict characters. Call it each frame, including
+// while temporarily revealing a password. Input method support varies.
+func (e *node) NoSpellcheck() *node {
+	if ed := e.st.editor; ed != nil {
+		ed.noSpellcheck = true
 	}
 	return e
 }

@@ -66,6 +66,7 @@ func (h *applicationHub) externalFileWindow() *App {
 	return a
 }
 func (a *App) fileWindowView(c *ui.Context) {
+	defer a.resumeDeferredUpdate() // Modal teardown may happen after drain during this frame.
 	a.drain()
 	if !a.modalActive() && c.Shortcut(ui.Ctrl, ui.KeyW) && a.win != nil {
 		a.win.Close()
@@ -115,6 +116,9 @@ func (a *App) fileWindowView(c *ui.Context) {
 					title := tab.name
 					if tab.active != nil && tab.active.profile.Host != "" {
 						title = tab.active.profile.Host
+						if tab.active.fileDisplayIP != "" {
+							title = tab.active.fileDisplayIP
+						}
 					}
 					background, underline := c.Theme().Surface, ui.Transparent
 					if selected {

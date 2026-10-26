@@ -3,6 +3,7 @@ package core
 import (
 	"crypto/ed25519"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json/v2"
@@ -16,8 +17,10 @@ const UpdateMetadataLimit = 1 << 20
 const UpdateArchiveLimit = 1 << 30
 const updateSignatureDomain = "OShellDesktop update metadata v1\n"
 
-// Supplied at release build time. A development build without a pinned key
-// cannot accept updates; repository responses never supply their own trust key.
+// Pinned release key. The private PKCS8 key is kept outside tracked sources
+// and never shipped. Repository responses cannot choose their own trust key.
+//
+//go:embed update_public_key.txt
 var UpdatePublicKey string
 var UpdateBuild string
 var updateBuildPattern = regexp.MustCompile(`^[1-9][0-9]{0,17}$`)

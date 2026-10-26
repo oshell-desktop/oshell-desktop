@@ -406,7 +406,7 @@ func (a *App) fileBrowser(c *ui.Context, p *pane, full bool) {
 					case ui.KeyEnd:
 						next = len(visible) - 1
 					case ui.KeyEnter:
-						if !f.busy && (entry.IsDir() || entry.Mode()&os.ModeSymlink != 0) && len(f.selectedNames()) == 1 {
+						if !f.busy && fileCanNavigate(entry) && len(f.selectedNames()) == 1 {
 							a.loadFiles(p, path.Join(f.dir, name))
 						}
 						return true
@@ -435,10 +435,13 @@ func (a *App) fileBrowser(c *ui.Context, p *pane, full bool) {
 					ui.Text(c, presentation.kind).Width(55).FontSize(11).Tooltip(detail)
 				}
 				size := "—"
-				if !entry.IsDir() {
+				if !entry.IsDir() && core.RemoteFileTypeKnown(entry) {
 					size = bytesLabel(entry.Size())
 				}
 				sizeHint := fmt.Sprintf("%d 字节", entry.Size())
+				if !core.RemoteFileTypeKnown(entry) {
+					sizeHint = "服务器未提供大小"
+				}
 				if entry.IsDir() {
 					sizeHint = "目录大小未统计"
 				}
@@ -463,7 +466,7 @@ func (a *App) fileBrowser(c *ui.Context, p *pane, full bool) {
 			}
 			if row.DoubleClicked() && !f.busy {
 				f.selectEntry(i, false, false)
-				if entry.IsDir() || entry.Mode()&os.ModeSymlink != 0 {
+				if fileCanNavigate(entry) {
 					a.loadFiles(p, path.Join(f.dir, name))
 				} else {
 					a.download(p)

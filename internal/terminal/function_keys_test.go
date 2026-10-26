@@ -20,7 +20,7 @@ func TestExtendedFunctionKeys(t *testing.T) {
 	for _, tc := range []struct {
 		number int
 		want   string
-	}{{13, "\x1b[25~"}, {14, "\x1b[26~"}, {15, "\x1b[28~"}, {16, "\x1b[29~"}, {17, "\x1b[31~"}, {18, "\x1b[32~"}, {19, "\x1b[33~"}, {20, "\x1b[34~"}} {
+	}{{13, "\x1b[1;2P"}, {14, "\x1b[1;2Q"}, {15, "\x1b[1;2R"}, {16, "\x1b[1;2S"}, {17, "\x1b[15;2~"}, {18, "\x1b[17;2~"}, {19, "\x1b[18;2~"}, {20, "\x1b[19;2~"}} {
 		if !term.SendFunctionKey(tc.number, 0, false, false) {
 			t.Fatalf("F%d not handled", tc.number)
 		}
@@ -31,13 +31,13 @@ func TestExtendedFunctionKeys(t *testing.T) {
 	if !term.SendFunctionKey(13, ui.Ctrl, false, false) {
 		t.Fatal("modified function key lost")
 	}
-	if got := conn.take(7); got != "\x1b[25;5~" {
+	if got := conn.take(6); got != "\x1b[1;2P" {
 		t.Fatal("Ctrl-F13", got)
 	}
 	if !term.SendFunctionKey(13, 0, false, true) {
 		t.Fatal("repeat lost")
 	}
-	if got := conn.take(5); got != "\x1b[25~" {
+	if got := conn.take(6); got != "\x1b[1;2P" {
 		t.Fatal("repeat", got)
 	}
 	if !term.SendFunctionKey(13, 0, true, false) {

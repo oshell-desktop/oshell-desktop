@@ -22,6 +22,7 @@ func TestLockedAuxiliaryWindowsHideConnectionData(t *testing.T) {
 	a.current = 0
 	a.prepareSettings()
 	a.vault.Lock()
+	a.workspaceAuthorized = false // Simulate a fresh, not-yet-authorized startup.
 	for name, view := range map[string]func(*ui.Context){"workspace": a.view, "files": a.fileWindowView, "manager": a.managerView, "settings": a.settingsView} {
 		tt := ui.NewTester(view, 1000, 700)
 		text := strings.Join(tt.Texts(), "\n")
@@ -49,6 +50,7 @@ func TestLockedWorkspaceMarksTerminalInvisibleWithoutDroppingOutput(t *testing.T
 		t.Fatal(e)
 	}
 	a.vault.Lock()
+	a.workspaceAuthorized = false // Simulate a fresh, not-yet-authorized startup.
 	a.refreshPaneVisibility()
 	if p.visible.Load() || len(a.visiblePanes()) != 0 {
 		t.Fatal("locked pane still considered visible")

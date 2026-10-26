@@ -5,7 +5,7 @@ import "github.com/egoist/mygo/ui"
 // All workspace surfaces share the same protection gate, including auxiliary
 // windows that can otherwise retain a previously rendered connection/file list.
 func (a *App) lockedWorkspace(c *ui.Context) bool {
-	if !a.passwordLocked() {
+	if !a.workspaceLocked() {
 		return false
 	}
 	a.refreshPaneVisibility()

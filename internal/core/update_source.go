@@ -45,7 +45,10 @@ func (s UpdateSource) acceptsArchive(raw, version, target string) bool {
 	}
 	// Desktop updates have a separate product namespace; an OShell DMG cannot
 	// pass this gate, even if both apps happen to use the same release repository.
-	path := "/" + s.Repository + "/releases/download/v" + version + "/OShell-Desktop-" + version + "-" + target + ".tar.gz"
 	filename := "OShell-Desktop-" + version + "-" + target + ".tar.gz"
+	if target == "windows-amd64" || target == "linux-amd64" {
+		filename = releaseAssetName(target)
+	}
+	path := "/" + s.Repository + "/releases/download/v" + version + "/" + filename
 	return strings.HasSuffix(u.EscapedPath(), "/"+filename) && strings.EqualFold(strings.TrimSuffix(u.EscapedPath(), filename), strings.TrimSuffix(path, filename))
 }

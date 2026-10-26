@@ -515,6 +515,8 @@ func oleText(b []byte) string {
 }
 func oleFormat(f uint16) transfer.Format {
 	switch f {
+	case 6: // CF_TIFF
+		return transfer.Format("image/tiff")
 	case cfUnicodeText:
 		return transfer.Text
 	case cfHDrop:
@@ -525,6 +527,12 @@ func oleFormat(f uint16) transfer.Format {
 		return transfer.PNG
 	}
 	name := oleRegisteredFormatName(f)
+	switch strings.ToLower(name) {
+	case "jpeg", "jfif":
+		return transfer.Format("image/jpeg")
+	case "tiff":
+		return transfer.Format("image/tiff")
+	}
 	if name == "UniformResourceLocatorW" {
 		return transfer.URIList
 	}

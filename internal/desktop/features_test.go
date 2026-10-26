@@ -87,21 +87,21 @@ func TestQuickCommandsAndReferences(t *testing.T) {
 }
 func TestSearchAndVaultViews(t *testing.T) {
 	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
-	a.features.findOpen = true
-	a.features.findQuery = "error"
-	a.features.findText = "正常输出\nERROR: connection reset\nerror: disk full"
-	a.searchSnapshot()
+	p, _ := operatorPane(t, a, "search-view")
+	p.term.Feed([]byte("正常输出\r\nERROR: connection reset\r\nerror: disk full"))
+	p.search.query = "error"
+	a.openSearch()
 	tt := ui.NewTester(a.view, 1280, 820)
 	until := time.Now().Add(3 * time.Second)
-	for a.features.findBusy && time.Now().Before(until) {
+	for p.search.busy && time.Now().Before(until) {
 		tt.Frame()
 		time.Sleep(time.Millisecond)
 	}
-	if len(a.features.findMatches) != 2 {
-		t.Fatal(a.features.findMatches)
+	if len(p.search.matches) != 2 {
+		t.Fatal(p.search.matches, p.search.err)
 	}
 	snapshot(t, tt, "terminal-search.png")
-	a.features.findOpen = false
+	a.closeTerminalSearch(p)
 	a.showVault()
 	tt.Frame()
 	snapshot(t, tt, "password-protection.png")

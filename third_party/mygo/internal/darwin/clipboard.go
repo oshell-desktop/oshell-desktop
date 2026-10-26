@@ -27,6 +27,10 @@ type macClipboardSource struct {
 	released func()
 }
 
+func (clipboard) Generation() (uint64, bool) {
+	return uint64(sendInt(pasteboard(), "changeCount")), true
+}
+
 func registerClipboardClass() {
 	clipboardClassOnce.Do(func() {
 		classDef("MyGoClipboardProvider", "NSObject", []string{"NSPasteboardItemDataProvider"}, []objc.MethodDef{

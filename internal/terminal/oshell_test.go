@@ -65,6 +65,14 @@ func TestOShellSemanticInputExcludesProtocolReplies(t *testing.T) {
 	if got := left.take(1); !strings.Contains(got, "R") {
 		t.Fatalf("device reply missing: %q", got)
 	}
+	source.Feed([]byte("\x1b[?1004h"))
+	if got := left.take(3); got != "\x1b[I" {
+		t.Fatalf("initial focus report missing: %q", got)
+	}
+	tt.SetFocused(false)
+	if got := left.take(3); got != "\x1b[O" {
+		t.Fatalf("blur report missing: %q", got)
+	}
 	right.mu.Lock()
 	got := string(right.sent)
 	right.mu.Unlock()
@@ -108,6 +116,7 @@ func TestOShellPastePolicyAndOutputLog(t *testing.T) {
 	}
 	term.Feed([]byte("output"))
 	term.StopLog()
+ term.WaitLog()
 	term.Feed([]byte("excluded"))
 	data, e := os.ReadFile(file)
 	if e != nil || string(data) != "output" {

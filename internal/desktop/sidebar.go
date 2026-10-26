@@ -1,7 +1,10 @@
 package desktop
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -15,38 +18,84 @@ import (
 
 // These preferences are deliberately outside Config and the shared contract.
 type localPreferences struct {
-	SidebarVisible  bool                  `json:"sidebarVisible"`
-	SidebarShortcut core.KeyboardShortcut `json:"sidebarShortcut"`
-	WordSeparators  string                `json:"wordSeparators"`
-	ShiftWhitespace bool                  `json:"shiftWhitespace"`
+	Version           int                       `json:"version,omitempty"`
+	DeepFocusShortcut core.KeyboardShortcut     `json:"deepFocusShortcut"`
+	ImagePasteLocal   bool                      `json:"imagePasteLocal"`
+	ImagePasteSSH     map[string]imagePasteRule `json:"imagePasteSSH,omitempty"`
+	DefaultTitleMode  string                    `json:"defaultTitleMode"`
+	TitleModes        map[string]string         `json:"titleModes,omitempty"`
+	ConfirmTabClose   bool                      `json:"confirmTabClose"`
+	ReduceMotion      bool                      `json:"reduceMotion"`
+	Pins              map[string]bool           `json:"pins,omitempty"`
+	SidebarVisible    bool                      `json:"sidebarVisible"`
+	SidebarShortcut   core.KeyboardShortcut     `json:"sidebarShortcut"`
+	WordSeparators    string                    `json:"wordSeparators"`
+	ShiftWhitespace   bool                      `json:"shiftWhitespace"`
 }
 
 const defaultWordSeparators = " /\\()\"'-:,.;<>~!@#$%^&*|+=[]{}?"
 
 func defaultLocalPreferences() localPreferences {
-	var code uint16
+	var code, focusCode uint16
 	for k, name := range core.ShortcutKeyNames {
+		if name == "F" {
+			focusCode = k
+		}
 		if name == "B" {
 			code = k
 		}
 	}
-	return localPreferences{SidebarVisible: true, SidebarShortcut: core.KeyboardShortcut{KeyCode: code, Modifiers: 1 | 8}, WordSeparators: defaultWordSeparators, ShiftWhitespace: true}
+	return localPreferences{DeepFocusShortcut: core.KeyboardShortcut{KeyCode: focusCode, Modifiers: 1 | 2 | 8}, DefaultTitleMode: "sessionName", ConfirmTabClose: true, SidebarVisible: true, SidebarShortcut: core.KeyboardShortcut{KeyCode: code, Modifiers: 1 | 8}, WordSeparators: defaultWordSeparators, ShiftWhitespace: true}
+}
+func (p localPreferences) clone() localPreferences {
+	p.ImagePasteSSH = maps.Clone(p.ImagePasteSSH)
+	p.TitleModes = maps.Clone(p.TitleModes)
+	p.Pins = maps.Clone(p.Pins)
+	return p
 }
 func loadLocalPreferences(dir string) localPreferences {
-	p := defaultLocalPreferences()
-	if b, err := os.ReadFile(filepath.Join(dir, "desktop-preferences.json")); err == nil && len(b) < 64<<10 {
-		next := p
-		if json.Unmarshal(b, &next) == nil {
-			if !next.SidebarShortcut.Valid() {
-				next.SidebarShortcut = p.SidebarShortcut
-			}
-			p = next
-		}
+	p, err := readLocalPreferences(dir)
+	if err != nil {
+		return defaultLocalPreferences()
 	}
 	return p
 }
+func readLocalPreferences(dir string) (localPreferences, error) {
+	p := defaultLocalPreferences()
+	b, err := core.ReadBounded(filepath.Join(dir, "desktop-preferences.json"))
+	if os.IsNotExist(err) {
+		return p, nil
+	}
+	if err != nil {
+		return p, err
+	}
+	next := p
+	decoder := json.NewDecoder(bytes.NewReader(b))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&next); err != nil {
+		return p, err
+	}
+	if !json.Valid(b) || next.Version < 0 || next.Version > 1 {
+		return p, fmt.Errorf("本机设置格式或版本不受支持")
+	}
+	if !next.DeepFocusShortcut.Valid() {
+		next.DeepFocusShortcut = p.DeepFocusShortcut
+	}
+	if !next.SidebarShortcut.Valid() {
+		next.SidebarShortcut = p.SidebarShortcut
+	}
+	if !validTitleMode(next.DefaultTitleMode) {
+		next.DefaultTitleMode = p.DefaultTitleMode
+	}
+	return next, nil
+}
 func (a *App) saveLocalPreferences(p localPreferences) bool {
-	b, err := json.Marshal(p)
+	p = p.clone()
+	_, err := readLocalPreferences(a.store.Dir)
+	var b []byte
+	if err == nil {
+		b, err = json.Marshal(p)
+	}
 	if err == nil {
 		err = core.AtomicWrite(filepath.Join(a.store.Dir, "desktop-preferences.json"), b)
 	}
@@ -56,7 +105,9 @@ func (a *App) saveLocalPreferences(p localPreferences) bool {
 		return false
 	}
 	apply := func(target *App) {
-		target.localUI = p
+		target.localUI = p.clone()
+		target.managerCache = nil
+		target.refreshSessionTitles()
 		for _, tab := range target.tabs {
 			target.walk(tab.root, func(pane *pane) {
 				if pane.term != nil {
@@ -83,19 +134,21 @@ func (a *App) toggleSidebar() {
 	if a.passwordLocked() || a.modalActive() {
 		return
 	}
-	p := a.localUI
+	p := a.localUI.clone()
 	p.SidebarVisible = !p.SidebarVisible
 	a.saveLocalPreferences(p)
 }
 
 type sidebarState struct {
-	capture         bool
-	query, selected string
-	open            map[string]*bool
-	filteredQuery   string
-	filteredOpen    map[string]*bool
-	context         *sidebarMenuContext
-	rename          *managerRenameState
+	selection            ui.Selection[string]
+	visible              []string
+	capture, deepCapture bool
+	query, selected      string
+	open                 map[string]*bool
+	filteredQuery        string
+	filteredOpen         map[string]*bool
+	context              *sidebarMenuContext
+	rename               *managerRenameState
 }
 
 func (s *sidebarState) expansion() map[string]*bool {
@@ -143,7 +196,8 @@ func (a *App) localSelectionSettings(c *ui.Context) {
 	ui.Checkbox(c, &s.TrimTrailing, "复制时清理尾部空白")
 	ui.Divider(c)
 	ui.Checkbox(c, &p.SidebarVisible, "显示会话侧栏")
-	ui.Button(c, "切换侧栏："+p.SidebarShortcut.Display(runtime.GOOS)).OnClick(func() { a.sidebar.capture = true })
+	ui.Button(c, "全心专注："+p.DeepFocusShortcut.Display(runtime.GOOS)).OnClick(func() { a.sidebar.capture = true; a.sidebar.deepCapture = true })
+	ui.Button(c, "切换侧栏："+p.SidebarShortcut.Display(runtime.GOOS)).OnClick(func() { a.sidebar.capture = true; a.sidebar.deepCapture = false })
 	if a.sidebar.capture {
 		ui.Box(c).Height(45).FillWidth().Focusable().AutoFocus().Label("侧栏快捷键录入").Border(1, c.Theme().Accent).HandleInput(func(ev ui.InputEvent) bool {
 			if ev.Kind != ui.InputKeyDown {
@@ -162,7 +216,19 @@ func (a *App) localSelectionSettings(c *ui.Context) {
 				a.features.settingsError = "快捷键与 " + other + " 冲突"
 				return true
 			}
-			p.SidebarShortcut = key
+			other := p.DeepFocusShortcut
+			if a.sidebar.deepCapture {
+				other = p.SidebarShortcut
+			}
+			if shortcutMods(key) == shortcutMods(other) && key.KeyCode == other.KeyCode {
+				a.features.settingsError = "快捷键与另一个本机操作冲突"
+				return true
+			}
+			if a.sidebar.deepCapture {
+				p.DeepFocusShortcut = key
+			} else {
+				p.SidebarShortcut = key
+			}
 			a.sidebar.capture = false
 			a.features.settingsError = ""
 			return true
@@ -198,7 +264,7 @@ func sidebarEntries(cfg core.Config, query string) ([]sidebarEntry, map[string]b
 	add := func(id, name, group string, p core.Profile) {
 		match := p
 		match.Name, match.Group = name, group
-		if query != "" && !q.Matches(core.SessionSearchMetadata(match)) {
+		if query != "" && !q.Matches(core.SessionSearchMetadata(match)+" "+core.NormalizeSessionSearch(p.Name)) {
 			return
 		}
 		entries = append(entries, sidebarEntry{id, name, group, p})
@@ -232,8 +298,12 @@ func (a *App) sidebarView(c *ui.Context) {
 			ui.Button(c, "全部展开").Height(24).FontSize(11).Padding(2, 6).BorderWidth(0).Tooltip("展开所有目录；搜索时仅操作当前结果").OnClick(func() { a.setSidebarExpanded(true) })
 			ui.Button(c, "全部收缩").Height(24).FontSize(11).Padding(2, 6).BorderWidth(0).Tooltip("收缩所有目录；搜索时仅操作当前结果").OnClick(func() { a.setSidebarExpanded(false) })
 		})
+		if !core.NewSessionQuery(s.query).Valid {
+			ui.Text(c, "搜索内容不能超过 4096 UTF-8 字节或 32 个关键词").Wrap().TextColor(c.Theme().Danger)
+			return
+		}
 		expansion := s.expansion()
-		entries, folders := sidebarEntries(a.config, strings.TrimSpace(s.query))
+		entries, folders := sidebarEntries(a.presentationConfig(), strings.TrimSpace(s.query))
 		children := map[string][]string{}
 		for group := range folders {
 			if group != "" {
@@ -245,29 +315,58 @@ func (a *App) sidebarView(c *ui.Context) {
 			}
 		}
 		for p := range children {
-			sort.Strings(children[p])
+			sort.SliceStable(children[p], func(i, j int) bool {
+				l, r := children[p][i], children[p][j]
+				lp, rp := a.localUI.Pins["d:"+l], a.localUI.Pins["d:"+r]
+				if lp != rp {
+					return lp
+				}
+				return l < r
+			})
 		}
 		ui.Scroll(c).Label("会话侧栏列表").Grow(1).MinHeight(0).ContextMenu(func(m *ui.Menu) {
 			a.sidebarContextMenu(c, m, "")
 		}).Children(func() {
+			s.visible = nil
 			ui.Tree(c, func() {
 				var draw func(string)
 				draw = func(group string) {
-					for _, child := range children[group] {
-						open := expansion[child]
-						if open == nil {
-							v := strings.TrimSpace(s.query) != ""
-							open = &v
-							expansion[child] = open
+					for phase := 0; phase < 2; phase++ {
+						for _, child := range children[group] {
+							pinned := group == "" && a.localUI.Pins["d:"+child]
+							if pinned != (phase == 0) {
+								continue
+							}
+							open := expansion[child]
+							if open == nil {
+								v := strings.TrimSpace(s.query) != ""
+								open = &v
+								expansion[child] = open
+							}
+							id := "folder:" + child
+							s.visible = append(s.visible, id)
+							name := path.Base(child)
+							if pinned {
+								name = "↑ " + name
+							}
+							item := sessionTreeItem(c.Key("dir:"+child), name, open, func() { draw(child) }, s.selection.Has(id), sessionIconFor("", child == "Links", true, false)).Tooltip("/" + child)
+							a.sidebarItemActions(c, item, id)
 						}
-						id := "folder:" + child
-						item := sessionTreeItem(c.Key("dir:"+child), path.Base(child), open, func() { draw(child) }, s.selected == id, sessionIconFor("", false, true, false)).Tooltip("/" + child)
-						a.sidebarItemActions(c, item, id)
-					}
-					for _, entry := range entries {
-						if entry.group == group {
+						for _, entry := range entries {
+							if entry.group != group {
+								continue
+							}
+							pinned := group == "" && a.localUI.Pins["p:"+strings.ToLower(entry.id)]
+							if pinned != (phase == 0) {
+								continue
+							}
 							e := entry
-							item := sessionTreeItem(c.Key(e.id), e.name, nil, nil, s.selected == e.id, sidebarSessionStyle(e)).Tooltip(sessionListTooltip(e.profile, strings.HasPrefix(e.id, "link:")))
+							s.visible = append(s.visible, e.id)
+							name := e.name
+							if pinned {
+								name = "↑ " + name
+							}
+							item := sessionTreeItem(c.Key(e.id), name, nil, nil, s.selection.Has(e.id), sidebarSessionStyle(e)).Tooltip(sessionListTooltip(e.profile, strings.HasPrefix(e.id, "link:")))
 							a.sidebarItemActions(c, item, e.id)
 							if item.DoubleClicked() {
 								a.request(e.profile, 0)

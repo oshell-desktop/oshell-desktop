@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
-	"runtime"
+	"slices"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -14,6 +14,7 @@ import (
 )
 
 type applicationHub struct {
+	workspaceAuthorized    bool
 	authenticationSequence uint64
 	authenticationReady    *authenticationChallenge
 	nativeKeys             nativeShortcutMonitor
@@ -22,6 +23,9 @@ type applicationHub struct {
 	externalServer         io.Closer
 	externalPending        []*pendingExternalLaunch
 	syncTimer              *time.Timer
+	syncTimerGeneration    uint64
+	syncAutomaticFailed    bool
+	nextSync               time.Time
 	syncOwner              *App
 	clock                  workspaceClock
 	configBusy             bool
@@ -69,9 +73,7 @@ func runDesktop() error {
 		hub.initializeNativeShortcutCapture()
 		initial.maybeResumeLocalConflict()
 	})
-	if runtime.GOOS == "darwin" {
-		mygo.App.OnWindowAllClosed(func() {})
-	}
+	mygo.App.OnWindowAllClosed(func() {})
 	mygo.App.OnDidBecomeActive(hub.refreshOnActivation)
 	mygo.App.OnActivate(func(visible bool) {
 		if !visible && !hub.quitting {
@@ -175,7 +177,8 @@ func (h *applicationHub) attach(a *App) {
 }
 func (h *applicationHub) attachAt(a *App, position *tabWindowPosition) {
 	a.hub = h
-	if a.passwordLocked() {
+	h.workspaceAuthorized = h.workspaceAuthorized || a.workspaceAuthorized
+	if a.workspaceLocked() {
 		a.features.startupUnlock = true
 		a.features.vaultOpen = true
 		a.features.vaultAction = "unlock"
@@ -193,15 +196,26 @@ func (h *applicationHub) attachAt(a *App, position *tabWindowPosition) {
 	a.win.OnLeaveFullScreen(func() { a.fullscreenSettled(false) })
 	a.win.OnShow(a.refreshPaneVisibility)
 	a.win.OnHide(a.refreshPaneVisibility)
+	a.win.OnHide(a.dismissTabDetails)
 	a.win.OnMinimize(a.refreshPaneVisibility)
+	a.win.OnMinimize(a.dismissTabDetails)
+	a.win.OnBlur(a.dismissTabDetails)
 	a.win.OnRestore(a.refreshPaneVisibility)
 	a.win.OnClose(a.onWorkspaceClose)
-	h.scheduleSharedSync(2 * time.Second)
+	if len(h.windows) == 1 {
+		h.scheduleStartupSync()
+	}
 	h.scheduleUpdates()
 	a.win.OnClosed(func() {
+		if a.syncMonitor != nil {
+			monitor := a.syncMonitor
+			a.syncMonitor = nil
+			go monitor.Close()
+		}
 		a.cancelSessionPassword()
 		a.unregisterFocusWindow()
 		a.stopped.Store(true)
+		a.idleMemory.cancel()
 		if a.features.sharedSync.cancel != nil {
 			a.features.sharedSync.cancel()
 		}
@@ -212,9 +226,16 @@ func (h *applicationHub) attachAt(a *App, position *tabWindowPosition) {
 			a.walk(t.root, a.dispose)
 		}
 		a.drain()
+		a.tabs = nil
+		if h.fileWindow == a {
+			h.fileWindow = nil
+		}
 		for i, w := range h.windows {
 			if w == a {
-				h.windows = append(h.windows[:i], h.windows[i+1:]...)
+				h.windows = slices.Delete(h.windows, i, i+1)
+				for _, remaining := range h.windows {
+					remaining.scheduleIdleMemoryReclaim()
+				}
 				h.refreshClock()
 				h.scheduleSharedSync(time.Minute)
 				h.scheduleUpdates()
@@ -335,7 +356,7 @@ func (a *App) transferTabAt(t *tab, destination *App, groupID, target string, af
 		}
 	}
 	sourceActive := a.activeTab()
-	a.tabs = append(a.tabs[:at], a.tabs[at+1:]...)
+	a.tabs = slices.Delete(a.tabs, at, at+1)
 	a.current = -1
 	if sourceActive != nil && sourceActive != t {
 		for i, v := range a.tabs {
@@ -345,7 +366,14 @@ func (a *App) transferTabAt(t *tab, destination *App, groupID, target string, af
 			}
 		}
 	}
-	a.walk(t.root, func(p *pane) { a.detachInputTarget(p); p.owner.Store(destination) })
+	a.walk(t.root, func(p *pane) {
+		a.detachInputTarget(p)
+		if p.term != nil {
+			// Detach from the old host before the destination can gain focus.
+			p.term.SetVisible(false)
+		}
+		p.owner.Store(destination)
+	})
 	a.pruneSyncTargets()
 	retained := a.challenges[:0]
 	for _, q := range a.challenges {
@@ -355,11 +383,13 @@ func (a *App) transferTabAt(t *tab, destination *App, groupID, target string, af
 			retained = append(retained, q)
 		}
 	}
+	clear(a.challenges[len(retained):])
 	a.challenges = retained
 	t.group = g.id
 	destination.tabs = append(destination.tabs, nil)
 	copy(destination.tabs[insert+1:], destination.tabs[insert:])
 	destination.tabs[insert] = t
+	destination.cancelIdleMemoryReclaim()
 	destination.setCurrentTab(t, true)
 	if a.groups.root != nil {
 		a.pruneGroups()

@@ -83,10 +83,12 @@ func parseNextRFC3659ListLine(line string, loc *time.Location, e *Entry) (*Entry
 				return nil, err
 			}
 		case "type":
-			switch value {
-			case "dir", "cdir", "pdir":
+			switch kind := strings.ToLower(value); {
+			case kind == "dir", kind == "cdir", kind == "pdir":
 				e.Type = EntryTypeFolder
-			case "file":
+			case strings.Contains(kind, "slink"):
+				e.Type = EntryTypeLink
+			case kind == "file":
 				e.Type = EntryTypeFile
 			}
 		case "size":

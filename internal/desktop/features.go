@@ -6,12 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"oshell-desktop/internal/core"
-	"oshell-desktop/internal/terminal"
 )
 
 func (a *App) changeConfig(change func(*core.Config) error) bool {
@@ -35,6 +33,8 @@ func (a *App) changeConfig(change func(*core.Config) error) bool {
 		a.config = old
 		return false
 	}
+	a.reconcileSessionPins()
+	a.refreshSessionTitles()
 	if a.win != nil {
 		a.win.Invalidate()
 	}
@@ -197,12 +197,6 @@ func (a *App) featureDialogs(c *ui.Context) {
 	a.authenticationChallengeDialog(c)
 	f := &a.features
 	a.vaultDialog(c)
-	a.searchDialog(c)
-	if !f.findOpen && f.findText != "" && f.searchPane == nil {
-		f.findText = ""
-		f.findMatches = nil
-		f.findGeneration++
-	}
 	a.standaloneSCPDialog(c)
 	a.uploadConfirmationDialog(c)
 	a.fileActionDialog(c)
@@ -273,6 +267,7 @@ func (a *App) openDirectory(action, source string) {
 }
 func (a *App) applyDirectory() {
 	f := &a.features
+	keepPin := f.directoryAction == "移动 / 重命名目录" && a.localUI.Pins["d:"+f.directorySource]
 	var operationError error
 	ok := a.changeConfig(func(cfg *core.Config) error {
 		destination := f.directoryName
@@ -346,6 +341,13 @@ func (a *App) applyDirectory() {
 		return e
 	})
 	if ok {
+		if keepPin {
+			if d, err := core.NormalizeDirectory(f.directoryName); err == nil && managerParent(d) == "" {
+				if row, exists := a.sidebarRow("folder:" + d); exists {
+					a.setSessionPins([]sessionRow{row}, true)
+				}
+			}
+		}
 		f.directoryOpen = false
 		if f.directorySidebar {
 			a.sidebar.query = ""
@@ -464,121 +466,6 @@ func (a *App) exportScreen() {
 		}
 	}()
 }
-func (a *App) openSearch() {
-	p := a.activePane()
-	if p == nil || p.term == nil {
-		return
-	}
-	a.features.findOpen = true
-	a.features.searchPane = p
-	a.features.findText = ""
-	a.features.findIndex = -1
-	term := p.term
-	a.features.findBusy = true
-	go func() {
-		text := term.Text()
-		a.post(func() {
-			if !a.features.findOpen {
-				return
-			}
-			a.features.findText = text
-			a.searchSnapshot()
-		})
-	}()
-}
-func (a *App) searchSnapshot() {
-	f := &a.features
-	f.findGeneration++
-	generation := f.findGeneration
-	text, query, regex, sensitive := f.findText, f.findQuery, f.findRegex, f.findCase
-	f.findBusy = true
-	searchPane := f.searchPane
-	go func() {
-		var native []terminal.Match
-		var matches []core.SearchMatch
-		var limited bool
-		var e error
-		if searchPane != nil && searchPane.term != nil {
-			native, e = searchPane.term.Search(query, regex, sensitive)
-			limited = len(native) == 5000
-			matches = searchDisplayMatches(native)
-		} else {
-			matches, limited, e = core.Search(text, query, regex, sensitive)
-		}
-		a.post(func() {
-			if generation != f.findGeneration || !f.findOpen {
-				return
-			}
-			f.findBusy = false
-			f.findMatches = matches
-			f.terminalMatches = native
-			f.findLimited = limited
-			f.findIndex = -1
-			f.findError = ""
-			if len(matches) > 0 {
-				f.findIndex = 0
-			}
-			if e != nil {
-				f.findError = e.Error()
-			}
-		})
-	}()
-}
-func (a *App) searchDialog(c *ui.Context) {
-	f := &a.features
-	ui.Modal(c, &f.findOpen, func() {
-		ui.Column(c).Width(760).Gap(10).Children(func() {
-			ui.Text(c, "搜索终端历史").FontSize(18).Bold()
-			ui.Row(c).Gap(8).Children(func() {
-				if ui.TextInput(c, &f.findQuery).Label("搜索文本").AutoFocus().Grow(1).Changed() {
-					a.searchSnapshot()
-				}
-				if ui.Checkbox(c, &f.findRegex, "正则").Changed() {
-					a.searchSnapshot()
-				}
-				if ui.Checkbox(c, &f.findCase, "区分大小写").Changed() {
-					a.searchSnapshot()
-				}
-				ui.Button(c, "刷新").OnClick(a.openSearch)
-			})
-			if f.findError != "" {
-				ui.Text(c, f.findError).TextColor(c.Theme().Danger)
-			}
-			status := fmt.Sprintf("%d 个匹配 · 当前终端与回滚历史", len(f.findMatches))
-			if f.findLimited {
-				status = "至少 5000 个匹配，仅展示前 5000 个"
-			}
-			if f.findBusy {
-				status = "正在搜索…"
-			}
-			ui.Text(c, status).FontSize(11).TextColor(c.Theme().TextMuted)
-			f.findList.Selected = &f.findIndex
-			ui.List(c, &f.findList, len(f.findMatches), func(i int) {
-				m := f.findMatches[i]
-
-				ui.Row(c).Gap(10).Padding(6).Children(func() {
-					ui.Text(c, fmt.Sprint(m.Line)).Width(48).TextColor(c.Theme().TextMuted)
-					ui.RichText(c, ui.Span{Text: m.Before}, ui.Span{Text: m.Match, Background: c.Theme().Selection, Weight: 600}, ui.Span{Text: m.After}).Grow(1).Font("monospace").SingleLine()
-				})
-			}).Height(300).Border(1, c.Theme().Border)
-			ui.Row(c).Gap(8).Children(func() {
-				ui.Button(c, "上一个").Disabled(len(f.findMatches) == 0).OnClick(func() {
-					f.findIndex = (f.findIndex + len(f.findMatches) - 1) % len(f.findMatches)
-					f.findList.ScrollTo(f.findIndex, ui.Center)
-				})
-				ui.Button(c, "下一个").Disabled(len(f.findMatches) == 0).OnClick(func() {
-					f.findIndex = (f.findIndex + 1) % len(f.findMatches)
-					f.findList.ScrollTo(f.findIndex, ui.Center)
-				})
-				ui.Button(c, "定位到终端").Disabled(f.searchPane == nil || f.findIndex < 0).OnClick(a.revealSearch)
-				ui.Button(c, "复制匹配行").Disabled(f.findIndex < 0 || f.findIndex >= len(f.findMatches)).OnClick(func() { mygo.Clipboard.WriteText(f.findMatches[f.findIndex].Text) })
-				ui.Spacer(c)
-				ui.Button(c, "关闭").OnClick(func() { f.findOpen = false })
-			})
-		})
-	})
-}
-
 func (a *App) vaultDialog(c *ui.Context) {
 	f := &a.features
 	ui.Modal(c, &f.vaultOpen, func() {
@@ -644,6 +531,7 @@ func (a *App) vaultDialog(c *ui.Context) {
 }
 
 func (a *App) afterVaultUnlock() {
+	a.authorizeWorkspace()
 	f := &a.features
 	f.vaultAction = "manage"
 	a.invalidateSecurityWindows()
@@ -657,7 +545,7 @@ func (a *App) afterVaultUnlock() {
 		}
 		a.hub.drainExternalLaunch()
 		a.hub.scheduleUpdates()
-		a.hub.scheduleSharedSync(2 * time.Second)
+		a.hub.scheduleStartupSync()
 	}
 	if f.startupUnlock {
 		f.startupUnlock = false

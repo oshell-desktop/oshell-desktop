@@ -21,6 +21,9 @@ func shortcutKey(code uint16) ui.Key {
 	}
 	if strings.HasPrefix(name, "F") {
 		n, e := strconv.Atoi(name[1:])
+		if e == nil && n >= 13 && n <= 35 {
+			return ui.KeyF13 + ui.Key(n-13)
+		}
 		if e == nil && n >= 1 && n <= 12 {
 			return ui.KeyF1 + ui.Key(n-1)
 		}
@@ -78,7 +81,7 @@ func (a *App) modalActive() bool {
 	return len(a.challenges) > 0 || a.nonAuthenticationModalActive()
 }
 func (a *App) nonAuthenticationModalActive() bool {
-	if a.sidebar.rename != nil {
+	if a.sidebar.rename != nil || a.imagePaste != nil {
 		return true
 	}
 	f := &a.features
@@ -86,6 +89,11 @@ func (a *App) nonAuthenticationModalActive() bool {
 }
 func (a *App) shortcuts(c *ui.Context) {
 	if a.settingsOpen || a.modalActive() {
+		return
+	}
+	deepKey := a.localUI.DeepFocusShortcut
+	if deepKey.Valid() && a.config.Settings.KeyboardShortcuts.Conflict(deepKey, "", runtime.GOOS) == "" && c.Shortcut(shortcutMods(deepKey), shortcutKey(deepKey.KeyCode)) {
+		a.toggleDeepFocus()
 		return
 	}
 	key := a.localUI.SidebarShortcut
@@ -98,9 +106,6 @@ func (a *App) shortcuts(c *ui.Context) {
 	for _, action := range core.ShortcutActions {
 		if core.TerminalEditingAction(action.ID) {
 			continue // Encoded by the focused terminal, never by application shortcuts.
-		}
-		if a.features.findOpen && action.ID != "find" && action.ID != "findNext" && action.ID != "findPrevious" {
-			continue
 		}
 		if action.ID == "copy" || action.ID == "paste" || action.ID == "selectAll" {
 			if p := a.activePane(); p == nil || !p.focus.FocusWithin(c) {
@@ -131,7 +136,7 @@ func (a *App) performAction(action string) {
 	if !lockedWindowAction(action) && a.workspaceMenuBlocked() {
 		return
 	}
-	if a.passwordLocked() && !lockedWindowAction(action) {
+	if a.workspaceLocked() && !lockedWindowAction(action) {
 		a.features.startupUnlock = true
 		a.showVault()
 		return
@@ -288,6 +293,9 @@ func (a *App) shortcutsSettings(c *ui.Context) {
 		k.Overrides = map[string]core.ShortcutOverride{}
 	}
 	ui.Text(c, "键盘快捷键").Bold()
+	if f.shortcutSystemNotice != "" {
+		ui.Text(c, f.shortcutSystemNotice).Wrap().TextColor(c.Theme().TextMuted)
+	}
 	ui.Text(c, "终端编辑替代键仅在终端内生效；Ctrl+W、Ctrl+A 等原有控制键保持不变。行首替代键也可使用 Home。").TextColor(c.Theme().TextMuted)
 	ui.TextInput(c, &f.shortcutFilter).Placeholder("筛选操作名称")
 	if f.shortcutError != "" {
@@ -449,6 +457,7 @@ func (h *applicationHub) menuItems() []*mygo.MenuItem {
 	appMenu.Submenu = append(appMenu.Submenu, h.workspaceMenuItem(h.updateMenuLabel(), func(a *App) { a.invokeUpdater() }), mygo.Separator(), item("quit"))
 	viewMenu := menu("视图", "focusFullscreen", "-", "splitVertical", "splitHorizontal", "zoomPane", "nextPane", "previousPane", "-", "nextTab", "previousTab", "recentTab", "tabNumber", "tab1", "tab2", "tab3", "tab4", "tab5", "tab6", "tab7", "tab8", "tab9", "-", "newGroup", "showGroups", "arrangeTabs", "arrangeHorizontal", "arrangeVertical", "arrangeTiled")
 	viewMenu.Submenu = append(viewMenu.Submenu, h.workspaceMenuItem("显示/隐藏会话侧栏", func(a *App) { a.toggleSidebar() }))
+	viewMenu.Submenu = append(viewMenu.Submenu, h.workspaceMenuItem("全心专注 / 退出", func(a *App) { a.toggleDeepFocus() }))
 	viewMenu.Submenu = append(viewMenu.Submenu, h.workspaceMenuItem("刷新标题识别", func(a *App) { a.refreshActiveHostFromMenu() }))
 	return []*mygo.MenuItem{
 		appMenu,
@@ -473,6 +482,10 @@ func (a *App) acceptCapturedShortcut(shortcut core.KeyboardShortcut) bool {
 	}
 	if other := f.settingsDraft.KeyboardShortcuts.Conflict(shortcut, f.settingsCapture, runtime.GOOS); other != "" {
 		f.shortcutError = fmt.Sprintf("与“%s”冲突，请换一个组合", other)
+		return false
+	}
+	if err := a.checkSystemShortcut(shortcut); err != nil {
+		f.shortcutError = err.Error()
 		return false
 	}
 	if f.settingsDraft.KeyboardShortcuts.Overrides == nil {

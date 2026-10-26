@@ -11,11 +11,18 @@ import (
 // Terminal is a GhosttyTerminal: the screen, its scrollback, the cursor
 // and the modes, which the output of programs changes.
 type Terminal struct {
-	h  uintptr
-	id uintptr
+	h                uintptr
+	id               uintptr
+	focused          bool
+	bidiEnabled      bool
+	bidiCache        map[bidiCacheKey]bidiCachedLayout
+	bidiCacheColumns int
 	// Effects are called during Write, on its goroutine; they must not
 	// call Write.
-	effects Effects
+	effects          Effects
+	graphicsCache    map[graphicCacheKey]*graphicPixels
+	installedPalette [256]RGB
+	derivePalette    func(*[256]RGB, RGB, RGB)
 }
 
 // Effects are what a terminal asks of its embedder while it processes
@@ -93,6 +100,7 @@ const (
 	dataCursorX        = 3
 	dataCursorY        = 4
 	dataActiveScreen   = 6
+	dataKeyboardFlags  = 8
 	dataScrollbar      = 9
 	dataMouseTracking  = 11
 	dataTitle          = 12
@@ -107,7 +115,7 @@ func NewTerminal(cols, rows int, effects Effects) (*Terminal, error) {
 	if !Loaded() {
 		return nil, errors.New("libghostty-vt is not loaded")
 	}
-	t := &Terminal{effects: effects}
+	t := &Terminal{effects: effects, focused: true}
 	if err := result(call(fnTerminalNew, 0, uintptr(unsafe.Pointer(&t.h)), uintptr(clamp16(cols)), uintptr(clamp16(rows)))); err != nil {
 		return nil, err
 	}
@@ -131,10 +139,44 @@ func NewTerminal(cols, rows int, effects Effects) (*Terminal, error) {
 	t.setValue(optDeviceAttributes, cbDeviceAttributes)
 	t.setValue(optDesktopNotification, cbDesktopNotification)
 	t.setValue(optProgressReport, cbProgressReport)
-	// Images of the Kitty graphics protocol are not drawn: refuse them,
-	// so that programs fall back to something else.
-	var limit uint64
+	// Set image limits before any remote output. ABI 45 supplies OShell's
+	// POSIX local-media validation; older runtimes keep those media disabled.
+	limit := uint64(KittyImageLimit)
 	t.set(optKittyImageLimit, unsafe.Pointer(&limit))
+	allowFile := false
+	t.set(16, unsafe.Pointer(&allowFile))
+	t.set(17, nil)
+	t.set(18, unsafe.Pointer(&allowFile))
+	if oshellABI >= 45 && oshellABI <= 62 && (runtime.GOOS == "linux" || runtime.GOOS == "windows") {
+		if err := t.enableLocalImages(); err != nil {
+			t.Free()
+			return nil, err
+		}
+	}
+	if oshellABI >= 3 && oshellABI <= 62 {
+		compatibility := true
+		if err := t.set(1002, unsafe.Pointer(&compatibility)); err != nil {
+			t.Free()
+			return nil, err
+		}
+	}
+	if oshellABI >= 4 && oshellABI <= 62 {
+		callback := cbInlineImage
+		if oshellABI >= 5 && oshellABI <= 62 {
+			callback = cbInlineImageSixel
+		}
+		if err := t.setValue(1003, callback); err != nil {
+			t.Free()
+			return nil, err
+		}
+	}
+	// SwiftTerm's default host policy respects each paragraph's BiDi state.
+	// Enable before any output arrives, including output before the first view.
+	// ABI 32 includes the row, presentation and logical selection bridges.
+	if oshellABI >= 32 && oshellABI <= 62 && !t.SetBidiEnabled(true) {
+		t.Free()
+		return nil, errors.New("libghostty-vt could not enable paragraph presentation")
+	}
 	return t, nil
 }
 
@@ -161,7 +203,10 @@ func (t *Terminal) Free() {
 		return
 	}
 	call(fnTerminalFree, t.h)
+	t.bidiCache = nil
+	t.bidiCacheColumns = 0
 	t.h = 0
+	t.graphicsCache = nil
 	terminals.Lock()
 	delete(terminals.m, t.id)
 	terminals.Unlock()
@@ -203,6 +248,9 @@ func (t *Terminal) Reset() { call(fnTerminalReset, t.h) }
 // foreground, the background, the cursor's (nil for the text's) and the
 // palette of 256 colors (nil for Ghostty's).
 func (t *Terminal) SetColors(fg, bg RGB, cursor *RGB, palette *[256]RGB) {
+	if palette != nil {
+		t.installedPalette = *palette
+	}
 	t.set(optColorForeground, unsafe.Pointer(&fg))
 	t.set(optColorBackground, unsafe.Pointer(&bg))
 	t.set(optColorCursor, unsafe.Pointer(cursor))
@@ -239,6 +287,10 @@ func (t *Terminal) screenCell(x, y int) (GridRef, bool) {
 	p := point{tag: 2, x: uint16(max(0, min(x, 65535))), y: uint32(max(y, 0))}
 	return ref, terminalGridRef(t.h, p, &ref) == 0
 }
+
+// BufferCellAt returns a borrowed cell reference in the complete buffer,
+// including history outside the current viewport.
+func (t *Terminal) BufferCellAt(x, y int) (GridRef, bool) { return t.screenCell(x, y) }
 func (t *Terminal) SelectHistoryFrom(first int) (Selection, bool) {
 	cols, _ := t.Size()
 	rows := int(t.Scrollbar().Total)
@@ -247,7 +299,7 @@ func (t *Terminal) SelectHistoryFrom(first int) (Selection, bool) {
 		return Selection{}, false
 	}
 	end, ok := t.screenCell(cols-1, max(0, rows-1))
-	return Selection{size: unsafe.Sizeof(Selection{}), start: start, end: end}, ok
+	return Selection{size: selectionCSize, start: start, end: end}, ok
 }
 
 // SetTerminfoName sets the name of the terminfo entry the terminal reports
@@ -275,7 +327,7 @@ const (
 	CursorBlockHollow
 )
 
-// SetDefaultCursor sets the cursor that programs reset to (DECSCUSR 0).
+// SetDefaultCursor configures the initial cursor; OShell DECSCUSR 0 explicitly selects a blinking block.
 func (t *Terminal) SetDefaultCursor(s CursorStyle, blink bool) {
 	t.set(optDefaultCursorStyle, unsafe.Pointer(&s))
 	t.set(optDefaultCursorBlink, unsafe.Pointer(&blink))
@@ -314,6 +366,14 @@ const (
 func (t *Terminal) Mode(m Mode) bool {
 	c := modeConfig{mode: uint16(m)}
 	return t.get(dataMode, unsafe.Pointer(&c)) == nil && c.value
+}
+
+// KeyboardFlags returns the active screen's Kitty keyboard enhancement flags.
+// A failed query must not be interpreted as legacy mode by input routing.
+func (t *Terminal) KeyboardFlags() (uint8, bool) {
+	var flags uint8
+	err := t.get(dataKeyboardFlags, unsafe.Pointer(&flags))
+	return flags, err == nil
 }
 
 // SetMode sets a mode.
@@ -417,11 +477,17 @@ func (t *Terminal) rowText(y int, screen bool) (text []rune, cols []int) {
 			}
 		}
 		var n uintptr
-		if !ok(call(fnGridRefGraphemes, uintptr(unsafe.Pointer(&ref)), uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)), uintptr(unsafe.Pointer(&n)))) || n == 0 {
+		graphemes := buf[:]
+		result := call(fnGridRefGraphemes, uintptr(unsafe.Pointer(&ref)), uintptr(unsafe.Pointer(&graphemes[0])), uintptr(len(graphemes)), uintptr(unsafe.Pointer(&n)))
+		if Result(int32(result)) == OutOfSpace && n > uintptr(len(graphemes)) {
+			graphemes = make([]uint32, n)
+			result = call(fnGridRefGraphemes, uintptr(unsafe.Pointer(&ref)), uintptr(unsafe.Pointer(&graphemes[0])), uintptr(len(graphemes)), uintptr(unsafe.Pointer(&n)))
+		}
+		if !ok(result) || n == 0 || n > uintptr(len(graphemes)) {
 			text, cols = append(text, ' '), append(cols, x)
 			continue
 		}
-		for _, r := range buf[:n] {
+		for _, r := range graphemes[:n] {
 			text, cols = append(text, rune(r)), append(cols, x)
 		}
 	}
@@ -449,12 +515,30 @@ func (t *Terminal) Hyperlink(ref GridRef) string {
 
 // SetSelection selects s, or nothing when s is nil.
 func (t *Terminal) SetSelection(s *Selection) {
+	if s != nil && s.logical != nil {
+		t.set(1006, unsafe.Pointer(s.logical))
+		return
+	}
 	t.set(21, unsafe.Pointer(s))
+}
+
+// SelectionActive includes an empty logical selection and a selection whose
+// coordinates are temporarily outside retained history. Neither can be inferred
+// from copied text or the normalized native selection range.
+func (t *Terminal) SelectionActive() bool {
+	if oshellABI >= 55 && oshellABI <= 62 {
+		var logical logicalSelection
+		if t.get(1005, unsafe.Pointer(&logical)) == nil {
+			return logical[4] != 0
+		}
+	}
+	s := Selection{size: selectionCSize}
+	return t.get(31, unsafe.Pointer(&s)) == nil
 }
 
 // SelectAll returns a selection of everything, scrollback included.
 func (t *Terminal) SelectAll() (Selection, bool) {
-	s := Selection{size: unsafe.Sizeof(Selection{})}
+	s := Selection{size: selectionCSize}
 	return s, ok(call(fnSelectAll, t.h, uintptr(unsafe.Pointer(&s))))
 }
 
@@ -480,7 +564,10 @@ func (t *Terminal) FormattedText(unwrap bool) string {
 	return t.FormattedTextFrom(0, unwrap)
 }
 func (t *Terminal) FormattedTextFrom(first int, unwrap bool) string {
-	opts := formatterOptions{size: unsafe.Sizeof(formatterOptions{}), unwrap: unwrap, trim: true}
+	return t.formattedTextFrom(first, unwrap, true)
+}
+func (t *Terminal) formattedTextFrom(first int, unwrap, trim bool) string {
+	opts := formatterOptions{size: unsafe.Sizeof(formatterOptions{}), unwrap: unwrap, trim: trim}
 	selection, found := t.SelectHistoryFrom(first)
 	if first > 0 {
 		if !found {
@@ -515,9 +602,12 @@ const formatVT = 1
 // styles and hyperlinks, then the modes, the scrolling region, the tab
 // stops, the working directory, the keyboard's flags and the cursor. The
 // palette is left out, as the terminal it restores in has colors of its
-// own.
+// own. The OShell extension also restores current titles and their stacks;
+// replay this state into a fresh terminal to avoid appending to existing stacks.
 func (t *Terminal) VT() []byte {
-	opts := formatterOptions{size: unsafe.Sizeof(formatterOptions{}), emit: formatVT}
+	// Replaying soft wraps as CR/LF splits logical paragraphs, changing BiDi,
+	// selection and subsequent reflow even if the initial cells look identical.
+	opts := formatterOptions{size: unsafe.Sizeof(formatterOptions{}), emit: formatVT, unwrap: true}
 	x := &opts.extra
 	x.size = unsafe.Sizeof(opts.extra)
 	x.modes, x.scrollingRegion, x.tabstops, x.pwd, x.keyboard = true, true, true, true, true
@@ -561,10 +651,16 @@ func clamp16(v int) int { return max(1, min(v, 0xFFFF)) }
 // The callbacks of every terminal, made once: purego's are never freed.
 var (
 	cbWritePTY, cbBell, cbTitleChanged, cbPwdChanged, cbRenderHold, cbClipboardWrite, cbSize,
-	cbColorScheme, cbDeviceAttributes, cbDesktopNotification, cbProgressReport uintptr
+	cbColorScheme, cbDeviceAttributes, cbDesktopNotification, cbProgressReport, cbDerivedPalette uintptr
 )
 
 func makeCallbacks() {
+	cbDerivedPalette = newCallback(func(_, id uintptr) uintptr {
+		if t := terminalOf(id); t != nil {
+			t.updateDerivedPalette()
+		}
+		return 0
+	})
 	cbWritePTY = newCallback(func(_, id, data, n uintptr) uintptr {
 		if t := terminalOf(id); t != nil && t.effects.WritePTY != nil && n > 0 {
 			t.effects.WritePTY(unsafe.Slice((*byte)(mem(data)), n))
@@ -673,7 +769,7 @@ func (t *Terminal) SelectCells(x1, y1, x2, y2 int) bool {
 	if !ok {
 		return false
 	}
-	s := Selection{size: unsafe.Sizeof(Selection{}), start: a, end: b}
+	s := Selection{size: selectionCSize, start: a, end: b}
 	t.SetSelection(&s)
 	return true
 }
@@ -681,7 +777,7 @@ func (t *Terminal) SelectCells(x1, y1, x2, y2 int) bool {
 // SetAmbiguousWidth sets a creation-time policy. Old libraries are never called
 // with an unknown enum value, which is undefined in optimized native builds.
 func (t *Terminal) SetAmbiguousWidth(wide bool) error {
-	if oshellABI != 1 {
+	if oshellABI < 1 || oshellABI > 62 {
 		if wide {
 			return errors.New("terminal library lacks OShell ambiguous-width support")
 		}

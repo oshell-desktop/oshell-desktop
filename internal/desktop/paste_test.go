@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"oshell-desktop/internal/core"
+	"strings"
 	"testing"
 )
 
@@ -27,7 +28,7 @@ func TestPastePreviewFreezesTargetsAndAllowsEditing(t *testing.T) {
 }
 
 func TestPasteClosedTargetRejectsWholeDispatchAndEmptyCancelSendNothing(t *testing.T) {
-	for _, action := range []string{"closed", "cancel", "empty", "invalid", "missing"} {
+	for _, action := range []string{"closed", "cancel", "empty", "invalid", "oversized", "missing"} {
 		t.Run(action, func(t *testing.T) {
 			a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
 			left, lc := operatorPane(t, a, "left")
@@ -46,6 +47,8 @@ func TestPasteClosedTargetRejectsWholeDispatchAndEmptyCancelSendNothing(t *testi
 				a.features.pasteText = ""
 			case "invalid":
 				a.features.pasteText = "bad\x00input"
+			case "oversized":
+				a.features.pasteText = strings.Repeat("x", 1<<20+1)
 			case "cancel":
 				a.cancelPaste()
 			}

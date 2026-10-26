@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from terminal_runtime import prepare, digest
 
 ROOT = Path(__file__).resolve().parent.parent
 BUNDLE = ROOT / 'validation/windows-tests'
@@ -39,6 +40,9 @@ def compile_bundle(embedded=False):
                  ('oshell-desktop/internal/terminal', False, '^TestSingleFileResourcesLoad$', 'embedded-terminal')]
     else:
         manifest = {'commit': os.environ['GITHUB_SHA'], 'tests': []}
+        runtime = prepare('windows/amd64')
+        shutil.copy2(runtime, BUNDLE / 'ghostty-vt.dll')
+        manifest['terminalSHA256'] = digest(runtime)
         listed = subprocess.check_output(['go', 'list', '-json', './...', *PARSERS], cwd=ROOT, env=env, text=True)
         packages = [p for p in objects(listed) if p.get('TestGoFiles') or p.get('XTestGoFiles')]
         specs = [(p['ImportPath'], False, 'Test(UNIXMetadata|OwnerHints|Parse)' if p['ImportPath'] in PARSERS else '.',
@@ -72,12 +76,17 @@ def execute_windows(shard):
         run([sys.executable, ROOT / 'scripts/core_test_shards.py', 'run', '--platform', 'Windows',
              '--shard', str(shard), '--binary', BUNDLE / 'race-core.exe', '--test2json', BUNDLE / 'test2json.exe'])
         return
+    runtime = BUNDLE / 'ghostty-vt.dll'
+    if digest(runtime) != manifest.get('terminalSHA256'):
+        raise RuntimeError('Precompiled terminal runtime checksum mismatch')
+    os.environ['MYGO_GHOSTTY_VT'] = str(runtime)
+    os.environ['OSHELL_REQUIRE_WIDTH_EXTENSION'] = '1'
     for item in manifest['tests']:
         if item['race'] and item['package'] == CORE:
             continue
         run([BUNDLE / item['binary'], '-test.v', '-test.paniconexit0', '-test.count=1', '-test.timeout=5m', '-test.run', item['pattern']],
             cwd=ROOT / item['directory'])
-    for script in ['test-build.py', 'test-configuration-contract.py', 'test-core-shards.py', 'test-ci-bundle.py']:
+    for script in ['test-build.py', 'test-terminal-runtime.py', 'test-configuration-contract.py', 'test-core-shards.py', 'test-ci-bundle.py']:
         run([sys.executable, ROOT / 'scripts' / script], cwd=ROOT)
 
 
@@ -95,6 +104,8 @@ def stage_windows_bundles(source=BUNDLE, output=ROOT / 'validation'):
         files = {item['binary'] for item in tests} | {'update-fixture.exe'}
         if name == 'windows-core-race':
             files.add('test2json.exe')
+        elif manifest.get('terminalSHA256'):
+            files.add('ghostty-vt.dll')
         if (output / name).exists():
             raise ValueError('Refusing to mix a stale Windows test bundle')
         for file in files:
@@ -128,10 +139,12 @@ def linux(shard=None):
         run([sys.executable, ROOT / 'scripts/core_test_shards.py', 'run', '--platform', 'Linux',
              '--shard', str(shard), '--binary', core_binary, '--test2json', adapter], cwd=ROOT)
         return
+    os.environ['MYGO_GHOSTTY_VT'] = str(prepare('linux/amd64'))
+    os.environ['OSHELL_REQUIRE_WIDTH_EXTENSION'] = '1'
     run(['go', 'test', '-race', '-count=1', '-timeout=5m', *RACE[1:]], cwd=ROOT)
     run(['xvfb-run', '-a', 'dbus-run-session', '--', 'go', 'test', '-count=1', '-timeout=180s', './...'], cwd=ROOT)
     run(['go', 'test', '-count=1', *PARSERS, '-run', 'Test(UNIXMetadata|OwnerHints|Parse)'], cwd=ROOT)
-    for script in ['test-build.py', 'test-core-shards.py', 'test-configuration-contract.py', 'test-ci-bundle.py']:
+    for script in ['test-build.py', 'test-terminal-runtime.py', 'test-core-shards.py', 'test-configuration-contract.py', 'test-ci-bundle.py']:
         run([sys.executable, ROOT / 'scripts' / script], cwd=ROOT)
     run(['go', 'build', './...'], cwd=ROOT, env=dict(os.environ, CGO_ENABLED='0'))
     run(['go', 'vet', './...'], cwd=ROOT)

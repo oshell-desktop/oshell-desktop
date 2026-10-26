@@ -30,6 +30,7 @@ func (a *App) setConfigurationBusy(busy bool) {
 }
 func (a *App) applyCommittedConfig(cfg core.Config) {
 	a.config = cfg.Clone()
+	a.reconcileSessionPins()
 	if a.hub != nil {
 		a.hub.config = cfg.Clone()
 		for _, w := range a.hub.configurationWindows() {
@@ -216,7 +217,7 @@ func (a *App) archiveDialog(c *ui.Context) {
 				}
 			}
 			if !f.export {
-				ui.Text(c, fmt.Sprintf("%d 个会话 · %d 个快捷引用 · %d 项加密密码", len(f.archive.Profiles), len(f.archive.Links), f.passwordCount()))
+				ui.Text(c, fmt.Sprintf("%d 个会话 · %d 个快捷引用 · %d 个目录 · %d 项加密密码", len(f.archive.Profiles), len(f.archive.Links), len(f.archive.Directories), f.passwordCount()))
 				ui.TextInput(c, &f.directory).Label("导入目标目录").Disabled(f.busy)
 			}
 			ui.Checkbox(c, &f.includePasswords, "包含保存的密码（登录与代理）").Disabled(f.busy || !f.export && f.passwordCount() == 0)

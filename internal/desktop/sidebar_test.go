@@ -120,7 +120,7 @@ func TestSidebarBulkExpansionAndFilteredState(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if !tt.HasText("sidebar-source") || tt.HasText("sidebar-alias") || tt.HasText("nested") {
+	if !tt.HasText("sidebar-source") || !tt.HasText("sidebar-alias") || tt.HasText("nested") {
 		t.Fatal("filtered expansion escaped results")
 	}
 	if err := tt.Click("全部收缩"); err != nil {

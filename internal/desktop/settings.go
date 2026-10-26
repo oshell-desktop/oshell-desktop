@@ -14,7 +14,9 @@ import (
 )
 
 func (a *App) prepareSettings() {
-	a.localUIDraft = a.localUI
+	a.localUIDraft = a.localUI.clone()
+	a.localUIOriginal = a.localUI.clone()
+	a.titleOverwrite = true
 	a.sidebar.capture = false
 	a.features.sharedSync.logList = ui.ListState{}
 	a.features.sharedSync.conflictList = ui.ListState{}
@@ -147,6 +149,10 @@ func (a *App) applySettings() {
 		return
 	}
 	f := &a.features
+	if !reflect.DeepEqual(a.localUI, a.localUIOriginal) {
+		f.settingsError = "本机设置已在其他窗口修改，请重新打开设置后再应用"
+		return
+	}
 	if err := a.validateClockDraft(); err != nil {
 		f.settingsError = err.Error()
 		return
@@ -173,6 +179,18 @@ func (a *App) applySettings() {
 		f.settingsError = "侧栏快捷键与 " + conflict + " 冲突"
 		return
 	}
+	if conflict := f.settingsDraft.KeyboardShortcuts.Conflict(a.localUIDraft.DeepFocusShortcut, "", runtime.GOOS); conflict != "" {
+		f.settingsError = "全心专注快捷键与 " + conflict + " 冲突"
+		return
+	}
+	if a.localUIDraft.DeepFocusShortcut.KeyCode == a.localUIDraft.SidebarShortcut.KeyCode && shortcutMods(a.localUIDraft.DeepFocusShortcut) == shortcutMods(a.localUIDraft.SidebarShortcut) {
+		f.settingsError = "侧栏与全心专注快捷键冲突"
+		return
+	}
+	if err := a.checkChangedSystemShortcuts(); err != nil {
+		f.settingsError = err.Error()
+		return
+	}
 	lines, e := strconv.Atoi(f.settingsLines)
 	if e != nil || lines < 500 || lines > 100000 {
 		f.settingsError = "历史行数范围为 500–100000"
@@ -185,6 +203,9 @@ func (a *App) applySettings() {
 	f.settingsDraft.ScrollbackLines = lines
 	f.settingsDraft.Dark = f.settingsDraft.InterfaceTheme == "dark"
 	apply := func() {
+		if a.titleOverwrite {
+			a.applyTitleDraft()
+		}
 		if a.changeConfig(func(cfg *core.Config) error { cfg.Settings = f.settingsDraft; return nil }) {
 			if !a.saveLocalPreferences(a.localUIDraft) {
 				return
@@ -209,6 +230,7 @@ func (a *App) applySettings() {
 	}
 }
 func (a *App) settingsView(c *ui.Context) {
+	defer a.resumeDeferredUpdate() // Modal teardown may happen after drain during this frame.
 	a.drain()
 	if auxiliaryEscape(c, func() {
 		if a.sidebar.capture {
@@ -242,6 +264,7 @@ func (a *App) settingsView(c *ui.Context) {
 		ui.Scroll(c).Grow(1).MinHeight(0).Gap(12).Children(func() {
 			switch f.settingsTab {
 			case 0:
+				a.titleSettings(c)
 				ui.Text(c, "终端显示").Bold()
 				ui.Form(c, func() {
 					ui.Field(c, "终端字体", func() {
@@ -306,7 +329,9 @@ func (a *App) settingsView(c *ui.Context) {
 	})
 	a.shortcutCapture(c)
 	a.sharedSyncConflictDialog(c)
-	a.syncDiagnosticsDialog(c)
+	if a.syncMonitorWindow() == nil {
+		a.syncDiagnosticsDialog(c)
+	}
 	a.localConflictDialog(c)
 	a.vaultDialog(c)
 }

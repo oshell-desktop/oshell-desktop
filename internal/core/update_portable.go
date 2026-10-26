@@ -140,6 +140,9 @@ func checkUpdateBinary(name, target string) error {
 	return nil
 }
 func (u *ReleaseUpdate) Prepare(ctx context.Context, executable string, progress func(int64, int64)) (result *PortableUpdate, err error) {
+	if err = u.verifyAuthority(); err != nil {
+		return nil, err
+	}
 	executable, err = filepath.EvalSymlinks(executable)
 	if err != nil {
 		return nil, err

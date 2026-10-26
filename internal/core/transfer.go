@@ -91,8 +91,8 @@ func (s *transferState) check(depth int) error {
 		return e
 	}
 	s.visited++
-	if depth > 64 || s.visited > 10000 {
-		return fmt.Errorf("目录传输超过 64 层或 10000 个项目")
+	if depth > 32 || s.visited > 10000 {
+		return fmt.Errorf("目录传输超过 32 层或 10000 个项目")
 	}
 	return nil
 }
@@ -161,7 +161,7 @@ func Download(ctx context.Context, client *sftp.Client, remote, local string, re
 	if e := ctx.Err(); e != nil {
 		return e
 	}
-	info, e := client.Lstat(remote)
+	info, e := client.Stat(remote)
 	if e != nil {
 		return e
 	}
@@ -196,11 +196,14 @@ func (s *transferState) download(remote, local string, depth int) error {
 		return e
 	}
 	info, e := s.client.Lstat(remote)
+	if depth == 0 {
+		info, e = s.client.Stat(remote)
+	}
 	if e != nil {
 		return e
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("不跟随远程符号链接：%s", remote)
+		return nil // Identified recursive child links are skipped.
 	}
 	if info.IsDir() {
 		if e = os.Mkdir(local, 0700); e != nil {

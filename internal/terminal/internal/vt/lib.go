@@ -35,6 +35,7 @@ var (
 	fnKeyEncoderNew, fnKeyEncoderFree, fnKeyEncoderSetopt, fnKeyEncoderSetoptFromTerminal, fnKeyEncoderEncode,
 	fnKeyEventNew, fnKeyEventFree, fnKeyEventSetAction, fnKeyEventSetKey, fnKeyEventSetMods,
 	fnKeyEventSetConsumedMods, fnKeyEventSetComposing, fnKeyEventSetUTF8, fnKeyEventSetUnshifted uintptr
+	fnKeyEventSetAlternates uintptr
 
 	fnMouseEncoderNew, fnMouseEncoderFree, fnMouseEncoderSetopt, fnMouseEncoderSetoptFromTerminal,
 	fnMouseEncoderReset, fnMouseEncoderEncode, fnMouseEventNew, fnMouseEventFree, fnMouseEventSetAction,
@@ -45,7 +46,7 @@ var (
 	fnGestureNew, fnGestureFree, fnGestureReset, fnGestureGet, fnGestureEventNew, fnGestureEventFree,
 	fnGestureEventSet, fnGestureEvent, fnSelectAll uintptr
 
-	fnGridRefHyperlinkURI, fnGridRefGraphemes, fnGridRefCell, fnTypeJSON, fnFormatterFormatAlloc, fnFormatterFree uintptr
+	fnGridRefHyperlinkURI, fnGridRefGraphemes, fnGridRefCell, fnGridRefRow, fnPointFromGridRef, fnRawRowGet, fnRawCellGet, fnTypeJSON, fnFormatterFormatAlloc, fnFormatterFree uintptr
 
 	// Bound with registerFunc below: they take structs or floats.
 	fnTerminalScrollViewport, fnTerminalGridRef, fnMouseEventSetPosition, fnSelectionFormatAlloc, fnFormatterTerminalNew uintptr
@@ -76,6 +77,7 @@ var symbols = []struct {
 	{"ghostty_terminal_compression_activity", &fnTerminalCompressionActivity},
 	{"ghostty_terminal_scroll_viewport", &fnTerminalScrollViewport},
 	{"ghostty_terminal_grid_ref", &fnTerminalGridRef},
+	{"ghostty_terminal_point_from_grid_ref", &fnPointFromGridRef},
 	{"ghostty_render_state_new", &fnRenderStateNew},
 	{"ghostty_render_state_free", &fnRenderStateFree},
 	{"ghostty_render_state_begin_update", &fnRenderStateBeginUpdate},
@@ -134,6 +136,9 @@ var symbols = []struct {
 	{"ghostty_grid_ref_hyperlink_uri", &fnGridRefHyperlinkURI},
 	{"ghostty_grid_ref_graphemes", &fnGridRefGraphemes},
 	{"ghostty_grid_ref_cell", &fnGridRefCell},
+	{"ghostty_grid_ref_row", &fnGridRefRow},
+	{"ghostty_row_get", &fnRawRowGet},
+	{"ghostty_cell_get", &fnRawCellGet},
 	{"ghostty_type_json", &fnTypeJSON},
 	{"ghostty_formatter_terminal_new", &fnFormatterTerminalNew},
 	{"ghostty_formatter_format_alloc", &fnFormatterFormatAlloc},
@@ -168,6 +173,11 @@ func load(path string) error {
 	if marker, e := sym(h, "ghostty_oshell_abi_version"); e == nil {
 		oshellABI = call(marker)
 	}
+	if oshellABI >= 37 && oshellABI <= 62 {
+		if fnKeyEventSetAlternates, err = sym(h, "ghostty_oshell_key_event_set_alternates"); err != nil {
+			return fmt.Errorf("OShell keyboard metadata extension: %w", err)
+		}
+	}
 	if err := checkLayouts(); err != nil {
 		return fmt.Errorf("%s is not a libghostty-vt this package binds: %w", path, err)
 	}
@@ -177,7 +187,7 @@ func load(path string) error {
 	registerFunc(&selectionFormatAlloc, fnSelectionFormatAlloc)
 	registerFunc(&formatterTerminalNew, fnFormatterTerminalNew)
 	makeCallbacks()
-	return nil
+	return installGraphicsDecoder()
 }
 
 // Loaded reports whether Load succeeded.

@@ -9,6 +9,9 @@ import (
 
 var ErrConfigurationChanged = errors.New("配置文件已变化，请重新载入或重启后再保存")
 
+// ConfigurationGeneration is local process state, never a shared field.
+func (s *Store) ConfigurationGeneration() uint64 { return s.configurationGeneration.Load() }
+
 func configurationDigest(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
@@ -17,6 +20,9 @@ func (s *Store) observeConfiguration(data []byte, config ...Config) {
 	if len(config) > 0 {
 		value := config[0].Clone()
 		s.baseline = &value
+	}
+	if !s.observed || s.observedRevision != configurationDigest(data) {
+		s.configurationGeneration.Add(1)
 	}
 	s.observed = true
 	s.observedRevision = configurationDigest(data)

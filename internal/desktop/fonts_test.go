@@ -9,6 +9,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv("OSHELL_P2_NATIVE_LIFECYCLE") == "1" {
+		os.Exit(runP2NativeLifecycle())
+	}
 	os.Setenv("OSHELL_TEST_NO_AGENT", "1")
 	os.Setenv("OSHELL_TEST_IGNORE_SSH_CONFIG", "1")
 	os.Setenv("OSHELL_TEST_EXPLICIT_KEYS_ONLY", "1")

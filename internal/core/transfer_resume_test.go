@@ -3,7 +3,10 @@ package core
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +14,70 @@ import (
 
 	"github.com/pkg/sftp"
 )
+
+// A valid SFTP server may omit SSH_FILEXFER_ATTR_PERMISSIONS. A zero Go
+// FileMode then looks regular, but is not proof that resuming is safe.
+func TestSFTPResumeRejectsMissingFileType(t *testing.T) {
+	clientPipe, serverPipe := net.Pipe()
+	defer clientPipe.Close()
+	defer serverPipe.Close()
+	clientPipe.SetDeadline(time.Now().Add(5 * time.Second))
+	serverPipe.SetDeadline(time.Now().Add(5 * time.Second))
+	done := make(chan error, 1)
+	go func() {
+		for _, expected := range []byte{1, 7} { // INIT, LSTAT
+			var length uint32
+			if err := binary.Read(serverPipe, binary.BigEndian, &length); err != nil {
+				done <- err
+				return
+			}
+			if length == 0 || length > 4096 {
+				done <- errors.New("invalid fixture request length")
+				return
+			}
+			request := make([]byte, length)
+			if _, err := io.ReadFull(serverPipe, request); err != nil {
+				done <- err
+				return
+			}
+			if request[0] != expected || len(request) < 5 {
+				done <- errors.New("unexpected fixture request")
+				return
+			}
+			response := []byte{2, 0, 0, 0, 3} // VERSION 3
+			if expected == 7 {
+				response = append([]byte{105}, request[1:5]...)       // ATTRS, request ID
+				response = binary.BigEndian.AppendUint32(response, 9) // size and times only
+				response = binary.BigEndian.AppendUint64(response, 16)
+				response = binary.BigEndian.AppendUint32(response, 1700000000)
+				response = binary.BigEndian.AppendUint32(response, 1700000000)
+			}
+			packet := binary.BigEndian.AppendUint32(nil, uint32(len(response)))
+			if _, err := serverPipe.Write(append(packet, response...)); err != nil {
+				done <- err
+				return
+			}
+		}
+		done <- nil
+	}()
+	client, err := sftp.NewClientPipe(clientPipe, clientPipe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	targetDir := t.TempDir()
+	cp := &SFTPCheckpoint{Source: "/unknown", Target: filepath.Join(targetDir, "download")}
+	if err := cp.Run(context.Background(), client, nil); !errors.Is(err, ErrResumeRegularOnly) {
+		t.Fatalf("unknown type accepted for resume: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(targetDir)
+	if err != nil || len(entries) != 0 || cp.initialized {
+		t.Fatal("created a fragment for unknown file type", entries, err)
+	}
+}
 
 func resumeTestClient(t *testing.T) *sftp.Client {
 	t.Helper()

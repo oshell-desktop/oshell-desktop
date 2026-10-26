@@ -136,6 +136,9 @@ type Op struct {
 	Image     *Image
 	Src       Rect
 	Grayscale bool
+	// A fractional region can share filtering with adjacent regions of the
+	// same image. Clamp its samples to the texture, not to the region edges.
+	FullImageSampling bool
 	// Opacity multiplies the op's colors; 0 means 1.
 	Opacity float32
 }

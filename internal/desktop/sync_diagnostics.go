@@ -20,8 +20,11 @@ func (a *App) loadSyncDiagnostics() {
 	f.logEntries = doc.Entries
 	if !f.busy {
 		f.phase = f.summary.Outcome
+		if f.summary.Failure != nil && f.phase != core.SyncCancelled {
+			f.phase = core.SyncFailed
+		}
 	}
-	f.pendingLocal = f.summary.LocalFingerprint == "" || f.summary.LocalFingerprint != core.SyncLocalFingerprint(a.store, a.vault)
+	f.pendingLocal = f.summary.LocalFingerprint == "" || f.summary.LocalFingerprint != core.SyncLocalFingerprint(a.store, a.vault, f.savedOptions.Policy.Effective().Content)
 	if !f.pendingLocal {
 		f.queuedIdentity = ""
 	}
@@ -44,7 +47,13 @@ func (a *App) syncStatusCard(c *ui.Context) {
 			ui.Text(c, "下方设置尚未应用；此卡片显示已保存配置的状态。").Wrap()
 		}
 		if a.passwordLocked() {
-			ui.Button(c, "解锁主密码…").OnClick(a.showVault)
+			ui.Button(c, "解锁主密码…").OnClick(func() {
+				a.showVault()
+				if a.win != nil {
+					a.win.Focus()
+					a.win.Invalidate()
+				}
+			})
 		}
 		if f.phase == core.SyncFailed && f.status != "" {
 			ui.Text(c, f.status).Wrap().TextColor(c.Theme().Danger)
@@ -56,6 +65,10 @@ func (a *App) syncStatusCard(c *ui.Context) {
 			backend = "WebDAV"
 		}
 		ui.Text(c, backend+" · 使用已保存的同步配置").TextColor(c.Theme().TextMuted)
+		ui.Text(c, syncPolicySummary(f.savedOptions.Policy)).Wrap().FontSize(11)
+		if a.hub != nil && !a.hub.nextSync.IsZero() {
+			ui.Text(c, "下次检查："+syncDate(&a.hub.nextSync)).FontSize(11)
+		}
 		ui.Text(c, "上次尝试："+syncDate(f.summary.LastAttempt)+"\n上次成功："+syncDate(f.summary.LastSuccess)).FontSize(11)
 		pending := "本机没有待同步修改"
 		if f.pendingLocal {
@@ -63,7 +76,7 @@ func (a *App) syncStatusCard(c *ui.Context) {
 		}
 		ui.Text(c, pending).FontSize(11)
 		ui.Row(c).Gap(8).Children(func() {
-			ui.Button(c, "查看同步日志…").OnClick(func() { a.loadSyncDiagnostics(); a.features.sharedSync.logsOpen = true })
+			ui.Button(c, "查看同步日志…").OnClick(func() { owner.loadSyncDiagnostics(); owner.features.sharedSync.logsOpen = true })
 			ui.Button(c, "导出诊断日志…").Disabled(f.logExportBusy).OnClick(a.exportSyncDiagnostics)
 		})
 		if f.logIssue != "" {
@@ -134,7 +147,7 @@ func (a *App) markSharedSyncChanged() {
 		return
 	}
 	diagnostic := core.SyncDiagnostics{Directory: a.store.Dir, Target: options.Target(), Backend: options.Backend}
-	fingerprint := core.SyncLocalFingerprint(a.store, a.vault)
+	fingerprint := core.SyncLocalFingerprint(a.store, a.vault, options.Policy.Effective().Content)
 	if fingerprint == "" {
 		return
 	}

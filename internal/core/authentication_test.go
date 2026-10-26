@@ -259,7 +259,7 @@ func TestDynamicPasswordChallengeIsVerifiedOnlyForLoginPrompts(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer connection.Close()
-			want := mode != "otp"
+			want := mode == "password" // Generic interactive Password: remains manual.
 			if connection.PasswordVerified != want || (passwordPrompts == 1) != want || (acceptedPassword == "fixture-password") != want {
 				t.Fatal("dynamic login password was confused with an OTP", passwordPrompts, connection.PasswordVerified)
 			}

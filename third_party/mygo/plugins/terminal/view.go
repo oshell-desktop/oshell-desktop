@@ -240,7 +240,7 @@ func (v *view) input(ev ui.InputEvent) bool {
 			return false
 		}
 		return true
-	case ui.InputPointerDown, ui.InputPointerUp, ui.InputPointerMove:
+	case ui.InputPointerDown, ui.InputPointerUp, ui.InputPointerMove, ui.InputPointerCancel:
 		return v.pointerEvent(ev)
 	case ui.InputScroll:
 		return v.scroll(ev)
@@ -475,6 +475,16 @@ func (v *view) pointerEvent(ev ui.InputEvent) bool {
 	defer t.mu.Unlock()
 	if t.term == nil || v.cellW == 0 {
 		return false
+	}
+	if ev.Kind == ui.InputPointerCancel {
+		if v.reporting {
+			v.report(ui.InputEvent{Kind: ui.InputPointerUp, Button: ev.Button, Mods: ev.Mods, X: ev.X, Y: ev.Y})
+		}
+		v.selecting, v.ticking, v.reporting = false, false, false
+		if v.gesture != nil {
+			v.gesture.Release(t.term, nil)
+		}
+		return true
 	}
 	tracking := t.term.MouseTracking() && ev.Mods&ui.Shift == 0
 	if tracking && !v.selecting || v.reporting {

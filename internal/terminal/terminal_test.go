@@ -191,9 +191,9 @@ func TestScrollback(t *testing.T) {
 	if got := offset(); got != bottom-3 {
 		t.Errorf("after scrolling a notch up, offset = %d, want %d", got, bottom-3)
 	}
-	tt.Key(ui.Shift, ui.KeyPageUp)
+	tt.Key(0, ui.KeyPageUp)
 	if got := offset(); got >= bottom-3 {
-		t.Errorf("Shift+Page Up did not scroll: offset = %d", got)
+		t.Errorf("Page Up did not scroll: offset = %d", got)
 	}
 	save(t, tt, "scrolled")
 	// Typing goes back to the bottom.
@@ -269,8 +269,8 @@ func TestSelectAndCopy(t *testing.T) {
 		copyMods = ui.Super
 	}
 	x0, y0 := cellCenter(term, 0, 0)
-	x1, y1 := cellCenter(term, 4, 0)
-	tt.Press(x0-2, y0)
+	x1, y1 := cellCenter(term, 5, 0) // logical end excludes the space
+	beginCharacterDrag(tt, x0-2, y0)
 	tt.Move(x1, y1)
 	tt.Move(x1+2, y1)
 	tt.Release(x1+2, y1)
@@ -673,8 +673,8 @@ func TestBlurEndsSelecting(t *testing.T) {
 	term.Feed([]byte("hello world"))
 	tt := ui.NewTester(func(c *ui.Context) { View(c, term).Fill().AutoFocus() }, 400, 200)
 	x0, y0 := cellCenter(term, 0, 0)
-	x1, y1 := cellCenter(term, 4, 0)
-	tt.Press(x0-2, y0)
+	x1, y1 := cellCenter(term, 5, 0) // logical end excludes the space
+	beginCharacterDrag(tt, x0-2, y0)
 	tt.Move(x1+2, y1)
 	tt.SetFocused(false)
 	if term.v.selecting {

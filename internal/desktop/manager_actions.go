@@ -16,6 +16,9 @@ import (
 func (a *App) selectedManagerRows() []sessionRow {
 	if context := a.sidebar.context; context != nil {
 		if context.valid {
+			if len(context.rows) > 0 {
+				return context.rows
+			}
 			return []sessionRow{context.row}
 		}
 		return nil
@@ -87,6 +90,10 @@ func (a *App) copyManagerProfiles(originals []core.Profile, destination *string,
 	vaultRevision := vault.Revision()
 	candidate := a.config.Clone()
 	fromSidebar := a.sidebar.context != nil
+	titleModes := map[string]string{}
+	for _, p := range originals {
+		titleModes[p.ID] = a.sessionTitleMode(p)
+	}
 	a.setConfigurationBusy(true)
 	go func() {
 		var updates []core.CredentialUpdate
@@ -96,6 +103,7 @@ func (a *App) copyManagerProfiles(originals []core.Profile, destination *string,
 			}
 		}()
 		copied := map[string]bool{}
+		copiedModes := map[string]string{}
 		var err error
 		copyCredential := func(source, target core.Profile) error {
 			update, exists, err := vault.PrepareCredentialCopy(source, target)
@@ -129,6 +137,7 @@ func (a *App) copyManagerProfiles(originals []core.Profile, destination *string,
 			}
 			candidate.Profiles = append(candidate.Profiles, duplicate)
 			copied[duplicate.ID] = true
+			copiedModes[strings.ToLower(duplicate.ID)] = titleModes[source.ID]
 		}
 		if err == nil {
 			err = a.store.CommitCredentialEdit(context.Background(), candidate, vault, updates, revision, vaultRevision)
@@ -146,6 +155,14 @@ func (a *App) copyManagerProfiles(originals []core.Profile, destination *string,
 				return
 			}
 			a.applyCommittedConfig(candidate)
+			local := a.localUI.clone()
+			if local.TitleModes == nil {
+				local.TitleModes = map[string]string{}
+			}
+			for id, mode := range copiedModes {
+				local.TitleModes[id] = mode
+			}
+			savedLocal := a.saveLocalPreferences(local)
 			a.markSharedSyncChanged()
 			if a.hub != nil {
 				a.hub.scheduleSharedSync(2 * time.Second)
@@ -188,6 +205,9 @@ func (a *App) copyManagerProfiles(originals []core.Profile, destination *string,
 			a.status = fmt.Sprintf("已复制 %d 个会话", len(copied))
 			if destination != nil {
 				a.status = fmt.Sprintf("已粘贴 %d 个会话配置", len(copied))
+			}
+			if !savedLocal {
+				a.status += "；本机标题设置保存失败：" + a.features.settingsError
 			}
 			if completed != nil {
 				completed()

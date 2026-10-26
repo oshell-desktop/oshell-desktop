@@ -149,6 +149,7 @@ var pangoLib struct {
 	layoutSetText             func(layout uintptr, text *byte, length int32)
 	layoutSetFontDescription  func(layout, desc uintptr)
 	layoutSetWidth            func(layout uintptr, width int32)
+	layoutSetIndent           func(layout uintptr, indent int32)
 	layoutSetWrap             func(layout uintptr, wrap int32)
 	layoutSetAutoDir          func(layout uintptr, auto int32)
 	layoutGetLineCount        func(layout uintptr) int32
@@ -261,6 +262,7 @@ func loadPango() error {
 	bind(pango, &l.layoutSetText, "pango_layout_set_text")
 	bind(pango, &l.layoutSetFontDescription, "pango_layout_set_font_description")
 	bind(pango, &l.layoutSetWidth, "pango_layout_set_width")
+	bind(pango, &l.layoutSetIndent, "pango_layout_set_indent")
 	bind(pango, &l.layoutSetWrap, "pango_layout_set_wrap")
 	bind(pango, &l.layoutSetAutoDir, "pango_layout_set_auto_dir")
 	bind(pango, &l.layoutGetLineCount, "pango_layout_get_line_count")
@@ -503,6 +505,10 @@ func (e *pangoEngine) fontOf(font uintptr) *Font {
 }
 
 func (e *pangoEngine) shape(text []rune, style Style, spans []Span, width float32, rtl, wholeWords bool) []shapedLine {
+	return e.shapeIndent(text, style, spans, width, 0, rtl, wholeWords)
+}
+
+func (e *pangoEngine) shapeIndent(text []rune, style Style, spans []Span, width, indent float32, rtl, wholeWords bool) []shapedLine {
 	if len(text) == 0 {
 		return nil
 	}
@@ -527,6 +533,7 @@ func (e *pangoEngine) shape(text []rune, style Style, spans []Span, width float3
 	}
 	if width > 0 {
 		l.layoutSetWidth(layout, int32(min(float64(width)*pangoScale, math.MaxInt32)))
+		l.layoutSetIndent(layout, int32(min(float64(max(0, indent))*pangoScale, math.MaxInt32)))
 		if wholeWords {
 			l.layoutSetWrap(layout, pangoWrapWord)
 		} else {

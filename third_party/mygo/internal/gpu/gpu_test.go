@@ -6,6 +6,17 @@ import (
 	"github.com/egoist/mygo/internal/scene"
 )
 
+func TestScaledGlyphDestination(t *testing.T) {
+	s := &scene.Scene{Width: 100, Height: 100, MaskAtlas: scene.NewAtlas(1, 32, 32)}
+	s.Glyphs = []scene.Glyph{{X: 2, Y: 3, W: 16, H: 5, U: 4, V: 6, UW: 8, VH: 10, Color: scene.Color{A: 255}}}
+	s.Ops = []scene.Op{{Kind: scene.OpGlyphs, Start: 0, End: 1}}
+	var b Builder
+	b.Build(s, func(*scene.Image) uintptr { return 0 })
+	if len(b.Instances) != 1 || b.Instances[0].Rect != [4]float32{2, 3, 16, 5} || b.Instances[0].UV != [4]float32{4.0 / 32, 6.0 / 32, 12.0 / 32, 16.0 / 32} {
+		t.Fatal(b.Instances)
+	}
+}
+
 func TestBuild(t *testing.T) {
 	red := scene.Color{R: 255, A: 255}
 	atlas := scene.NewAtlas(1, 64, 32)

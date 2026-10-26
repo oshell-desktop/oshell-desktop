@@ -10,6 +10,8 @@ import (
 )
 
 type operatorState struct {
+	historyOffset                       int
+	historyDraft, historyValue          string
 	selectedGroups, groupSelectionDraft map[string]bool
 	groupsOpen                          bool
 	noReturn                            bool
@@ -265,14 +267,11 @@ func (a *App) send() {
 		o.error = "发送前目标已关闭、移走或开始传输，命令未发送"
 		a.status = "错误：" + o.error
 	} else {
-		if len(a.history) == 0 || a.history[0] != o.pendingText {
-			a.history = append([]string{o.pendingText}, a.history...)
-			if len(a.history) > 30 {
-				a.history = a.history[:30]
-			}
-		}
+		a.rememberQuickSend(o.pendingText)
 		if !o.pendingComposer {
 			a.quick = ""
+			o.noReturn = false
+			o.historyOffset = 0
 		}
 		a.status = fmt.Sprintf("已发送至 %d 个终端", count)
 	}

@@ -19,6 +19,7 @@ import (
 var showUpdateConfirmation = mygo.Dialog.Message
 
 type updateController struct {
+	pendingInstall    bool
 	confirming        bool
 	installing        bool
 	scheduledSource   string
@@ -115,6 +116,7 @@ func (a *App) updateSettingsView(c *ui.Context) {
 		}
 		if state.prepared != nil && !state.busy && !state.confirming {
 			ui.Button(c, "丢弃已下载更新").OnClick(func() {
+				state.pendingInstall = false
 				state.prepared.Discard()
 				state.prepared = nil
 				if state.download != nil {
@@ -288,12 +290,18 @@ func (a *App) installUpdate() {
 		return
 	}
 	if a.updateDialogsOpen() {
-		state.status = "请先关闭其他对话框，再安装更新"
+		state.pendingInstall = true
+		state.status = "等待其他对话框关闭后继续安装"
 		return
 	}
 	count := a.activeConnections()
 	if a.hub != nil {
 		count = a.hub.connectionCount()
+	}
+	state.pendingInstall = false
+	if count == 0 {
+		a.commitUpdate()
+		return
 	}
 	state.confirming = true
 	prepared := state.prepared
@@ -325,7 +333,11 @@ func (a *App) commitUpdate() {
 		state.status = "更新仓库已变化，请重新检查"
 		return
 	}
-	if state.busy || state.prepared == nil || a.passwordLocked() || a.configurationBusy() || a.updateDialogsOpen() {
+	if a.updateDialogsOpen() {
+		state.pendingInstall = true
+		return
+	}
+	if state.busy || state.prepared == nil || a.passwordLocked() || a.configurationBusy() {
 		return
 	}
 	state.busy = true
@@ -477,6 +489,7 @@ func (a *App) invokeUpdater() {
 }
 func (h *applicationHub) stopUpdates() {
 	state := &h.updates
+	state.pendingInstall = false
 	if state.timer != nil {
 		state.timer.Stop()
 	}
@@ -501,7 +514,7 @@ func (a *App) updateDialogsOpen() bool {
 	}
 	for _, window := range apps {
 		f := &window.features
-		if window.modalActive() || f.vaultBusy || f.findOpen || f.settingsCapture != "" {
+		if window.modalActive() || f.vaultBusy || window.hasOpenTerminalSearch() || f.settingsCapture != "" {
 			return true
 		}
 	}
@@ -544,4 +557,13 @@ func (a *App) confirmAvailableUpdate() {
 			}
 		})
 	}()
+}
+
+func (a *App) resumeDeferredUpdate() {
+	state := a.updateState()
+	if !state.pendingInstall || state.prepared == nil || state.busy || state.confirming || a.stopped.Load() || a.hub != nil && a.hub.quitting || a.passwordLocked() || a.configurationBusy() || a.updateDialogsOpen() {
+		return
+	}
+	state.pendingInstall = false
+	a.installUpdate()
 }

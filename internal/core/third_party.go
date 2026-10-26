@@ -2,7 +2,6 @@
 package core
 
 import (
-	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/rc4"
@@ -486,8 +485,8 @@ func ReadThirdParty(ctx context.Context, paths []string, format string) (ThirdPa
 			return e
 		}
 		visited++
-		if visited > 10000 {
-			return fmt.Errorf("导入项目超过 10000")
+		if visited > vendorDirectoryEntries {
+			return fmt.Errorf("导入项目超过 8000")
 		}
 		if seen[file] {
 			return nil
@@ -530,16 +529,9 @@ func ReadThirdParty(ctx context.Context, paths []string, format string) (ThirdPa
 			return r.xml(ctx, data)
 		}
 		if ext == ".zip" || ext == ".xts" {
-			at := bytes.LastIndex(data, []byte{'P', 'K', 5, 6})
-			if at < 0 || at+22 > len(data) || binary.LittleEndian.Uint16(data[at+4:]) != 0 || binary.LittleEndian.Uint16(data[at+6:]) != 0 || binary.LittleEndian.Uint16(data[at+10:]) > 10000 {
-				return fmt.Errorf("ZIP 条目过多或格式不支持")
-			}
-			reader, e := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+			reader, e := readVendorZIP(data)
 			if e != nil {
 				return e
-			}
-			if len(reader.File) > 10000 {
-				return fmt.Errorf("ZIP 条目过多")
 			}
 			names := map[string]bool{}
 			for _, entry := range reader.File {
@@ -558,6 +550,17 @@ func ReadThirdParty(ctx context.Context, paths []string, format string) (ThirdPa
 				if entry.Flags&1 != 0 || entry.Mode()&os.ModeSymlink != 0 {
 					return fmt.Errorf("ZIP 不支持加密容器或符号链接")
 				}
+				var decoded []byte
+				if entry.FileInfo().IsDir() || strings.EqualFold(path.Ext(relative), ".xsh") {
+					decoded, e = readVendorZIPEntry(entry)
+					if e != nil {
+						return e
+					}
+					total += len(decoded)
+					if total > MaxVendorImport {
+						return fmt.Errorf("ZIP 展开大小超过限制")
+					}
+				}
 				parts := strings.Split(relative, "/")
 				if strings.EqualFold(parts[0], "sessions") {
 					parts = parts[1:]
@@ -574,22 +577,6 @@ func ReadThirdParty(ctx context.Context, paths []string, format string) (ThirdPa
 				}
 				if !strings.EqualFold(path.Ext(relative), ".xsh") {
 					continue
-				}
-				if entry.UncompressedSize64 > uint64(MaxVendorImport-total) {
-					return fmt.Errorf("ZIP 展开大小超过限制")
-				}
-				input, e := entry.Open()
-				if e != nil {
-					return e
-				}
-				decoded, e := io.ReadAll(io.LimitReader(input, int64(MaxVendorImport-total)+1))
-				input.Close()
-				if e != nil {
-					return e
-				}
-				total += len(decoded)
-				if total > MaxVendorImport {
-					return fmt.Errorf("ZIP 展开大小超过限制")
 				}
 				if e = r.ini(ctx, decoded, relative); e != nil {
 					return e
@@ -617,6 +604,23 @@ func ReadThirdParty(ctx context.Context, paths []string, format string) (ThirdPa
 					return e
 				}
 				if d.IsDir() {
+					if file != root {
+						visited++
+						if visited > vendorDirectoryEntries {
+							return fmt.Errorf("导入项目超过 8000")
+						}
+						if format == "SecureCRT" {
+							relative, err := filepath.Rel(root, file)
+							if err != nil {
+								return err
+							}
+							directory, err := vendorPath(filepath.ToSlash(relative))
+							if err != nil {
+								return err
+							}
+							r.Directories = append(r.Directories, format+"/"+directory)
+						}
+					}
 					return nil
 				}
 				relative, e := filepath.Rel(root, file)

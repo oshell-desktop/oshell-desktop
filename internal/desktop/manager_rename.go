@@ -48,7 +48,8 @@ func (a *App) renameSessionRow(r sessionRow, name string) bool {
 	if name == r.name {
 		return true
 	}
-	return a.changeConfig(func(cfg *core.Config) error {
+	pinned := a.rowPinned(r)
+	ok := a.changeConfig(func(cfg *core.Config) error {
 		if r.folder {
 			return cfg.MoveDirectory(r.group, path.Join(managerParent(r.group), name))
 		}
@@ -69,6 +70,13 @@ func (a *App) renameSessionRow(r sessionRow, name string) bool {
 		}
 		return fmt.Errorf("项目已变化，请重新选择")
 	})
+	if ok && pinned && r.folder {
+		p := a.localUI.clone()
+		delete(p.Pins, pinKey(r))
+		p.Pins["d:"+name] = true
+		a.saveLocalPreferences(p)
+	}
+	return ok
 }
 func (a *App) managerNameEditor(c *ui.Context, r sessionRow) bool {
 	s := a.managerRename

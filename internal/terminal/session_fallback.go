@@ -128,6 +128,9 @@ func (f *sessionFallback) ManagedInputAllowed() bool {
 }
 func (t *Terminal) InLocalToolsMode() bool { f := t.fallback.Load(); return f != nil && f.mode.Load() }
 func (t *Terminal) ToolsProcessActive() bool {
+	if console, ok := t.opts.Conn.(*ToolsConsole); ok && console.ProcessActive() {
+		return true
+	}
 	f := t.fallback.Load()
 	if f == nil {
 		return false

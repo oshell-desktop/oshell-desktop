@@ -3,6 +3,7 @@
 package windows
 
 import (
+	"time"
 	"unicode/utf16"
 	"unsafe"
 
@@ -18,6 +19,10 @@ const surfaceClass = "MyGoSurface"
 
 var (
 	imm32 = systemDLL("imm32.dll")
+
+	procPointerMessageTime = user32.NewProc("GetMessageTime")
+	procDoubleClickTime    = user32.NewProc("GetDoubleClickTime")
+	procDoubleClickMetrics = user32.NewProc("GetSystemMetrics")
 
 	procSetCapture            = user32.NewProc("SetCapture")
 	procSetCursor             = user32.NewProc("SetCursor")
@@ -47,6 +52,8 @@ const (
 	wmKeyDown            = 0x0100
 	wmKeyUp              = 0x0101
 	wmChar               = 0x0102
+	wmDeadChar           = 0x0103
+	wmSysDeadChar        = 0x0107
 	wmSysKeyDown         = 0x0104
 	wmSysKeyUp           = 0x0105
 	wmSysChar            = 0x0106
@@ -77,11 +84,12 @@ const (
 	gcsCompStr           = 0x0008
 	gcsCursorPos         = 0x0080
 	gcsResultStr         = 0x0800
+	csInsertChar         = 0x2000
+	csNoMoveCaret        = 0x4000
 	cfsPoint             = 0x0002
 	cfsExclude           = 0x0080
 	iaceDefault          = 0x0010
 	niCompositionStr     = 0x0015
-	cpsComplete          = 0x0001
 	cpsCancel            = 0x0004
 	rdwInvalidate        = 0x0001
 	rdwUpdateNow         = 0x0100
@@ -112,9 +120,17 @@ type candidateForm struct {
 }
 
 type surface struct {
-	clientComposition platform.InputComposition
-	w                 *window
-	hwnd              uintptr
+	pointerClock                platform.MillisClock
+	layoutKeys                  map[uint16]heldLayout
+	layoutComposing, layoutDead bool
+	imePreview                  string
+	imeCaret                    int                     // rune offset within imePreview
+	keypadKeys                  map[uint16]platform.Key // held physical keypad keys, before Num Lock changes
+	clientComposition           platform.InputComposition
+	cancelingInput              bool
+	inputEpoch                  uint64
+	w                           *window
+	hwnd                        uintptr
 
 	paintDC  uintptr
 	tracking bool
@@ -129,10 +145,11 @@ type surface struct {
 	// WM_SYSCHAR then opens no menu.
 	keyTaken bool
 
-	reconvert  *[2]int // the runes a reconversion replaces
-	dropTarget uintptr // IDropTarget
-	access     *uiaTree
-	dragSource *oleDragSource
+	reconvert        *[2]int // the runes a reconversion replaces (UTF-16 units for a client)
+	reconvertContext *platform.TextContext
+	dropTarget       uintptr // IDropTarget
+	access           *uiaTree
+	dragSource       *oleDragSource
 
 	// comp shows the frames drawn in memory in a window without a
 	// redirection bitmap, where GDI cannot (compositor.go); nil while none
@@ -291,14 +308,17 @@ func cursorHandle(c platform.Cursor) uintptr {
 }
 
 func (s *surface) SetTextInput(t platform.TextInputState) {
+	s.setTextInput(t, s.cancelIME)
+}
+
+func (s *surface) setTextInput(t platform.TextInputState, cancel func()) {
 	active, caret := t.Active, t.Caret
-	if s.input.Active && s.input.Client != t.Client {
-		s.clientComposition.Reset()
-		if himc, _, _ := procImmGetContext.Call(s.hwnd); himc != 0 {
-			procImmNotifyIME.Call(himc, niCompositionStr, cpsCancel, 0)
-			procImmReleaseContext.Call(s.hwnd, himc)
+	if !active || s.input.Client != t.Client || s.input.FunctionalTarget != t.FunctionalTarget {
+		if s.input.Active {
+			s.cancelInput(cancel)
+		} else {
+			s.clearInputState()
 		}
-		s.reconvert = nil
 	}
 	s.input = t
 	if active != s.ime {
@@ -306,11 +326,6 @@ func (s *surface) SetTextInput(t platform.TextInputState) {
 		if active {
 			procImmAssociateContextEx.Call(s.hwnd, 0, iaceDefault)
 		} else {
-			s.reconvert = nil
-			if himc, _, _ := procImmGetContext.Call(s.hwnd); himc != 0 {
-				procImmNotifyIME.Call(himc, niCompositionStr, cpsComplete, 0)
-				procImmReleaseContext.Call(s.hwnd, himc)
-			}
 			procImmAssociateContextEx.Call(s.hwnd, 0, 0)
 		}
 	}
@@ -338,6 +353,9 @@ func (s *surface) placeIME() {
 }
 
 func (s *surface) send(ev platform.SurfaceEvent) bool {
+	if s.cancelingInput && (ev.Kind == platform.TextInput || ev.Kind == platform.TextComposition) {
+		return true
+	}
 	if ev.Kind == platform.PointerDown || ev.Kind == platform.SurfaceBlur {
 		s.clientComposition.Reset()
 	}
@@ -377,12 +395,30 @@ func mods() platform.Modifiers {
 	return m
 }
 
-func (s *surface) pointer(kind platform.SurfaceEventKind, lp uintptr, button int) {
+func (s *surface) pointer(kind platform.SurfaceEventKind, lp uintptr, button int) platform.SurfaceEvent {
 	x, y := int16(loword(lp)), int16(hiword(lp))
-	s.send(platform.SurfaceEvent{Kind: kind, X: s.toDIP(int32(x)), Y: s.toDIP(int32(y)), Button: button, Mods: mods()})
+	ev := platform.SurfaceEvent{Kind: kind, X: s.toDIP(int32(x)), Y: s.toDIP(int32(y)), Button: button, Mods: mods()}
+	if kind == platform.PointerDown {
+		stamp, _, _ := procPointerMessageTime.Call()
+		ev.HasTimestamp, ev.Timestamp = true, s.pointerClock.Expand(uint32(stamp))
+		interval, _, _ := procDoubleClickTime.Call()
+		width, _, _ := procDoubleClickMetrics.Call(36)  // SM_CXDOUBLECLK
+		height, _, _ := procDoubleClickMetrics.Call(37) // SM_CYDOUBLECLK
+		ev.HasDoubleClickSettings = true
+		ev.DoubleClickInterval = time.Duration(interval) * time.Millisecond
+		ev.DoubleClickDistanceX = s.toDIP(int32(width)) / 2
+		ev.DoubleClickDistanceY = s.toDIP(int32(height)) / 2
+	}
+	return ev
 }
 
 func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool) {
+	if s.cancelingInput {
+		switch m {
+		case wmChar, wmSysChar, wmDeadChar, wmSysDeadChar, wmImeStartComp, wmImeComposition, wmImeEndComp, wmImeChar, wmImeRequest:
+			return 0, true
+		}
+	}
 	switch m {
 	case wmPaint:
 		var ps paintStruct
@@ -407,7 +443,7 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 			procTrackMouseEvent.Call(uintptr(unsafe.Pointer(&tme)))
 			s.tracking = true
 		}
-		s.pointer(platform.PointerMove, lp, 0)
+		s.send(s.pointer(platform.PointerMove, lp, 0))
 		return 0, true
 	case wmMouseLeave:
 		s.tracking = false
@@ -421,12 +457,14 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 		case wmMButtonDown, wmMButtonDblClk:
 			button = 2
 		}
+		// Snapshot message time before focus callbacks can run a nested event loop.
+		ev := s.pointer(platform.PointerDown, lp, button)
 		procSetFocus.Call(hwnd)
 		if s.buttons == 0 {
 			procSetCapture.Call(hwnd)
 		}
 		s.buttons |= 1 << button
-		s.pointer(platform.PointerDown, lp, button)
+		s.send(ev)
 		return 0, true
 	case wmLButtonUp, wmRButtonUp, wmMButtonUp:
 		button := 0
@@ -440,7 +478,7 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 		if s.buttons == 0 {
 			procReleaseCapture.Call()
 		}
-		s.pointer(platform.PointerUp, lp, button)
+		s.send(s.pointer(platform.PointerUp, lp, button))
 		if m == wmRButtonUp {
 			return 0, false // WM_CONTEXTMENU
 		}
@@ -474,7 +512,11 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 		s.send(platform.SurfaceEvent{Kind: platform.KeyReleased, Key: k, Mods: mods()})
 		return 1, true
 	case wmCaptureChanged:
+		held := s.buttons != 0
 		s.buttons = 0
+		if held {
+			s.send(platform.SurfaceEvent{Kind: platform.PointerCancel})
+		}
 		return 0, true
 	case wmMouseWheel, wmMouseHWheel:
 		pt := point{int32(int16(loword(lp))), int32(int16(hiword(lp)))}
@@ -500,6 +542,7 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 		s.send(platform.SurfaceEvent{Kind: platform.SurfaceFocus})
 		return 0, true
 	case wmKillFocus:
+		s.cancelInput(s.cancelIME)
 		s.send(platform.SurfaceEvent{Kind: platform.SurfaceBlur})
 		return 0, true
 	case wmKeyDown, wmSysKeyDown:
@@ -508,8 +551,10 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 		if modifierKey(wp) {
 			s.send(platform.SurfaceEvent{Kind: platform.ModifiersChanged, Mods: mods()})
 		}
-		if k := vkKey(wp); k != platform.KeyUnknown {
-			s.keyTaken = s.send(platform.SurfaceEvent{Kind: platform.KeyPressed, Key: k, Mods: mods(), Repeat: lp&(1<<30) != 0})
+		k, keypad := s.keyIdentity(wp, lp, true)
+		ev := s.layoutEvent(platform.SurfaceEvent{Kind: platform.KeyPressed, Key: k, Keypad: keypad, Mods: mods(), Repeat: lp&(1<<30) != 0}, wp, lp)
+		if ev.Key != platform.KeyUnknown || ev.Unshifted != 0 {
+			s.keyTaken = s.send(ev)
 		}
 		// Alt+F4, Alt+Space and F10 keep working.
 		return 0, m == wmKeyDown
@@ -517,11 +562,14 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 		if modifierKey(wp) {
 			s.send(platform.SurfaceEvent{Kind: platform.ModifiersChanged, Mods: mods()})
 		}
-		if k := vkKey(wp); k != platform.KeyUnknown {
-			s.send(platform.SurfaceEvent{Kind: platform.KeyReleased, Key: k, Mods: mods()})
+		k, keypad := s.keyIdentity(wp, lp, false)
+		ev := s.layoutEvent(platform.SurfaceEvent{Kind: platform.KeyReleased, Key: k, Keypad: keypad, Mods: mods()}, wp, lp)
+		if ev.Key != platform.KeyUnknown || ev.Unshifted != 0 {
+			s.send(ev)
 		}
 		return 0, m == wmKeyUp
 	case wmSysChar:
+		s.layoutDead = false
 		if s.keyTaken {
 			// The content took Alt and the key, as a terminal does.
 			return 0, true
@@ -532,15 +580,20 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 			procSendMessageW.Call(s.w.hwnd, wmSysCommand, scKeyMenu, wp)
 			return 0, true
 		}
+	case wmDeadChar, wmSysDeadChar:
+		s.layoutDead = true
+		return 0, true
 	case wmChar:
+		s.layoutDead = false
 		c := uint16(wp)
+		high := s.high
+		s.high = 0
 		switch {
 		case utf16.IsSurrogate(rune(c)) && c < 0xDC00:
 			s.high = c
 			return 0, true
 		case utf16.IsSurrogate(rune(c)):
-			r := utf16.DecodeRune(rune(s.high), rune(c))
-			s.high = 0
+			r := utf16.DecodeRune(rune(high), rune(c))
 			s.send(platform.SurfaceEvent{Kind: platform.TextInput, Text: string(r)})
 			return 0, true
 		case c < 0x20 || c == 0x7F:
@@ -552,30 +605,39 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 		r, _, _ := procDefWindowProcW.Call(hwnd, uintptr(m), wp, lp&^iscShowUICompWindow)
 		return r, true
 	case wmImeStartComp:
+		s.clientComposition.Start(s.input.Client)
+		s.imePreview, s.imeCaret = "", 0
+		s.layoutComposing = true
 		s.placeIME()
 		return 0, true
 	case wmImeComposition:
+		if lp&csInsertChar != 0 && lp&(gcsCompStr|gcsCursorPos|gcsResultStr) == 0 {
+			// The character is in wParam; this path needs no IMM context.
+			// Full GCS strings, when present, are authoritative instead.
+			s.imeInsertCharacter(wp, lp)
+			s.placeIME()
+			return 0, true
+		}
+		if lp == 0 {
+			s.imeComposition(lp, nil, nil)
+			return 0, true
+		}
 		himc, _, _ := procImmGetContext.Call(hwnd)
 		if himc == 0 {
 			return 0, true
 		}
-		if lp&gcsResultStr != 0 {
-			if text := imeString(himc, gcsResultStr); text != "" {
-				s.composed(platform.SurfaceEvent{Kind: platform.TextInput, Text: text})
-			}
-		}
-		if lp&gcsCompStr != 0 {
-			text := imeString(himc, gcsCompStr)
+		s.imeComposition(lp, func(which uintptr) (string, bool) { return imeString(himc, which) }, func() int32 {
 			pos, _, _ := procImmGetCompositionStrW.Call(himc, gcsCursorPos, 0, 0)
-			units := utf16.Encode([]rune(text))
-			caret := len(utf16.Decode(units[:min(int(pos), len(units))]))
-			s.composed(platform.SurfaceEvent{Kind: platform.TextComposition, Text: text, Caret: caret})
-		}
+			return int32(pos) // IMM returns LONG, including negative errors on 64-bit Windows.
+		})
 		procImmReleaseContext.Call(hwnd, himc)
 		s.placeIME()
 		return 0, true
 	case wmImeEndComp:
+		s.imePreview, s.imeCaret = "", 0
+		s.layoutComposing = false
 		s.reconvert = nil
+		s.reconvertContext = nil
 		if c := s.input.Client; c != nil {
 			s.clientComposition.End(c)
 			return 0, true
@@ -599,17 +661,6 @@ func (s *surface) message(hwnd uintptr, m uint32, wp, lp uintptr) (uintptr, bool
 	return 0, false
 }
 
-// imeString reads a composition string of an input context.
-func imeString(himc, which uintptr) string {
-	n, _, _ := procImmGetCompositionStrW.Call(himc, which, 0, 0)
-	if int32(n) <= 0 {
-		return ""
-	}
-	buf := make([]uint16, n/2)
-	procImmGetCompositionStrW.Call(himc, which, uintptr(unsafe.Pointer(&buf[0])), n)
-	return string(utf16.Decode(buf))
-}
-
 func wheelLines() int {
 	if !surfaceWheelLinesQueried {
 		surfaceWheelLinesQueried = true
@@ -623,7 +674,49 @@ func wheelLines() int {
 	return surfaceWheelLines
 }
 
-// vkKey maps a virtual key code to a key.
+// keyIdentity pairs keypad repeats/releases with their press even if Num Lock
+// changes their virtual key. Scan code plus the extended bit is the identity.
+func (s *surface) keyIdentity(vk, flags uintptr, press bool) (platform.Key, bool) {
+	id := uint16(flags >> 16 & 0x1ff)
+	if id&0xff == 0 {
+		id = uint16(vk) | 0x200 | id&0x100 // synthetic messages may omit a scan code
+	}
+	previous, held := s.keypadKeys[id]
+	if !press {
+		delete(s.keypadKeys, id)
+		if held {
+			return previous, true
+		}
+	} else if held && flags&(1<<30) != 0 {
+		return previous, true
+	}
+	k, keypad := vkKey(vk), vkKeypad(vk, flags)
+	if press && keypad && k != platform.KeyUnknown {
+		if s.keypadKeys == nil {
+			s.keypadKeys = make(map[uint16]platform.Key)
+		}
+		s.keypadKeys[id] = k
+	}
+	return k, keypad
+}
+
+// vkKeypad distinguishes main/navigation keys from their keypad counterparts.
+func vkKeypad(vk, flags uintptr) bool {
+	extended := flags&(1<<24) != 0
+	switch {
+	case vk >= 0x60 && vk <= 0x6f:
+		return true
+	case vk == 0x0d: // keypad Enter alone has the extended bit
+		return extended
+	case vk == 0x0c, vk >= 0x21 && vk <= 0x28, vk == 0x2d, vk == 0x2e:
+		// With Num Lock off the keypad uses navigation virtual keys, but
+		// the separate navigation cluster has the extended bit set.
+		return !extended
+	}
+	return false
+}
+
+// vkKey maps a virtual key code to a logical key.
 func vkKey(vk uintptr) platform.Key {
 	switch {
 	case vk >= 'A' && vk <= 'Z':
@@ -632,10 +725,20 @@ func vkKey(vk uintptr) platform.Key {
 		return platform.Key0 + platform.Key(vk-'0')
 	case vk >= 0x60 && vk <= 0x69: // the numeric keypad
 		return platform.Key0 + platform.Key(vk-0x60)
+	case vk >= 0x7C && vk <= 0x87: // VK_F13 through VK_F24
+		return platform.KeyF13 + platform.Key(vk-0x7C)
 	case vk >= 0x70 && vk <= 0x7B:
 		return platform.KeyF1 + platform.Key(vk-0x70)
 	}
 	switch vk {
+	case 0x6a:
+		return platform.KeyMultiply
+	case 0x6b:
+		return platform.KeyAdd
+	case 0x6c:
+		return platform.KeyComma
+	case 0x0c:
+		return platform.KeyClear
 	case 0x0D:
 		return platform.KeyEnter
 	case 0x1B:

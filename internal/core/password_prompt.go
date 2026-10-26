@@ -7,17 +7,14 @@ import "strings"
 // sufficient to disclose or remember a login password.
 func loginPasswordPrompt(identity SSHIdentity, prompt string) bool {
 	clean := strings.TrimSpace(prompt)
-	switch strings.ToLower(clean) {
-	case "password:", "password", "密码：", "密码:":
-		return true // This prompt comes directly from the authenticated SSH peer.
-	}
 	expected := identity.User + "@" + strings.Trim(identity.Host, "[]")
 	return clean == expected+"'s password:" || clean == "("+expected+") Password:" || clean == "("+expected+") password:"
 }
 
-// loginPasswordQuestion requires exactly one unambiguous, hidden login field.
+// loginPasswordQuestion only recognizes a single, identity-qualified challenge.
+// Mixed challenges remain manual even when one field resembles a login prompt.
 func loginPasswordQuestion(identity SSHIdentity, questions []string, echo []bool) int {
-	if len(questions) != len(echo) {
+	if len(questions) != 1 || len(echo) != 1 {
 		return -1
 	}
 	index := -1

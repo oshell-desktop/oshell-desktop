@@ -5,6 +5,7 @@ import hashlib
 import json
 import tempfile
 import unittest
+from contextlib import nullcontext
 from unittest.mock import patch
 
 import build
@@ -35,7 +36,7 @@ class PortablePublishTests(unittest.TestCase):
                         member.size, member.mode = len(data), 0o644
                         out.addfile(member, io.BytesIO(data))
 
-            with patch.object(build, 'ROOT', root), patch.object(build, 'run', fake_build):
+            with patch.object(build, 'ROOT', root), patch.object(build, 'run', fake_build), patch.object(build, 'native_manifest', return_value=nullcontext()):
                 build.build('linux/amd64', root / 'dist', archive=True)
             self.assertEqual((root / 'mygo.ts').read_text(), 'original client')
             self.assertFalse((root / 'dist/linux-amd64/oshell-portable').exists())

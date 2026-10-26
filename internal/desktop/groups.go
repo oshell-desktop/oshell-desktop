@@ -408,11 +408,12 @@ func (a *App) tabByID(id string) *tab {
 }
 func (a *App) navigateTab(delta int) {
 	a.ensureGroups()
-	g := a.groupByID(a.groups.active)
-	if g == nil {
-		return
+	var tabs []*tab
+	for _, t := range a.tabs {
+		if g := a.groupByID(t.group); g != nil && !g.hidden {
+			tabs = append(tabs, t)
+		}
 	}
-	tabs := a.groupTabs(g)
 	if len(tabs) == 0 {
 		return
 	}
@@ -585,10 +586,13 @@ func (a *App) groupWorkspace(c *ui.Context, n *groupNode) {
 		a.groupTabBar(c, g)
 		box := ui.Column(c).Grow(1).MinHeight(0).FillWidth().Clip()
 		position := "center"
-		if drag, over := ui.DragOver[tabDrag](box); over && a.tabByID(drag.ID) != nil {
+		if drag, over := ui.DragOver[tabDrag](box); over && a.acceptsTabDrag(drag, g) {
 			x, y, _ := box.PointerPosition()
 			r := box.Bounds()
 			position = dropPosition(x, y, r.W, r.H)
+			if a.tabDragSource(drag.ID) != a {
+				position = "center"
+			}
 			accent := c.Theme().Accent
 			box.DrawOver(func(p *ui.Painter, r ui.Rect) {
 				switch position {
@@ -611,7 +615,16 @@ func (a *App) groupWorkspace(c *ui.Context, n *groupNode) {
 			x, y, _ := box.PointerPosition()
 			r := box.Bounds()
 			where := dropPosition(x, y, r.W, r.H)
-			a.post(func() { a.dropTab(a.tabByID(drag.ID), g, where) })
+			a.post(func() {
+				if !a.acceptsTabDrag(drag, g) {
+					return
+				}
+				if a.tabDragSource(drag.ID) != a {
+					a.receiveTabDrag(drag, g, "", false)
+				} else {
+					a.dropTab(a.tabByID(drag.ID), g, where)
+				}
+			})
 		}
 		box.Children(func() {
 			if t := a.groupTab(g); t != nil {
@@ -644,7 +657,7 @@ func (a *App) groupForNewTab() *tabGroup {
 	return g
 }
 func (a *App) visiblePanes() []*pane {
-	if a.passwordLocked() || a.stopped.Load() || a.win != nil && (!a.win.IsVisible() || a.win.IsMinimized()) {
+	if a.workspaceLocked() || a.stopped.Load() || a.win != nil && (!a.win.IsVisible() || a.win.IsMinimized()) {
 		return nil
 	}
 	a.ensureGroups()

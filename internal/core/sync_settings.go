@@ -11,6 +11,7 @@ import (
 )
 
 type SyncOptions struct {
+	Policy                   SyncPolicy        `json:"policy,omitzero"`
 	TrustedServerCertificate WebDAVCertificate `json:"trustedServerCertificate,omitzero"`
 	RequireExisting          bool              `json:"requireExisting,omitempty"`
 	Version                  int               `json:"version"`
@@ -45,10 +46,18 @@ func LoadSyncOptions(dir string, master ...[]byte) (SyncOptions, error) {
 	if e = json.Unmarshal(data, &options); e != nil || options.Version != 1 {
 		return options, fmt.Errorf("同步设置格式无效")
 	}
+	if e = options.Policy.Validate(); e != nil {
+		return options, e
+	}
 	return options, nil
 }
 func (o SyncOptions) Target() string {
-	return o.Backend + "\n" + strings.TrimSpace(o.Address) + "\n" + o.Username
+	target := o.Backend + "\n" + strings.TrimSpace(o.Address) + "\n" + o.Username
+	content := o.Policy.Effective().Content
+	if content != DefaultSyncPolicy().Content {
+		target += fmt.Sprintf("\nscope:%t:%t:%t:%t", content.Sessions, content.ClientSettings, content.QuickCommands, content.SessionDefaults)
+	}
+	return target
 }
 func (o SyncOptions) CredentialProfile() Profile {
 	p := NewProfile()
@@ -105,6 +114,9 @@ func SaveSyncOptions(dir string, o SyncOptions, master ...[]byte) error {
 	return saveSyncOptionsLocked(dir, o, master...)
 }
 func saveSyncOptionsLocked(dir string, o SyncOptions, master ...[]byte) error {
+	if err := o.Policy.Validate(); err != nil {
+		return err
+	}
 	if o.Version != 1 {
 		return fmt.Errorf("同步设置版本无效")
 	}
@@ -146,22 +158,32 @@ func saveSyncOptionsLocked(dir string, o SyncOptions, master ...[]byte) error {
 			}
 		}
 	}
-	oldPath, newPath := "", ""
-	if previous.Enabled && (!o.Enabled || previous.Target() != o.Target()) {
-		oldPath = (SharedReplicaStore{Directory: dir, Target: previous.Target()}).path()
-		newPath = oldPath + ".archived-" + NewID()
-		if err = os.Rename(oldPath, newPath); err != nil && !os.IsNotExist(err) {
-			return err
+	type archivedState struct{ old, archived string }
+	var archived []archivedState
+	restore := func() error {
+		var failures []error
+		for i := len(archived) - 1; i >= 0; i-- {
+			failures = append(failures, os.Rename(archived[i].archived, archived[i].old))
 		}
-		if os.IsNotExist(err) {
-			oldPath = ""
+		return errors.Join(failures...)
+	}
+	if previous.Enabled && (!o.Enabled || previous.Target() != o.Target()) {
+		for _, oldPath := range []string{
+			(SharedReplicaStore{Directory: dir, Target: previous.Target()}).path(),
+			(SharedConflictStore{Directory: dir, Target: previous.Target()}).path(),
+		} {
+			newPath := oldPath + ".archived-" + NewID()
+			if err = os.Rename(oldPath, newPath); os.IsNotExist(err) {
+				continue
+			}
+			if err != nil {
+				return errors.Join(err, restore())
+			}
+			archived = append(archived, archivedState{oldPath, newPath})
 		}
 	}
 	if err = AtomicWrite(filepath.Join(dir, "sync-settings.json"), data); err != nil {
-		if oldPath != "" {
-			_ = os.Rename(newPath, oldPath)
-		}
-		return err
+		return errors.Join(err, restore())
 	}
 	return nil
 }

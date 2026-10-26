@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 
@@ -16,6 +17,8 @@ import (
 )
 
 type pane struct {
+	fileDisplayIP          string
+	search                 terminalSearchState
 	externalLaunch         bool
 	terminalOnly           bool
 	disposal               sync.WaitGroup
@@ -26,6 +29,7 @@ type pane struct {
 	localNames             core.LocalHostname
 	visible, pendingUnread atomic.Bool
 	hostname               string
+	titleMode              string // Runtime choice for unsaved local sessions; moves with the pane.
 	transfer               transferNoticeState
 	ftp                    *core.FTPSession
 	owner                  atomic.Pointer[App]
@@ -50,6 +54,7 @@ type node struct {
 	bounds                                ui.Rect
 }
 type tab struct {
+	hover    tabHoverState
 	zoomed   *pane
 	group    string
 	unread   bool
@@ -58,9 +63,20 @@ type tab struct {
 	active   *pane
 }
 type App struct {
+	linkMenuOpen                                    bool
+	linkMenuAnchor, linkMenuFolder                  string
+	linkScroll                                      ui.ScrollState
+	workspaceAuthorized                             bool
+	idleMemory                                      idleMemoryReclaimer
+	imagePaste                                      *imagePasteState
 	closeAfterTabMove                               bool
 	tabNativeDrag                                   bool
+	localUIOriginal                                 localPreferences
 	localUI, localUIDraft                           localPreferences
+	titleOverwrite                                  bool
+	draftTitleMode                                  string
+	syncMonitorOpen                                 bool
+	syncMonitor                                     *mygo.Window
 	sidebar                                         sidebarState
 	storageDirectoryDraft, storageDirectoryOriginal string
 	storagePickerGeneration                         uint64
@@ -128,6 +144,7 @@ func newApp(s *core.Store, c core.Config) *App {
 	if !lockedConfig {
 		a.quickSendScope = c.Settings.QuickSendScope
 	}
+	a.workspaceAuthorized = !a.passwordLocked()
 	return a
 }
 func (a *App) post(fn func()) bool {
@@ -152,6 +169,7 @@ func (a *App) drain() {
 		fn()
 	}
 	a.finishTabMoveClose()
+	a.resumeDeferredUpdate()
 	if len(pending) > 0 && a.preferencesWindow != nil {
 		a.preferencesWindow.Invalidate()
 	}
@@ -223,6 +241,14 @@ func (a *App) dispose(p *pane) {
 		return
 	}
 	p.closed = true
+	p.search.matches = nil
+	p.search.generation++
+	if s := a.imagePaste; s != nil && s.pane == p {
+		if s.cancel != nil {
+			s.cancel()
+		}
+		a.imagePaste = nil
+	}
 	for _, q := range append([]*authenticationChallenge(nil), a.challenges...) {
 		if q.pane == p {
 			a.finishChallenge(q, true)
@@ -271,7 +297,7 @@ func (a *App) closeTab(t *tab) {
 	a.walk(t.root, a.dispose)
 	for i, v := range a.tabs {
 		if v == t {
-			a.tabs = append(a.tabs[:i], a.tabs[i+1:]...)
+			a.tabs = slices.Delete(a.tabs, i, i+1)
 			break
 		}
 	}
@@ -292,6 +318,7 @@ func (a *App) closeTab(t *tab) {
 	} else {
 		a.current = min(a.current, len(a.tabs)-1)
 	}
+	a.scheduleIdleMemoryReclaim()
 }
 
 // Ended-session exit/quit must not steal focus from an explicit command editor.
@@ -514,6 +541,7 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, split 
 	if a.passwordLocked() || a.stopped.Load() || a.hub != nil && a.hub.quitting {
 		return
 	}
+	a.cancelIdleMemoryReclaim()
 	// Retain the source before replacing/disposal of a pane that owns its last lease.
 	sourceRelease := func() {}
 	if source != nil {
@@ -623,7 +651,11 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, split 
 		vaultRevision = credentialVault.Revision()
 	}
 	requireExistingProfile := false
-	allowPasswordSave := credentialVault != nil && (profile.Kind == "ssh" || profile.Kind == "sftp" || profile.Kind == "ftp")
+	allowPasswordSave := canSaveSessionPassword(profile, cred, credentialVault)
+	// External launcher credentials and subsequent challenges stay one-shot.
+	if !allowPasswordSave {
+		cred.SavePassword = false
+	}
 	for _, stored := range a.config.Profiles {
 		if stored.ID == profile.ID && credentialVault != nil {
 			requireExistingProfile = true
@@ -714,13 +746,14 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, split 
 					return
 				}
 				p.ftp = session
+				owner.resolveFileSessionAddress(ctx, p)
 				if p.files == nil {
 					p.files = &fileState{dir: "/", input: "/"}
 				}
 				p.files.client = files
 				p.files.lease = func() {}
 				p.status = "已连接"
-				if cred.SavePassword && cred.Password != "" && owner.vault != nil {
+				if allowPasswordSave && !p.externalLaunch && cred.SavePassword && cred.Password != "" && owner.vault != nil {
 					if saved := owner.saveAuthenticatedSessionPassword(profile, cred.Password, profile.Identity(), credentialVault, vaultRevision, requireExistingProfile, cred.PasswordProtection); saved != nil {
 						p.profile.Username = saved.Username
 					}
@@ -774,7 +807,7 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, split 
 			}
 			return
 		}
-		if cred.SavePassword && cred.Password != "" && a.vault != nil && conn != nil && conn.PasswordVerified {
+		if allowPasswordSave && !p.externalLaunch && cred.SavePassword && cred.Password != "" && a.vault != nil && conn != nil && conn.PasswordVerified {
 			post(func() {
 				a := p.owner.Load()
 				if a == nil {
@@ -800,6 +833,7 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, split 
 				}
 				p.conn = conn
 				p.status = "已连接"
+				a.resolveFileSessionAddress(ctx, p)
 				observeFileConnection(ctx, p, conn)
 				dir := profile.InitialDirectory
 				if dir == "" {
@@ -840,14 +874,21 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, split 
 				owner.routeInput(p, ev)
 			}
 		}
+		opts.BeforeClipboardPaste = func() bool {
+			if owner := p.owner.Load(); owner != nil {
+				return owner.requestClipboardImage(p)
+			}
+			return false
+		}
 		opts.BeforePaste = func(text string) bool {
 			if owner := p.owner.Load(); owner != nil {
 				owner.requestPaste(p, text)
 			}
 			return false // Workspace validates the complete destination set before sending.
 		}
-		opts.OnOutput = func(_ []byte) {
-			scheduleHostnameScan(p)
+		opts.OnOutput = func(_ []byte) { scheduleHostnameScan(p) }
+		a.configureTerminalStatus(p, &opts)
+		opts.OnActivity = func() {
 			if !p.visible.Load() && p.pendingUnread.CompareAndSwap(false, true) {
 				post(func() {
 					if owner := p.owner.Load(); owner != nil {
@@ -927,6 +968,9 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, split 
 				}
 			})
 			return
+		}
+		if conn != nil {
+			conn.SetIdleGuard(term.IdleInputSafe)
 		}
 		if ctx.Err() != nil {
 			term.Close()

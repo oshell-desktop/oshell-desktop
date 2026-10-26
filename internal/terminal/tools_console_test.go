@@ -1,10 +1,69 @@
 package terminal
 
 import (
+	"bufio"
+	"io"
+	"oshell-desktop/internal/core"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestP3I08HelpAliasReturnsToPrompt(t *testing.T) {
+	console := NewToolsConsole()
+	defer console.Close()
+	reader := bufio.NewReader(console)
+	readPrompt := func(marker string) string {
+		t.Helper()
+		type result struct {
+			text string
+			err  error
+		}
+		done := make(chan result, 1)
+		go func() {
+			var out strings.Builder
+			for {
+				b, err := reader.ReadByte()
+				if err != nil {
+					done <- result{err: err}
+					return
+				}
+				out.WriteByte(b)
+				if strings.Contains(out.String(), marker) && strings.HasSuffix(out.String(), "oshell> ") {
+					done <- result{text: out.String()}
+					return
+				}
+			}
+		}()
+		select {
+		case r := <-done:
+			if r.err != nil {
+				t.Fatal(r.err)
+			}
+			return r.text
+		case <-time.After(3 * time.Second):
+			t.Fatal("console did not return to prompt")
+			return ""
+		}
+	}
+	readPrompt("")
+	command := func(line, marker string) string {
+		t.Helper()
+		go io.WriteString(console, line+"\r")
+		return readPrompt(marker)
+	}
+	marker := strings.Join(core.LocalTools, "、")
+	help, alias := command("help", marker), command("?", marker)
+	// Ignore line-editor echo; compare the complete dispatched help and prompt.
+	helpStart := strings.Index(help, marker)
+	aliasStart := strings.Index(alias, marker)
+	if helpStart < 0 || aliasStart < 0 || help[helpStart:] != alias[aliasStart:] {
+		t.Fatalf("help alias mismatch: %q / %q", help, alias)
+	}
+	if got := command("not-an-allowed-tool", "不支持的工具"); !strings.Contains(got, "不支持的工具") {
+		t.Fatal("unknown command accepted", got)
+	}
+}
 
 func TestToolsConsoleEditingHelpAndInterrupt(t *testing.T) {
 	loadLib(t)

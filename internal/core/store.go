@@ -15,18 +15,19 @@ import (
 const MaxArchive = 16 << 20
 
 type Store struct {
-	Portable         bool
-	baseline         *Config
-	observed         bool
-	observedRevision string
-	protectionState  atomic.Uint32
-	Dir              string
-	bootstrapDir     string
-	StorageWarning   string
-	mu               sync.Mutex
-	pending          bool
-	protected        bool
-	master           []byte
+	configurationGeneration atomic.Uint64
+	Portable                bool
+	baseline                *Config
+	observed                bool
+	observedRevision        string
+	protectionState         atomic.Uint32
+	Dir                     string
+	bootstrapDir            string
+	StorageWarning          string
+	mu                      sync.Mutex
+	pending                 bool
+	protected               bool
+	master                  []byte
 }
 
 func OpenStore() (*Store, error) {

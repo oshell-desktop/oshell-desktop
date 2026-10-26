@@ -543,6 +543,8 @@ func keyName(k Key) string {
 		return string(rune('a' + k - KeyA))
 	case k >= Key0 && k <= Key9:
 		return string(rune('0' + k - Key0))
+	case k >= KeyF13 && k <= KeyF35:
+		return "F" + strconv.Itoa(int(k-KeyF13)+13)
 	case k >= KeyF1 && k <= KeyF12:
 		return "F" + strconv.Itoa(int(k-KeyF1)+1)
 	}

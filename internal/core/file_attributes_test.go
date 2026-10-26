@@ -48,3 +48,21 @@ func TestFTPDoesNotExposeSyntheticPermissions(t *testing.T) {
 		t.Fatal("synthetic FTP defaults shown as remote attributes", a)
 	}
 }
+
+func TestRemoteFileTypeKnown(t *testing.T) {
+	for _, tc := range []struct {
+		info  os.FileInfo
+		known bool
+	}{
+		{nil, false},
+		{attributesInfo{0, &sftp.FileStat{}}, false},
+		{attributesInfo{0, &sftp.FileStat{Mode: 0100000}}, true},
+		{attributesInfo{0, nil}, true}, // A local permissionless ordinary file.
+		{ftpUnknownInfo{ftpInfo{entry: &ftp.Entry{Name: "unknown"}}}, false},
+		{ftpInfo{entry: &ftp.Entry{Name: "known", Type: ftp.EntryTypeFile}}, true},
+	} {
+		if got := RemoteFileTypeKnown(tc.info); got != tc.known {
+			t.Fatalf("%+v: type known = %v, want %v", tc.info, got, tc.known)
+		}
+	}
+}

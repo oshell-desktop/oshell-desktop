@@ -2347,6 +2347,40 @@ profile).
 
 <!-- repository-only:start -->
 
+### OShell pointer adaptation
+
+Surface press events carry optional host double-click settings. The explicit
+presence flag permits a zero interval; axis distances are maximum deltas in
+DIPs. Native backends read preferences on the UI thread for each press. The UI
+passes this metadata to handlers and uses it for ordinary controls. The OShell
+terminal uses it for repeated clicks and its separate word-continuation window.
+
+Presses also carry optional `Timestamp` / `HasTimestamp` source time. Windows
+snapshots GetMessageTime before focus callbacks can dispatch nested input; GTK
+reads GdkEventButton.time before focusing, and AppKit reads NSEvent.timestamp.
+The 32-bit millisecond clocks unfold modulo their source width per surface.
+Intervals spanning an entire 49.7-day wrap remain ambiguous, as in the source
+clock. Zero is valid. Ordinary controls and OShell selection compare event time,
+not delivery time; switching between native and synthetic fallback clocks starts
+a new series. These timestamps are for presses, not frame/animation deadlines.
+
+Click counts are resolved once at the window input boundary, before handlers
+and hit-target-specific actions. Native counts remain authoritative; Windows/GTK
+ordinary presses use the host settings and event clock. Replacing a row or
+handler does not reset a series. Controls and custom views receive the same
+count; a matching release retains its press count even when a drag ended the
+estimated series. Dragging outside the host rectangle resets that estimate.
+The estimate is per window; physical AppKit/GTK multi-window equivalence still
+requires desktop validation. Pruning a pressed handler currently detaches it
+without delivering PointerCancel; that lifecycle remains under separate audit.
+
+`PointerCancel` / `InputPointerCancel` is distinct from release: lost capture or
+window focus cancels local pointer tracking, selection/scrollbar drags, and
+pending context-menu release without clicking or dropping. Handler callbacks
+run after detaching the old pressed owner. Native data drags keep their own
+completion lifecycle. `Tester.CancelPointer` drives the same route. Callers
+with custom pointer state must handle cancellation, including terminal plugins.
+
 ## Testing
 
 Regenerate checked UI wrappers with `go generate ./ui`. Native library and
@@ -2576,3 +2610,7 @@ which npm allows only for packages that exist: the first release uses an
 | native UI data drags | NSDraggingSession, NSPasteboardItemDataProvider, NSDraggingDestination | GTK drag contexts, MIME selections, text/uri-list | OLE IDataObject, IDropSource, IDropTarget, Shell drag images |
 | native UI accessibility | `NSAccessibilityElement` subclasses | ATK objects (GObject types registered through purego), bridged to AT-SPI by GTK | UI Automation fragments (COM objects; assembly thunks for the methods taking doubles) |
 | native UI rendering | Metal, into a CAMetalLayer presenting with the Core Animation transaction | OpenGL 3.3 or ES 3.0 in the GtkGLArea's render signal; on the CPU, painted with cairo, where OpenGL runs on the CPU | Direct3D 11 (WARP without a GPU), flip-model swap chain |
+
+### OShell GTK physical keyboard identity
+
+Terminal-opted-in printable events retain layout Unicode and a separate physical US position. X11 resolves position names using the names-only XKB description, with LP64 structures in `internal/gdkinput`; the returned Xlib allocation is copied then freed. Each surface retains its keymap while connected to `keys-changed`, invalidates its owned table on that signal, and disconnects/unrefs on destruction. Wayland uses the GDK evdev+8 conversion; neither path guesses from the translated symbol. One startup callback serves all surfaces. Missing native APIs and unknown positions omit the optional field. Held-key state retains the original identity until release, and composition/literal text does not acquire physical metadata. Windows-runnable logic and wire tests plus Linux cross-compilation do not replace actual Linux GUI testing.

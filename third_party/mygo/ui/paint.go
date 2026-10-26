@@ -692,17 +692,30 @@ func fitIn(box Rect, w, h float32, fit Fit) (dst, src Rect) {
 }
 
 func (p *Painter) drawBitmap(img *Bitmap, box Rect, fit Fit, radius [4]float32, gray bool) {
+	p.drawBitmapGeometry(img, box, fit, radius, gray, true)
+}
+
+func (p *Painter) drawBitmapGeometry(img *Bitmap, box Rect, fit Fit, radius [4]float32, gray, snap bool) {
 	// A bitmap's own size is its pixels in DIPs, as an Image lays it out.
 	iw, ih := float32(img.w), float32(img.h)
 	dst, frac := fitIn(box, iw, ih, fit)
+	p.drawBitmapRegion(img, dst, frac, radius, gray, snap, false)
+}
+
+func (p *Painter) drawBitmapRegion(img *Bitmap, dst, frac Rect, radius [4]float32, gray, snap, fullSampling bool) {
 	if dst.W <= 0 || dst.H <= 0 {
 		return
 	}
+	iw, ih := float32(img.w), float32(img.h)
 	// Far smaller than its pixels, a level of it, as smooth.
 	shown := img.smaller(min(frac.W*iw/(dst.W*p.scale), frac.H*ih/(dst.H*p.scale)))
 	sw, sh := float32(shown.W), float32(shown.H)
 	src := scene.Rect{X: frac.X * sw, Y: frac.Y * sh, W: frac.W * sw, H: frac.H * sh}
-	p.s.Ops = append(p.s.Ops, scene.Op{Kind: scene.OpImage, Rect: p.snap(dst), Radii: p.radii(radius), Continuous: continuousCorners, Image: shown, Src: src, Opacity: p.opacity, Grayscale: gray})
+	device := scene.Rect{X: dst.X * p.scale, Y: dst.Y * p.scale, W: dst.W * p.scale, H: dst.H * p.scale}
+	if snap {
+		device = p.snap(dst)
+	}
+	p.s.Ops = append(p.s.Ops, scene.Op{Kind: scene.OpImage, Rect: device, Radii: p.radii(radius), Continuous: continuousCorners, Image: shown, Src: src, Opacity: p.opacity, Grayscale: gray, FullImageSampling: fullSampling})
 }
 
 // scrollbars draws the thumbs of a scroll container whose content
@@ -889,6 +902,25 @@ func (p *Painter) Image(src ImageSource, r Rect, fit Fit) {
 	case *SVG:
 		p.drawSVG(s, r, fit, [4]float32{}, p.rt.c.theme.Text, false)
 	}
+}
+
+// BitmapSubpixel draws a bitmap without rounding its destination to device
+// pixels. This preserves fractional image scaling and partial edge coverage.
+// Image and ordinary image widgets retain their pixel-snapped geometry.
+func (p *Painter) BitmapSubpixel(src *Bitmap, r Rect, fit Fit) {
+	if src != nil && src.w > 0 && src.h > 0 {
+		p.drawBitmapGeometry(src, r, fit, [4]float32{}, false, false)
+	}
+}
+
+// BitmapRegionSubpixel maps a normalized source rectangle (0..1) onto r
+// without rounding either rectangle. The source remains the same bitmap, so
+// adjacent fractional crops share interpolation and do not allocate textures.
+func (p *Painter) BitmapRegionSubpixel(src *Bitmap, r, fraction Rect) {
+	if src == nil || src.w <= 0 || src.h <= 0 || fraction.W <= 0 || fraction.H <= 0 {
+		return
+	}
+	p.drawBitmapRegion(src, r, fraction, [4]float32{}, false, false, true)
 }
 
 // FocusRing draws the ring that shows the keyboard focus around r.

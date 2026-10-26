@@ -7,16 +7,85 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"oshell-desktop/internal/core"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestRetainedU01SourceBindingAndBusyGuard(t *testing.T) {
+	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
+	a.prepareSettings()
+	state := a.updateState()
+	state.tokenDraft = "synthetic-token-retained"
+	a.saveUpdateToken(false)
+	a.features.settingsDraft.UpdateRepository = "fixture/other"
+	state.busy = true
+	if err := a.validateUpdateSettings(); err == nil {
+		t.Fatal("source changed while busy")
+	}
+	state.busy = false
+	state.tokenDraft = "synthetic-new-token"
+	a.saveUpdateToken(false)
+	if token, err := core.ReadUpdateToken(a.store.Dir, "fixture/other"); err != nil || token != "" {
+		t.Fatal("token crossed unapplied source")
+	}
+	a.applySettings()
+	a.prepareSettings()
+	if state.hasToken || state.tokenDraft != "" {
+		t.Fatal("old source token shown for new source")
+	}
+	state.tokenDraft = "synthetic-secret\r\ninvalid"
+	a.saveUpdateToken(false)
+	if strings.Contains(state.status, "synthetic-secret") {
+		t.Fatal("error leaked secret")
+	}
+}
+
+func TestP2U04DeferredInstallAndIdleSkipsConfirmation(t *testing.T) {
+	cfg := core.DefaultConfig()
+	cfg.Settings.UpdateRepository = "owner/repo"
+	a := newApp(&core.Store{Dir: t.TempDir()}, cfg)
+	state := a.updateState()
+	state.prepared = &core.PortableUpdate{}
+	state.source = "owner/repo"
+	oldStart, oldConfirm := startPortableUpdate, showUpdateConfirmation
+	defer func() { startPortableUpdate = oldStart; showUpdateConfirmation = oldConfirm }()
+	started := make(chan struct{}, 2)
+	startPortableUpdate = func(*core.PortableUpdate) error { started <- struct{}{}; return fmt.Errorf("synthetic start failure") }
+	showUpdateConfirmation = func(mygo.MessageOptions) (mygo.MessageResult, error) {
+		t.Error("idle install asked session confirmation")
+		return mygo.MessageResult{}, nil
+	}
+	a.features.uploadDraft = &uploadConfirmation{open: true}
+	a.installUpdate()
+	if !state.pendingInstall || state.busy {
+		t.Fatal("modal did not queue install")
+	}
+	a.features.uploadDraft = nil
+	a.drain()
+	waitOperator(t, a, func() bool { return !state.busy && state.status == "synthetic start failure" })
+	select {
+	case <-started:
+	default:
+		t.Fatal("deferred installation never resumed")
+	}
+	a.drain()
+	select {
+	case <-started:
+		t.Fatal("failed install retried without user action")
+	default:
+	}
+	if state.prepared == nil {
+		t.Fatal("failure discarded prepared update")
+	}
+}
 
 func TestUpdateSettingsDraftValidationAndView(t *testing.T) {
 	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
 	a.prepareSettings()
 	a.features.settingsTab = 4
 	tt := ui.NewTester(a.settingsView, 800, 650)
-	if !tt.HasText("GitHub Release 更新") || !tt.HasText("检查更新") {
+	if !tt.HasText("签名更新") || !tt.HasText("检查更新") {
 		t.Fatal(tt.Texts())
 	}
 	a.features.settingsDraft.AutomaticUpdateChecks = true
@@ -109,7 +178,10 @@ func TestUpdateInstallationWaitsForAllWindowModals(t *testing.T) {
 		{"standalone SCP", func(a *App) { a.features.scpDraft = &standaloneSCPDraft{open: true} }},
 		{"sync diagnostics", func(a *App) { a.features.sharedSync.logsOpen = true }},
 		{"vault operation", func(a *App) { a.features.vaultBusy = true }},
-		{"terminal search", func(a *App) { a.features.findOpen = true }},
+		{"terminal search", func(a *App) {
+			p := &pane{search: terminalSearchState{open: true}}
+			a.tabs = []*tab{{root: &node{pane: p}, active: p}}
+		}},
 		{"shortcut capture", func(a *App) { a.features.settingsCapture = "copy" }},
 	}
 	for _, item := range cases {
@@ -130,6 +202,9 @@ func TestUpdateInstallationWaitsForAllWindowModals(t *testing.T) {
 					t.Fatal("pending modal did not block install")
 				}
 				target.features = featureState{}
+				for _, p := range target.allPanes() {
+					p.search.open = false
+				}
 				if owner.updateDialogsOpen() {
 					t.Fatal("dismissed modal kept install blocked")
 				}
@@ -145,6 +220,7 @@ func TestInstallConfirmationSingleFlightAndRetainsPreparedUpdate(t *testing.T) {
 			cfg.Settings.UpdateRepository = "owner/repo"
 			a := newApp(&core.Store{Dir: t.TempDir()}, cfg)
 			a.hub = &applicationHub{windows: []*App{a}, config: cfg}
+			operatorPane(t, a, "active update fixture")
 			prepared := &core.PortableUpdate{}
 			state := a.updateState()
 			state.prepared = prepared

@@ -26,6 +26,10 @@ import (
 )
 
 func savedConnectionFixture(t *testing.T, configure ...func(*ssh.ServerConfig, ssh.Signer)) (*App, core.Profile, *atomic.Int32) {
+	return savedConnectionFixtureWithHandlers(t, nil, configure...)
+}
+
+func savedConnectionFixtureWithHandlers(t *testing.T, prepare func(sftp.Handlers) sftp.Handlers, configure ...func(*ssh.ServerConfig, ssh.Signer)) (*App, core.Profile, *atomic.Int32) {
 	t.Helper()
 	t.Setenv("OSHELL_TEST_NO_AGENT", "1")
 	t.Setenv("OSHELL_TEST_EXPLICIT_KEYS_ONLY", "1")
@@ -67,6 +71,9 @@ func savedConnectionFixture(t *testing.T, configure ...func(*ssh.ServerConfig, s
 	fileHandlers := sftp.InMemHandler()
 	fileHandlers.FileGet = isolatedSFTPReadHandles{fileHandlers.FileGet}
 	fileHandlers.FilePut = isolatedSFTPWriteHandles{fileHandlers.FilePut}
+	if prepare != nil {
+		fileHandlers = prepare(fileHandlers)
+	}
 	if err := fileHandlers.FileCmd.Filecmd(sftp.NewRequest("Mkdir", "/fixture-folder")); err != nil {
 		t.Fatal(err)
 	}

@@ -128,7 +128,7 @@ func (a *App) highlightsDialog(c *ui.Context) {
 						})
 					}
 				})
-				ui.Button(c, "添加规则").Disabled(len(set.Rules) >= 32).OnClick(func() {
+				ui.Button(c, "添加规则").OnClick(func() {
 					set.Rules = append(set.Rules, core.HighlightRule{ID: core.NewID(), Foreground: "#FF5F56", Enabled: true})
 				})
 			}

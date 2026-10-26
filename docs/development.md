@@ -4,13 +4,15 @@
 
 ## 运行与构建
 
-需要 Go 1.27.1+、Python 3。Linux 还需要图形桌面或虚拟显示，以及 GTK 3 / WebKitGTK。
+需要 Go 1.27.1+、Python 3、Git。构建脚本自动下载并校验 Zig 0.16.0，缓存源码和终端运行库；只构建 Windows / Linux。Linux 还需要图形桌面或虚拟显示，以及 GTK 3 / WebKitGTK。
 
 ```sh
-go run .
+python scripts/terminal_runtime.py --target windows/amd64 -- go run .
 python scripts/build.py --target windows/amd64 --single-file --archive
 python3 scripts/build.py --target linux/amd64 --archive
 ```
+
+Linux 开发运行及测试将运行库目标改为 `linux/amd64`。运行库构建入口也可单独使用，输出 DLL / SO 路径；`OSHELL_ZIG` 可指定已有的 0.16.0 编译器。首次构建较慢，后续命中补丁指纹缓存。
 
 单文件参数仅用于 Windows。省略它可生成 Windows 多文件便携包，运行时须保留 DLL、资源和 `oshell-portable` 标记。
 
@@ -21,10 +23,11 @@ python3 scripts/build.py --target linux/amd64 --archive
 ## 测试
 
 ```sh
-go test ./...
+python scripts/terminal_runtime.py --target windows/amd64 -- go test ./...
 go test -race ./internal/core ./internal/terminal/internal/pty ./internal/zmodem
 go vet ./...
 python scripts/test-build.py
+python scripts/test-terminal-runtime.py
 python scripts/test-ci-bundle.py
 python scripts/test-core-shards.py
 python scripts/test-configuration-contract.py
@@ -57,3 +60,5 @@ python scripts/test-configuration-contract.py
 macOS 平台适配和连接助手保留作兼容用途，不参与 Windows / Linux 发布。第三方许可证、必要协议样本和互通脚本不能作为缓存清理。
 
 CI 的容器、缓存和分片规则见 [CI 说明](ci-performance.md)。
+
+OShell 源码索引、功能交互对照及未完成项见 [跨端对齐记录](oshell-parity.md)。测试通过不能代替逐项行为一致性验收。

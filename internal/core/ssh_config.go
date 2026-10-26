@@ -4,10 +4,14 @@ package core
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -26,18 +30,25 @@ func (p Profile) Identity() SSHIdentity {
 type ResolvedSSH struct {
 	Profile      Profile
 	ProxyCommand string
+	OriginalHost string
 }
 
 func ResolveSSH(ctx context.Context, p Profile) (ResolvedSSH, error) {
-	result := ResolvedSSH{Profile: p}
+	result := ResolvedSSH{Profile: p, OriginalHost: p.Host}
 	if p.Kind != "ssh" && p.Kind != "sftp" {
 		return result, nil
 	}
 	binary, e := exec.LookPath("ssh")
+	if e != nil && (!errors.Is(e, exec.ErrNotFound) || !literalSSHWithoutConfig(p.Host)) {
+		return result, fmt.Errorf("无法解析 SSH 配置：未找到 ssh；不能绕过主机别名或配置路由")
+	}
 	if e == nil {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		defer cancel()
-		args := []string{"-G", "-p", strconv.Itoa(p.Port)}
+		args := []string{"-G"}
+		if p.Port > 0 {
+			args = append(args, "-p", strconv.Itoa(p.Port))
+		}
 		if p.Username != "" {
 			args = append(args, "-l", p.Username)
 		}
@@ -62,6 +73,9 @@ func ResolveSSH(ctx context.Context, p Profile) (ResolvedSSH, error) {
 			return result, fmt.Errorf("无法解析 SSH 配置（ssh -G 失败）")
 		}
 	}
+	if result.Profile.Port == 0 {
+		result.Profile.Port = 22
+	}
 	if result.Profile.Username == "" {
 		if u, e := user.Current(); e == nil {
 			result.Profile.Username = u.Username
@@ -74,6 +88,32 @@ func ResolveSSH(ctx context.Context, p Profile) (ResolvedSSH, error) {
 		return result, fmt.Errorf("无法解析 SSH 主机或用户名")
 	}
 	return result, nil
+}
+
+// Without ssh -G, only a literal IP with no standard SSH configuration can
+// safely use the profile directly. Even Host * can route literal addresses.
+func literalSSHWithoutConfig(host string) bool {
+	if net.ParseIP(strings.Trim(host, "[]")) == nil {
+		return false
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	global := "/etc/ssh/ssh_config"
+	if runtime.GOOS == "windows" {
+		base := os.Getenv("ProgramData")
+		if base == "" {
+			return false
+		}
+		global = filepath.Join(base, "ssh", "ssh_config")
+	}
+	for _, path := range []string{filepath.Join(home, ".ssh", "config"), global} {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			return false
+		}
+	}
+	return true
 }
 
 type limitedOutput struct{ bytes.Buffer }
@@ -110,7 +150,7 @@ func applyResolvedSSH(result *ResolvedSSH, output string) {
 				}
 			}
 		case "proxyjump":
-			if p.ProxyID == "" && p.JumpHost == "" && (p.Proxy.Kind == "" || p.Proxy.Kind == "none") && value != "none" {
+			if p.ProxyID == "" && p.JumpHost == "" && result.ProxyCommand == "" && (p.Proxy.Kind == "" || p.Proxy.Kind == "none") && value != "none" {
 				p.JumpHost = value
 			}
 		case "proxycommand":

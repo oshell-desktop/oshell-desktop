@@ -1,8 +1,6 @@
 package terminal
 
 import (
-	"unicode"
-
 	"github.com/egoist/mygo/ui"
 	"oshell-desktop/internal/terminal/internal/vt"
 )
@@ -14,6 +12,7 @@ var keys = map[ui.Key]struct {
 	r   rune
 }{
 	ui.KeyEnter: {vt.KeyEnter, '\r'}, ui.KeyEscape: {vt.KeyEscape, 0}, ui.KeyBackspace: {vt.KeyBackspace, 0},
+	ui.KeyAdd: {vt.KeyNumpadAdd, '+'}, ui.KeyMultiply: {vt.KeyNumpadMultiply, '*'}, ui.KeyClear: {vt.KeyNumpadBegin, 0},
 	ui.KeyTab: {vt.KeyTab, '\t'}, ui.KeySpace: {vt.KeySpace, ' '}, ui.KeyDelete: {vt.KeyDelete, 0},
 	ui.KeyInsert: {vt.KeyInsert, 0}, ui.KeyHome: {vt.KeyHome, 0}, ui.KeyEnd: {vt.KeyEnd, 0},
 	ui.KeyPageUp: {vt.KeyPageUp, 0}, ui.KeyPageDown: {vt.KeyPageDown, 0},
@@ -30,6 +29,16 @@ func init() {
 			key vt.Key
 			r   rune
 		}{vt.KeyF1 + vt.Key(i), 0}
+	}
+	for i := range 23 {
+		key := vt.KeyF1 + vt.Key(i+12)
+		if i >= 13 {
+			key = vt.KeyF26 + vt.Key(i-13)
+		}
+		keys[ui.KeyF13+ui.Key(i)] = struct {
+			key vt.Key
+			r   rune
+		}{key, 0}
 	}
 	for i := range 10 {
 		keys[ui.Key0+ui.Key(i)] = struct {
@@ -52,28 +61,59 @@ func vtKey(k ui.Key) (vt.Key, rune) {
 	return m.key, m.r
 }
 
+func vtEventKey(ev ui.InputEvent) (vt.Key, rune) {
+	key, r := vtKey(ev.Key)
+	if ev.Unshifted != 0 {
+		r = ev.Unshifted
+	}
+	if !ev.Keypad {
+		return key, r
+	}
+	if ev.Key >= ui.Key0 && ev.Key <= ui.Key9 {
+		return vt.KeyNumpad0 + vt.Key(ev.Key-ui.Key0), r
+	}
+	switch ev.Key {
+	case ui.KeyEnter:
+		key = vt.KeyNumpadEnter
+	case ui.KeyMinus:
+		key = vt.KeyNumpadSubtract
+	case ui.KeyEqual:
+		key = vt.KeyNumpadEqual
+	case ui.KeyComma:
+		key = vt.KeyNumpadSeparator
+	case ui.KeyPeriod:
+		key = vt.KeyNumpadDecimal
+	case ui.KeySlash:
+		key = vt.KeyNumpadDivide
+	case ui.KeyLeft:
+		key = vt.KeyNumpadLeft
+	case ui.KeyRight:
+		key = vt.KeyNumpadRight
+	case ui.KeyUp:
+		key = vt.KeyNumpadUp
+	case ui.KeyDown:
+		key = vt.KeyNumpadDown
+	case ui.KeyHome:
+		key = vt.KeyNumpadHome
+	case ui.KeyEnd:
+		key = vt.KeyNumpadEnd
+	case ui.KeyInsert:
+		key = vt.KeyNumpadInsert
+	case ui.KeyDelete:
+		key = vt.KeyNumpadDelete
+	case ui.KeyPageUp:
+		key = vt.KeyNumpadPageUp
+	case ui.KeyPageDown:
+		key = vt.KeyNumpadPageDown
+	}
+	return key, r
+}
+
 // typesText reports whether a key types text, rather than moving or
 // erasing: the text comes after it.
 func typesText(k ui.Key) bool {
 	_, r := vtKey(k)
 	return r > ' ' || k == ui.KeySpace
-}
-
-// keyOfRune returns the key that types r, and whether it takes Shift, on
-// a US keyboard, for text that came without its key, as on Linux.
-func keyOfRune(r rune) (vt.Key, rune, bool) {
-	if r < 0x80 {
-		lower := unicode.ToLower(r)
-		for k, m := range keys {
-			if m.r == lower && m.r > ' ' || k == ui.KeySpace && r == ' ' {
-				return m.key, m.r, lower != r
-			}
-		}
-		if i := shifted[r]; i != 0 {
-			return keys[i].key, keys[i].r, true
-		}
-	}
-	return vt.KeyUnidentified, 0, false
 }
 
 // shifted are the keys of the symbols Shift types on a US keyboard.

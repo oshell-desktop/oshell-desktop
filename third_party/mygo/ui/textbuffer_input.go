@@ -89,6 +89,7 @@ func bufferInputBase(c *context, value *TextBuffer, multiline bool) *node {
 	}
 	e.textClient = ed.client
 	ed.readOnly, ed.password, ed.lines = false, false, [2]int{}
+	ed.noSpellcheck = false
 	ed.ranges = ed.ranges[:0]
 	e.onValueInput(bufferInput)
 

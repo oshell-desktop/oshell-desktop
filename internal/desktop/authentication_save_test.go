@@ -185,28 +185,26 @@ func mixedMFAFixture(config *ssh.ServerConfig, _ ssh.Signer) {
 	}
 }
 
-func TestMixedMFAOnlySavesPasswordAndReusesItInPlace(t *testing.T) {
+// SF-P07: a mixed challenge is fully manual even with a saved password.
+func TestMixedMFAKeepsAllFieldsManualAndNeverSaves(t *testing.T) {
 	a, p, accepted := savedConnectionFixture(t, mixedMFAFixture)
 	for connection := 1; connection <= 2; connection++ {
+		if connection == 2 {
+			if err := a.vault.PutFor(p, "saved-fixture-password", p.Identity()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		before := a.vault.Revision()
 		a.request(p, 0)
 		waitOperator(t, a, func() bool { return len(a.challenges) == 1 })
 		q := a.challenges[0]
-		if connection == 1 {
-			if !q.allowSave || len(q.answers) != 3 || !q.request.Echo[0] || q.request.Echo[1] || q.request.Echo[2] {
-				t.Fatal("mixed challenge lost field metadata")
-			}
-			copy(q.answers, []string{"fixture-label", "saved-fixture-password", "fixture-otp"})
-		} else {
-			if q.allowSave || len(q.answers) != 2 || q.request.Questions[0] != "Account label:" || q.request.Questions[1] != "Verification code:" {
-				t.Fatal("saved password not removed from visible challenge")
-			}
-			copy(q.answers, []string{"fixture-label", "fixture-otp"})
+		if q.allowSave || len(q.answers) != 3 || !q.request.Echo[0] || q.request.Echo[1] || q.request.Echo[2] {
+			t.Fatal("mixed challenge must retain all manual fields without saving")
 		}
+		copy(q.answers, []string{"fixture-label", "saved-fixture-password", "fixture-otp"})
 		tt := ui.NewTester(a.view, 1000, 700)
-		if connection == 1 {
-			if err := tt.Click("密码认证成功后保存登录密码"); err != nil {
-				t.Fatal(err)
-			}
+		if tt.HasText("密码认证成功后保存登录密码") {
+			t.Fatal("mixed challenge offered persistence")
 		}
 		if err := tt.Click("继续认证"); err != nil {
 			t.Fatal(err)
@@ -214,9 +212,8 @@ func TestMixedMFAOnlySavesPasswordAndReusesItInPlace(t *testing.T) {
 		waitOperator(t, a, func() bool {
 			return len(a.tabs) == connection && a.tabs[connection-1].active.term != nil && strings.Contains(a.tabs[connection-1].active.term.Text(), "SAVED_CREDENTIAL_READY")
 		})
-		got, err := a.vault.GetFor(p, p.Identity())
-		if err != nil || got != "saved-fixture-password" {
-			t.Fatal("mixed challenge saved wrong field", err)
+		if a.vault.Revision() != before {
+			t.Fatal("mixed challenge changed credentials")
 		}
 	}
 	if accepted.Load() != 2 {

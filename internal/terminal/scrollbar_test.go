@@ -42,7 +42,7 @@ func TestOverlayScrollbarNativeVTInteractionAndLifecycle(t *testing.T) {
 	if !v.overlay.activity.IsZero() {
 		t.Fatal("output revealed scrollbar")
 	}
-	tt.Key(ui.Shift, ui.KeyPageUp)
+	tt.Key(0, ui.KeyPageUp)
 	if v.overlay.alpha(time.Now()) == 0 {
 		t.Fatal("page scrolling did not show scrollbar")
 	}
@@ -77,7 +77,7 @@ func TestOverlayScrollbarNativeVTInteractionAndLifecycle(t *testing.T) {
 	if v.overlay.alpha(time.Now()) != 0 {
 		t.Fatal("hidden terminal retained scrollbar")
 	}
-	tt.Key(ui.Shift, ui.KeyPageUp)
+	tt.Key(0, ui.KeyPageUp)
 	term.Feed([]byte("\x1b[?1049h"))
 	tt.Frame()
 	if v.overlay.alpha(time.Now()) != 0 {

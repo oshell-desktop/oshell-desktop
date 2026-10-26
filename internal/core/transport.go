@@ -34,6 +34,7 @@ type transport struct {
 	mu               sync.Mutex
 	refs             int
 	closed           bool
+	shutdownComplete bool
 	done             chan struct{}
 	cancel           context.CancelFunc
 	closers          map[io.Closer]bool
@@ -67,7 +68,12 @@ func (t *transport) track(c io.Closer) bool {
 	t.closers[c] = true
 	return true
 }
-func (t *transport) untrack(c io.Closer) { t.mu.Lock(); delete(t.closers, c); t.mu.Unlock() }
+func (t *transport) untrack(c io.Closer) {
+	t.mu.Lock()
+	delete(t.closers, c)
+	t.mu.Unlock()
+	t.releaseDrainedTunnels()
+}
 func (t *transport) shutdown() {
 	t.mu.Lock()
 	if t.closed {
@@ -83,15 +89,22 @@ func (t *transport) shutdown() {
 	}
 	t.mu.Unlock()
 	for _, c := range cs {
-		c.Close()
+		err := c.Close()
+		if _, listener := c.(net.Listener); listener && (err == nil || errors.Is(err, net.ErrClosed)) {
+			t.untrack(c)
+		}
 	}
 	for i := len(t.clients) - 1; i >= 0; i-- {
 		t.clients[i].Close()
 	}
-	t.releaseTunnels()
+	t.mu.Lock()
+	t.shutdownComplete = true
+	t.mu.Unlock()
+	t.releaseDrainedTunnels()
 }
 
 type Connection struct {
+	idleGuard        atomic.Pointer[func() bool]
 	idleChanges      chan KeepAliveSettings
 	managedBusy      atomic.Bool
 	Identity         SSHIdentity
@@ -247,52 +260,6 @@ func authenticate(ctx context.Context, c net.Conn, p Profile, cred Credentials, 
 					}
 				}
 			}
-			if len(questions) > 1 {
-				index := loginPasswordQuestion(p.Identity(), questions, echo)
-				if index >= 0 && cred.Password != "" && !suppliedPasswordUsed && cred.Challenge != nil {
-					suppliedPasswordUsed = true
-					remaining := AuthenticationPrompt{Identity: p.Identity(), Name: name, Instruction: instruction}
-					for i, question := range questions {
-						if i != index {
-							remaining.Questions = append(remaining.Questions, question)
-							remaining.Echo = append(remaining.Echo, echo[i])
-						}
-					}
-					responses, err := cred.Challenge(ctx, remaining)
-					challengeError = err
-					if err != nil {
-						return nil, err
-					}
-					if len(responses) != len(questions)-1 {
-						return nil, fmt.Errorf("认证回答数量无效")
-					}
-					answers := make([]string, len(questions))
-					for i, j := 0, 0; i < len(questions); i++ {
-						if i == index {
-							answers[i] = cred.Password
-						} else {
-							answers[i] = responses[j]
-							j++
-						}
-					}
-					attemptPassword = cred.Password
-					offered.Store(true)
-					return answers, nil
-				}
-				if index >= 0 && cred.MixedPasswordChallenge != nil {
-					answers, err := cred.MixedPasswordChallenge(ctx, AuthenticationPrompt{Identity: p.Identity(), Name: name, Instruction: instruction, Questions: questions, Echo: echo}, index)
-					challengeError = err
-					if err != nil {
-						return nil, err
-					}
-					if len(answers) != len(questions) {
-						return nil, fmt.Errorf("认证回答数量无效")
-					}
-					attemptPassword = answers[index]
-					offered.Store(attemptPassword != "")
-					return answers, nil
-				}
-			}
 			if len(questions) == 0 {
 				return []string{}, nil
 			}
@@ -392,6 +359,11 @@ func authenticate(ctx context.Context, c net.Conn, p Profile, cred Credentials, 
 		}
 
 		if len(signers) > 0 {
+			var err error
+			signers, err = restrictRSAAuthentication(signers, p.LegacySSH)
+			if err != nil {
+				return nil, err
+			}
 			auth = append([]ssh.AuthMethod{ssh.PublicKeys(signers...)}, auth...)
 			authNames = append([]string{"publickey"}, authNames...)
 		}
@@ -429,11 +401,7 @@ func authenticate(ctx context.Context, c net.Conn, p Profile, cred Credentials, 
 	}
 
 	if p.LegacySSH {
-		good, bad := ssh.SupportedAlgorithms(), ssh.InsecureAlgorithms()
-		cfg.KeyExchanges = append(good.KeyExchanges, bad.KeyExchanges...)
-		cfg.Ciphers = append(good.Ciphers, bad.Ciphers...)
-		cfg.MACs = append(good.MACs, bad.MACs...)
-		cfg.HostKeyAlgorithms = append(good.HostKeys, bad.HostKeys...)
+		configureLegacySSH(cfg)
 	}
 	stop := context.AfterFunc(hctx, func() { c.Close() })
 	defer stop()
@@ -468,7 +436,9 @@ func Dial(ctx context.Context, p Profile, cred Credentials, trust *TrustStore, a
 		return nil, e
 	}
 	p = resolved.Profile
-	if e = p.Validate(); e != nil {
+	validated := p
+	validated.JumpHost = ""
+	if e = validated.Validate(); e != nil {
 		return nil, e
 	}
 	if cred.ExpectedIdentity != nil && *cred.ExpectedIdentity != p.Identity() {
@@ -497,40 +467,13 @@ func Dial(ctx context.Context, p Profile, cred Credentials, trust *TrustStore, a
 			return nil, e
 		}
 	} else {
-		var jumps []Profile
-		if p.Proxy.Kind == "jump" {
-			j := NewProfile()
-			j.Name = "跳板机"
-			j.Host = p.Proxy.Host
-			j.Port = p.Proxy.Port
-			j.Username = p.Proxy.Username
-			j.IdentityFile = p.Proxy.IdentityFile
-			j.LegacySSH = p.LegacySSH
-			jumps = append(jumps, j)
+		jumps, err := resolveJumpRoute(ctx, p, ResolveSSH)
+		if err != nil {
+			return nil, err
 		}
-		if p.JumpHost != "" {
-			for _, spec := range strings.Split(p.JumpHost, ",") {
-				j, e := parseJump(spec, p.Username)
-				if e != nil {
-					return nil, e
-				}
-				j.IdentityFile = p.Proxy.IdentityFile
-				j.LegacySSH = p.LegacySSH
-				jumps = append(jumps, j)
-			}
-		}
-		for i, jump := range jumps {
-			r, e := ResolveSSH(ctx, jump)
-			if e != nil {
-				return nil, e
-			}
-			jumps[i] = r.Profile
-			if r.ProxyCommand != "" || r.Profile.JumpHost != "" {
-				return nil, fmt.Errorf("跳板机的嵌套 ProxyCommand/ProxyJump 尚不支持，请显式填写完整跳板链")
-			}
-		}
-		chain := append(jumps, p)
-		for i, hop := range chain {
+		chain := append(jumps, resolved)
+		for i, resolvedHop := range chain {
+			hop := resolvedHop.Profile
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
@@ -541,8 +484,8 @@ func Dial(ctx context.Context, p Profile, cred Credentials, trust *TrustStore, a
 				if len(jumps) > 0 {
 					proxy = ProxySettings{Kind: "none"}
 				}
-				if resolved.ProxyCommand != "" && len(jumps) == 0 {
-					socket, e = dialProxyCommand(tctx, resolved.ProxyCommand, hop)
+				if resolvedHop.ProxyCommand != "" {
+					socket, e = dialProxyCommand(tctx, resolvedHop.ProxyCommand, hop, resolvedHop.OriginalHost)
 				} else {
 					socket, e = proxyConnect(ctx, proxy, cred.ProxyPassword, hop.Address(), p.KeepAlive.TCP)
 				}
@@ -551,6 +494,9 @@ func Dial(ctx context.Context, p Profile, cred Credentials, trust *TrustStore, a
 			}
 			if e != nil {
 				return nil, e
+			}
+			if i == 0 {
+				t.observeSocket(socket)
 			}
 			hc := cred
 			if i < len(jumps) {
@@ -570,13 +516,6 @@ func Dial(ctx context.Context, p Profile, cred Credentials, trust *TrustStore, a
 	}
 	t.client = t.clients[len(t.clients)-1]
 	go func() { _ = t.client.Wait(); t.shutdown() }()
-	if len(p.RuntimeProxyRoute) == 0 && (p.Proxy.Kind == "" || p.Proxy.Kind == "none") && p.JumpHost == "" && resolved.ProxyCommand == "" {
-		if peer, ok := t.client.RemoteAddr().(*net.TCPAddr); ok {
-			copy := *peer
-			copy.IP = append(net.IP(nil), peer.IP...)
-			t.observedPeer = &copy
-		}
-	}
 	stop := context.AfterFunc(ctx, t.shutdown)
 	defer stop()
 
@@ -733,6 +672,7 @@ func (c *Connection) LogState() (string, bool, error) {
 	defer c.logMu.Unlock()
 	return c.logPath, c.logFile != nil, c.logError
 }
+func (c *Connection) SetIdleGuard(guard func() bool) { c.idleGuard.Store(&guard) }
 func (c *Connection) SetManagedBusy(busy bool) {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
@@ -814,6 +754,9 @@ func (c *Connection) sendIdleIfNeeded(k KeepAliveSettings) error {
 	if !k.IdleEnabled || c.managedBusy.Load() || time.Since(time.Unix(0, c.lastActivity.Load())) < time.Duration(k.IdleInterval)*time.Second {
 		return nil
 	}
+	if guard := c.idleGuard.Load(); guard != nil && *guard != nil && !(*guard)() {
+		return nil
+	}
 	data, err := IdleBytes(k.IdleText)
 	if err != nil {
 		return err
@@ -855,8 +798,8 @@ func (t *transport) keepAlive(k KeepAliveSettings) {
 	}
 }
 
-// ObservedPeer reports only a directly observed target TCP peer. Proxy routing
-// must not relabel the proxy endpoint or a configured destination as target IP.
+// ObservedPeer is the actual local TCP peer. With routing this is the proxy
+// or first jump, never a DNS guess for the final host.
 func (c *Connection) ObservedPeer() (string, int) {
 	if c == nil || c.transport == nil || c.transport.observedPeer == nil {
 		return "", 0
@@ -897,5 +840,13 @@ func (c *Connection) WaitClosed(ctx context.Context) error {
 		return nil
 	case <-transportDone:
 		return nil
+	}
+}
+
+func (t *transport) observeSocket(socket net.Conn) {
+	if peer, ok := socket.RemoteAddr().(*net.TCPAddr); ok {
+		copy := *peer
+		copy.IP = append(net.IP(nil), peer.IP...)
+		t.observedPeer = &copy
 	}
 }

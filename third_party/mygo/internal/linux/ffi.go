@@ -130,6 +130,7 @@ var (
 	gObjectRefSink                 func(obj ptr) ptr
 	gObjectUnref                   func(obj ptr)
 	gObjectSetBool                 func(obj ptr, name *byte, v bool, end ptr)
+	gObjectSetInt                  func(obj ptr, name *byte, v int32, end ptr)
 	gObjectGetPtr                  func(obj ptr, name *byte, out unsafe.Pointer, end ptr)
 	gSlistFree                     func(list ptr)
 	gListFree                      func(list ptr)
@@ -567,6 +568,7 @@ func load() error {
 	mustBind(o, &gObjectRefSink, "g_object_ref_sink")
 	mustBind(o, &gObjectUnref, "g_object_unref")
 	mustBind(o, &gObjectSetBool, "g_object_set")
+	mustBind(o, &gObjectSetInt, "g_object_set")
 	mustBind(o, &gObjectGetPtr, "g_object_get")
 
 	i := libGIO

@@ -37,7 +37,7 @@ func passwordSelectAll(input ui.Element, value *string) ui.Element {
 func revealPasswordInput(c *ui.Context, value *string, revealed *bool) ui.Element {
 	var input ui.Element
 	ui.Row(c).FillWidth().Gap(8).Children(func() {
-		input = passwordSelectAll(ui.TextInput(c, value), value).Grow(1)
+		input = passwordSelectAll(ui.TextInput(c, value).NoSpellcheck(), value).Grow(1)
 		if !*revealed {
 			input.Password()
 		}

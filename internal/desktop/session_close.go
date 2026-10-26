@@ -31,7 +31,7 @@ func (a *App) requestSessionClose(t *tab, p *pane) {
 	} else {
 		a.walk(t.root, func(p *pane) { active = active || paneNeedsCloseConfirmation(p) })
 	}
-	if active {
+	if active && a.localUI.ConfirmTabClose {
 		a.features.sessionClose = request
 		return
 	}

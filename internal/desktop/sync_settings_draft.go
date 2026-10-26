@@ -7,10 +7,15 @@ import (
 
 func (a *App) syncOptionsChanged() bool {
 	f := &a.features.sharedSync
-	return f.loaded && (f.options != f.savedOptions || f.password != "")
+	return f.loaded && (!equivalentSyncOptions(f.options, f.savedOptions) || f.password != "")
 }
 
 func (a *App) validateSyncDraft() error {
+	if a.features.sharedSync.loaded {
+		if err := a.features.sharedSync.options.Policy.Validate(); err != nil {
+			return err
+		}
+	}
 	if err := a.validateDirectoryDraft(); err != nil {
 		return err
 	}
@@ -69,7 +74,7 @@ func (a *App) applySyncDraft(done func()) {
 	changed := a.syncOptionsChanged()
 	if f.directoryDisabled && f.options.Backend == "directory" {
 		f.options.Enabled = false
-		changed = f.loaded && f.options != f.savedOptions
+		changed = f.loaded && !equivalentSyncOptions(f.options, f.savedOptions)
 	}
 	if err := a.applyDirectoryDraft(); err != nil {
 		a.features.settingsError = err.Error()
@@ -80,4 +85,10 @@ func (a *App) applySyncDraft(done func()) {
 		return
 	}
 	done()
+}
+
+func equivalentSyncOptions(a, b core.SyncOptions) bool {
+	a.Policy = a.Policy.Effective()
+	b.Policy = b.Policy.Effective()
+	return a == b
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/egoist/mygo/ui"
 	"oshell-desktop/internal/core"
+	"slices"
 )
 
 type authenticationAnswer struct {
@@ -35,6 +36,7 @@ func askAuthentication(ctx context.Context, p *pane, request core.Authentication
 }
 
 func askAuthenticationWithSaving(ctx context.Context, p *pane, request core.AuthenticationPrompt, allowSave bool) authenticationAnswer {
+	allowSave = allowSave && !p.externalLaunch
 	challenge := &authenticationChallenge{allowSave: allowSave, pane: p, id: core.NewID(), ctx: ctx, request: request, answers: make([]string, len(request.Questions)), open: true, done: make(chan authenticationAnswer, 1)}
 	return waitAuthentication(ctx, p, challenge)
 }
@@ -152,7 +154,7 @@ func (a *App) finishChallenge(q *authenticationChallenge, cancelled bool) {
 func (a *App) removeChallenge(challenge *authenticationChallenge) {
 	for i, v := range a.challenges {
 		if v == challenge {
-			a.challenges = append(a.challenges[:i], a.challenges[i+1:]...)
+			a.challenges = slices.Delete(a.challenges, i, i+1)
 			break
 		}
 	}

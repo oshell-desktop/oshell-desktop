@@ -15,6 +15,7 @@ import (
 var ErrSyncDeferred = errors.New("共享端已接收本次修改，本机有新变化，等待下一轮同步合并")
 
 type SharedSyncEngine struct {
+	Selection *SyncContentSelection
 	Manual    bool
 	Progress  func(SyncEvent, error)
 	Store     *Store
@@ -23,6 +24,8 @@ type SharedSyncEngine struct {
 	Replica   SharedReplicaStore
 }
 type SharedSyncPlan struct {
+	selection                        SyncContentSelection
+	fullLocal                        SharedDocument
 	protocolUpgrade                  bool
 	runID                            string
 	started                          time.Time
@@ -53,6 +56,13 @@ func sameShared(a, b SharedDocument) bool {
 	return equalSharedJSON(x, y)
 }
 func (e *SharedSyncEngine) Prepare(ctx context.Context, cfg Config, master []byte, allowCreate bool) (_ *SharedSyncPlan, resultErr error) {
+	selection := DefaultSyncPolicy().Content
+	if e.Selection != nil {
+		selection = *e.Selection
+	}
+	if selection == (SyncContentSelection{}) {
+		return nil, fmt.Errorf("请至少选择一类同步内容")
+	}
 	started := time.Now()
 	runID := NewID()
 	e.recordDiagnostic(SyncStarted, started, nil, runID)
@@ -85,10 +95,15 @@ func (e *SharedSyncEngine) Prepare(ctx context.Context, cfg Config, master []byt
 		baseline = replica.Baseline
 		digests = replica.CredentialDigests
 	}
-	local, digests, err := e.Vault.ExportSharedDocument(ctx, cfg, master, cached, digests)
+	exportConfig := cfg.Clone()
+	if !selection.Sessions {
+		exportConfig.Profiles, exportConfig.Proxies, exportConfig.Directories, exportConfig.Links, exportConfig.LinkRootOrder = nil, nil, nil, nil, nil
+	}
+	local, digests, err := e.Vault.ExportSharedDocument(ctx, exportConfig, master, cached, digests)
 	if err != nil {
 		return nil, err
 	}
+	fullLocal := local
 	draft, err := e.ConflictStore().Load(master)
 	if err != nil {
 		return nil, err
@@ -102,9 +117,9 @@ func (e *SharedSyncEngine) Prepare(ctx context.Context, cfg Config, master []byt
 	}
 	// Validate full documents before projecting them. Unknown or invalid legacy
 	// settings must still fail closed rather than being silently discarded.
-	local = sessionSyncDocument(local)
+	local = sessionSyncDocument(local, selection)
 	if baseline != nil {
-		projected := sessionSyncDocument(*baseline)
+		projected := sessionSyncDocument(*baseline, selection)
 		baseline = &projected
 	}
 	object, err := e.Transport.Fetch(ctx)
@@ -113,6 +128,7 @@ func (e *SharedSyncEngine) Prepare(ctx context.Context, cfg Config, master []byt
 	}
 	e.recordDiagnostic(SyncFetched, started, nil, runID)
 	plan := &SharedSyncPlan{runID: runID, started: started, Local: local, originalLocal: local, configuration: cfg.Clone(), revision: revision, vaultRevision: vaultRevision, digests: digests, baseline: baseline, engine: e}
+	plan.selection, plan.fullLocal = selection, fullLocal
 	if object == nil {
 		if baseline != nil || draft != nil || !allowCreate {
 			return nil, safeSyncFailure("remote-deleted")
@@ -131,7 +147,7 @@ func (e *SharedSyncEngine) Prepare(ctx context.Context, cfg Config, master []byt
 	remote.Verifier = local.Verifier
 	compatibility := remote
 	plan.compatibility = &compatibility
-	plan.Remote = sessionSyncDocument(remote)
+	plan.Remote = sessionSyncDocument(remote, selection)
 	var header struct{ Version int }
 	json.Unmarshal(object.Data, &header)
 	plan.protocolUpgrade = remote.needsProtocolUpgrade() || header.Version != 2
@@ -176,7 +192,7 @@ func (p *SharedSyncPlan) ChooseInitial(mergeLocal bool) error {
 		p.Local = p.Remote
 		return nil
 	}
-	merge, err := newInitialSessionMerge(p.Local, p.Remote)
+	merge, err := newInitialSessionMerge(p.Local, p.Remote, p.selection)
 	if err != nil {
 		return err
 	}
@@ -238,12 +254,19 @@ func (p *SharedSyncPlan) Commit(ctx context.Context, choices map[string]SharedMe
 		e.recordDiagnostic(SyncUnchanged, started, nil, runID)
 		return p.configuration, nil
 	}
-	next, updates, err := document.PrepareLocalReplacement(ctx, p.configuration, master)
+	replacement := sessionSyncWire(document, &p.fullLocal, p.selection)
+	var next Config
+	var updates []CredentialUpdate
+	if p.selection.Sessions {
+		next, updates, err = replacement.PrepareLocalReplacement(ctx, p.configuration, master)
+	} else {
+		next, err = replacement.Configuration()
+	}
 	if err != nil {
 		return p.configuration, err
 	}
-	next = applySessionSync(next, p.configuration)
-	wire := sessionSyncWire(document, p.compatibility)
+	next = applySessionSync(next, p.configuration, p.selection)
+	wire := sessionSyncWire(document, p.compatibility, p.selection)
 	encrypted, err := wire.Encode(master)
 	if err != nil {
 		return p.configuration, err
@@ -289,7 +312,11 @@ func (p *SharedSyncPlan) Commit(ctx context.Context, choices map[string]SharedMe
 		return p.configuration, err
 	}
 	// The cached export uses local ciphertext digests after the transaction.
-	cached, digests, err := e.Vault.ExportSharedDocument(ctx, next, master, &document, p.digests)
+	exportConfig := next.Clone()
+	if !p.selection.Sessions {
+		exportConfig.Profiles, exportConfig.Proxies, exportConfig.Directories, exportConfig.Links, exportConfig.LinkRootOrder = nil, nil, nil, nil, nil
+	}
+	cached, digests, err := e.Vault.ExportSharedDocument(ctx, exportConfig, master, &document, p.digests)
 	if err != nil {
 		return next, fmt.Errorf("配置已同步，但无法更新同步基准：%w", err)
 	}

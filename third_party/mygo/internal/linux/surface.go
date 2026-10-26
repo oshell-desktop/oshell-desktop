@@ -8,10 +8,13 @@ import (
 	"math"
 	"os"
 	"sync"
+	"time"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/ebitengine/purego"
 
+	"github.com/egoist/mygo/internal/gdkinput"
 	"github.com/egoist/mygo/internal/gpu/gl"
 	"github.com/egoist/mygo/internal/platform"
 )
@@ -46,6 +49,7 @@ var (
 	gtkWidgetGetScaleFactor     func(w ptr) int32
 	gtkWidgetGetDisplay         func(w ptr) ptr
 	gtkWidgetHasFocus           func(w ptr) bool
+	gtkWidgetGetSettings        func(w ptr) ptr
 	gtkIMMulticontextNew        func() ptr
 	gtkIMContextSetClientWindow func(im, win ptr)
 	gtkIMContextFilterKeypress  func(im, event ptr) bool
@@ -55,6 +59,9 @@ var (
 	gtkIMContextSetCursorLoc    func(im ptr, r *gdkRectangle)
 	gtkIMContextGetPreedit      func(im ptr, str *ptr, attrs *ptr, cursor *int32)
 	gdkKeyvalToUnicode          func(keyval uint32) uint32
+	gdkEventGetKeycode          func(event ptr, keycode *uint16) bool
+	gdkKeymapForDisplay         func(display ptr) ptr
+	gdkKeymapTranslate          func(keymap ptr, code, state uint32, group int32, keyval *uint32, effectiveGroup, level *int32, consumed *uint32) bool
 	cairoImageSurfaceForData    func(data *byte, format, width, height, stride int32) ptr
 	cairoSurfaceSetDeviceScale  func(s ptr, x, y float64)
 	cairoSetSourceSurface       func(cr, s ptr, x, y float64)
@@ -72,6 +79,8 @@ var (
 	cbSurfaceMotion, cbSurfaceLeave, cbSurfaceScroll, cbSurfaceKey  ptr
 	cbSurfaceFocusIn, cbSurfaceFocusOut, cbSurfaceScale, cbIMCommit ptr
 	cbIMPreedit, cbIMPreeditEnd, cbSurfaceRender, cbAreaContext     ptr
+	cbIMPreeditStart                                                ptr
+	cbSurfaceGrabBroken                                             ptr
 	cbSurfaceUnrealize, cbSurfaceTick                               ptr
 	surfaceCursors                                                  = map[platform.Cursor]ptr{}
 )
@@ -92,6 +101,7 @@ func loadSurface() {
 		mustBind(t, &gtkWidgetGetScaleFactor, "gtk_widget_get_scale_factor")
 		mustBind(t, &gtkWidgetGetDisplay, "gtk_widget_get_display")
 		mustBind(t, &gtkWidgetHasFocus, "gtk_widget_has_focus")
+		mustBind(t, &gtkWidgetGetSettings, "gtk_widget_get_settings")
 		mustBind(t, &gtkIMMulticontextNew, "gtk_im_multicontext_new")
 		mustBind(t, &gtkIMContextSetClientWindow, "gtk_im_context_set_client_window")
 		mustBind(t, &gtkIMContextFilterKeypress, "gtk_im_context_filter_keypress")
@@ -101,6 +111,9 @@ func loadSurface() {
 		mustBind(t, &gtkIMContextSetCursorLoc, "gtk_im_context_set_cursor_location")
 		mustBind(t, &gtkIMContextGetPreedit, "gtk_im_context_get_preedit_string")
 		mustBind(d, &gdkKeyvalToUnicode, "gdk_keyval_to_unicode")
+		mustBind(d, &gdkEventGetKeycode, "gdk_event_get_keycode")
+		mustBind(d, &gdkKeymapForDisplay, "gdk_keymap_get_for_display")
+		mustBind(d, &gdkKeymapTranslate, "gdk_keymap_translate_keyboard_state")
 		mustBind(c, &cairoImageSurfaceForData, "cairo_image_surface_create_for_data")
 		mustBind(c, &cairoSurfaceSetDeviceScale, "cairo_surface_set_device_scale")
 		mustBind(c, &cairoSetSourceSurface, "cairo_set_source_surface")
@@ -118,11 +131,15 @@ func loadSurface() {
 }
 
 type surface struct {
+	pointerClock      platform.MillisClock
+	keypad            gdkinput.Keypad
+	functional        gdkinput.FunctionalKeys
+	physical          physicalKeymap
 	clientComposition platform.InputComposition
 	w                 *window
-	area              ptr // GtkGLArea, or GtkDrawingArea
-	im                ptr // GtkIMContext
-	cr                ptr // the cairo context of the draw signal in progress
+	area              ptr              // GtkGLArea, or GtkDrawingArea
+	im                gdkinput.Context // GtkIMContext identity and in-flight lifetime
+	cr                ptr              // the cairo context of the draw signal in progress
 	cursor            platform.Cursor
 	// gl tells that the area is a GtkGLArea, rendering that its render
 	// signal is in progress, rendered that it ran.
@@ -167,12 +184,9 @@ func (w *window) createSurface() {
 	loadSurface()
 	data := ptr(w.id)
 	s := &surface{w: w}
-	s.im = gtkIMMulticontextNew()
 	s.newArea(gtkGLAreaNew != nil && os.Getenv("MYGO_GPU") != "0" && gpuGL())
-	connect(s.im, "commit", cbIMCommit, data)
-	connect(s.im, "preedit-changed", cbIMPreedit, data)
-	connect(s.im, "preedit-end", cbIMPreeditEnd, data)
 	s.connectSystem(data)
+	s.replaceIM(false)
 	w.surface = s
 }
 
@@ -206,6 +220,7 @@ func (s *surface) newArea(gl bool) {
 	connect(s.area, "notify::scale-factor", cbSurfaceScale, data)
 	connect(s.area, "button-press-event", cbSurfaceButton, data)
 	connect(s.area, "button-release-event", cbSurfaceButton, data)
+	connect(s.area, "grab-broken-event", cbSurfaceGrabBroken, data)
 	connect(s.area, "motion-notify-event", cbSurfaceMotion, data)
 	connect(s.area, "leave-notify-event", cbSurfaceLeave, data)
 	connect(s.area, "scroll-event", cbSurfaceScroll, data)
@@ -234,15 +249,14 @@ func (w *window) contentWindow() ptr {
 }
 
 func (s *surface) destroy() {
+	s.clearPhysicalKeys()
 	s.cancelPendingDrop()
 	s.CancelDataDrag()
 	if s.lastPointer != 0 {
 		gdkEventFree(s.lastPointer)
 		s.lastPointer = 0
 	}
-	gtkIMContextSetClientWindow(s.im, 0)
-	gObjectUnref(s.im)
-	s.im = 0
+	s.im.Replace(0, s.retireIM)
 	if s.lastKey != 0 {
 		gdkEventFree(s.lastKey)
 		s.lastKey = 0
@@ -448,20 +462,109 @@ func (s *surface) SetCursor(c platform.Cursor) {
 }
 
 func (s *surface) SetTextInput(t platform.TextInputState) {
+	if s.w.closed {
+		return
+	}
 	active, caret := t.Active, t.Caret
-	if s.textInput && (!active || s.input.Client != t.Client) {
-		s.clientComposition.Reset()
-		gtkIMContextReset(s.im)
+	purposeChanged := s.input.Password != t.Password || s.input.NoSpellcheck != t.NoSpellcheck
+	replace := s.textInput && (!active || s.input.Client != t.Client || s.input.FunctionalTarget != t.FunctionalTarget)
+	if s.input.FunctionalTarget != t.FunctionalTarget || !active {
+		s.keypad.Reset()
+		s.functional.Reset()
 	}
 	s.input = t
 	s.textInput, s.caret = active, caret
-	if active {
+	if !active && replace {
+		s.im.Replace(0, s.retireIM)
+	} else if active && (replace || s.im.Handle() == 0) {
+		s.replaceIM(active && gtkWidgetHasFocus(s.area))
+	} else if purposeChanged {
+		s.withIM(s.configureIM)
+	}
+	if s.input.Active && s.im.Handle() != 0 {
+		caret = s.caret // A native retirement callback may have changed targets.
 		r := gdkRectangle{X: int32(caret.X), Y: int32(caret.Y), Width: max(int32(caret.W), 1), Height: int32(caret.H + 0.5)}
-		gtkIMContextSetCursorLoc(s.im, &r)
+		s.withIM(func(im ptr) { gtkIMContextSetCursorLoc(im, &r) })
 	}
 }
 
+func (s *surface) acceptIMInput(im ptr) bool {
+	return s != nil && !s.w.closed && s.input.Active && s.im.Accept(im) && !s.clientComposition.Canceling()
+}
+
+func (s *surface) replaceIM(focused bool) {
+	if s.w.closed {
+		return
+	}
+	im := gtkIMMulticontextNew()
+	data := ptr(s.w.id)
+	connect(im, "commit", cbIMCommit, data)
+	connect(im, "preedit-start", cbIMPreeditStart, data)
+	connect(im, "preedit-changed", cbIMPreedit, data)
+	connect(im, "preedit-end", cbIMPreeditEnd, data)
+	connect(im, "retrieve-surrounding", cbIMRetrieveSurrounding, data)
+	connect(im, "delete-surrounding", cbIMDeleteSurrounding, data)
+	s.im.Replace(im, s.retireIM)
+	// A retirement callback can close or replace the target reentrantly.
+	if !s.im.Accept(im) {
+		return
+	}
+	s.withIM(func(im ptr) {
+		s.configureIM(im)
+		if !s.im.Accept(im) {
+			return
+		}
+		gtkIMContextSetClientWindow(im, s.eventWindow())
+		if focused && s.im.Accept(im) {
+			gtkIMContextFocusIn(im)
+		}
+	})
+}
+
+func (s *surface) configureIM(im ptr) {
+	purpose, hints := gdkinput.InputPurpose(s.input)
+	gObjectSetInt(im, cs("input-purpose"), purpose, 0)
+	if s.im.Accept(im) {
+		_, hints = gdkinput.InputPurpose(s.input)
+		gObjectSetInt(im, cs("input-hints"), hints, 0)
+	}
+}
+
+func (s *surface) retireIM(im ptr) {
+	s.cancelInput(func() {
+		defer gObjectUnref(im)
+		gtkIMContextFocusOut(im)
+		gtkIMContextReset(im)
+		gtkIMContextSetClientWindow(im, 0)
+	})
+}
+
+func (s *surface) filterIMKeypress(event ptr) bool {
+	return s.im.Filter(func(im uintptr) bool { return gtkIMContextFilterKeypress(im, event) },
+		func(im uintptr) { gObjectRef(im) }, func(im uintptr) { gObjectUnref(im) })
+}
+
+func (s *surface) withIM(action func(ptr)) bool {
+	return s.im.Use(action, func(im uintptr) { gObjectRef(im) }, func(im uintptr) { gObjectUnref(im) })
+}
+
+func (s *surface) cancelInput(cancel func()) {
+	s.keypad.Reset()
+	s.functional.Reset()
+	defer func() {
+		s.keypad.Reset()
+		s.functional.Reset()
+	}()
+	s.clientComposition.CancelNative(cancel)
+}
+
 func (s *surface) send(ev platform.SurfaceEvent) bool {
+	if s.clientComposition.Canceling() && (ev.Kind == platform.TextInput || ev.Kind == platform.TextComposition) {
+		return true
+	}
+	if s.functional.Capture(ev) {
+		return true
+	}
 	if ev.Kind == platform.PointerDown || ev.Kind == platform.SurfaceBlur {
 		s.clientComposition.Reset()
 	}
@@ -505,22 +608,19 @@ func modifierKeyval(keyval uint32) platform.Modifiers {
 }
 
 var gdkKeys = map[uint32]platform.Key{
-	0xff0d: platform.KeyEnter, 0xff8d: platform.KeyEnter, 0xff1b: platform.KeyEscape, 0xff08: platform.KeyBackspace,
-	0xff09: platform.KeyTab, 0xfe20: platform.KeyTab, 0x20: platform.KeySpace, 0xffff: platform.KeyDelete,
-	0xff9f: platform.KeyDelete, 0xff63: platform.KeyInsert, 0xff50: platform.KeyHome, 0xff95: platform.KeyHome,
-	0xff57: platform.KeyEnd, 0xff9c: platform.KeyEnd, 0xff55: platform.KeyPageUp, 0xff9a: platform.KeyPageUp,
-	0xff56: platform.KeyPageDown, 0xff9b: platform.KeyPageDown, 0xff51: platform.KeyLeft, 0xff96: platform.KeyLeft,
-	0xff52: platform.KeyUp, 0xff97: platform.KeyUp, 0xff53: platform.KeyRight, 0xff98: platform.KeyRight,
-	0xff54: platform.KeyDown, 0xff99: platform.KeyDown, 0xff67: platform.KeyContextMenu,
-	0x1008ff26: platform.KeyBack, 0x1008ff27: platform.KeyForward, // XF86Back, XF86Forward
+	0x20:       platform.KeySpace,
+	0x1008ff26: platform.KeyBack, 0x1008ff27: platform.KeyForward,
 }
 
 func keyvalKey(keyval uint32) platform.Key {
+	if k, _ := gdkinput.KeypadKey(keyval); k != platform.KeyUnknown {
+		return k
+	}
 	if k, ok := gdkKeys[keyval]; ok {
 		return k
 	}
-	if keyval >= 0xffbe && keyval <= 0xffc9 {
-		return platform.KeyF1 + platform.Key(keyval-0xffbe)
+	if k := gdkinput.FunctionalKey(keyval); k != platform.KeyUnknown {
+		return k
 	}
 	if r := gdkKeyvalToUnicode(keyval); r != 0 {
 		return platform.KeyForRune(rune(r))
@@ -536,6 +636,7 @@ func (b *Backend) surfaceOf(data ptr) *surface {
 }
 
 func initSurfaceCallbacks() {
+	initPhysicalKeys()
 	b := func() *Backend { return theBackend }
 	cbSurfaceDraw = purego.NewCallback(func(widget, cr, data ptr) bool {
 		s := b().surfaceOf(data)
@@ -620,16 +721,26 @@ func initSurfaceCallbacks() {
 	// has them: fcitx5's disconnects from it.
 	cbSurfaceUnrealize = purego.NewCallback(func(widget, data ptr) {
 		if s := b().surfaceOf(data); s != nil {
-			gtkIMContextSetClientWindow(s.im, 0)
+			s.im.Replace(0, s.retireIM)
 		}
 	})
 	cbSurfaceRealize = purego.NewCallback(func(widget, data ptr) {
 		if s := b().surfaceOf(data); s != nil {
-			gtkIMContextSetClientWindow(s.im, s.eventWindow())
+			if s.input.Active && s.im.Handle() == 0 {
+				s.replaceIM(gtkWidgetHasFocus(s.area))
+			} else {
+				s.withIM(func(im ptr) { gtkIMContextSetClientWindow(im, s.eventWindow()) })
+			}
 			if s.cursor != platform.CursorDefault {
 				s.SetCursor(s.cursor) // on the area that took another's place
 			}
 		}
+	})
+	cbSurfaceGrabBroken = purego.NewCallback(func(widget, event, data ptr) bool {
+		if s := b().surfaceOf(data); s != nil && field[int32](event, 20) == 0 { // GdkEventGrabBroken.keyboard
+			s.send(platform.SurfaceEvent{Kind: platform.PointerCancel})
+		}
+		return false
 	})
 	// GdkEventButton: type 0, time 20, x 24, y 32, state 48, button 52.
 	cbSurfaceButton = purego.NewCallback(func(widget, event, data ptr) bool {
@@ -658,6 +769,11 @@ func initSurfaceCallbacks() {
 		if !ok {
 			return true
 		}
+		// Snapshot the clock before focusing the widget can dispatch nested input.
+		var timestamp time.Duration
+		if typ == 4 {
+			timestamp = s.pointerClock.Expand(field[uint32](event, 20))
+		}
 		kind := platform.PointerDown
 		if typ == 7 {
 			kind = platform.PointerUp
@@ -670,7 +786,21 @@ func initSurfaceCallbacks() {
 			}
 			s.lastPointer = gdkEventCopy(event)
 		}
-		s.send(platform.SurfaceEvent{Kind: kind, X: field[float64](event, 24), Y: field[float64](event, 32), Button: button, Mods: mods})
+		ev := platform.SurfaceEvent{Kind: kind, X: field[float64](event, 24), Y: field[float64](event, 32), Button: button, Mods: mods}
+		if kind == platform.PointerDown {
+			ev.HasTimestamp, ev.Timestamp = true, timestamp
+			var interval, distance int32
+			settings := gtkWidgetGetSettings(s.area)
+			if settings != 0 {
+				gObjectGetPtr(settings, cs("gtk-double-click-time"), unsafe.Pointer(&interval), 0)
+				gObjectGetPtr(settings, cs("gtk-double-click-distance"), unsafe.Pointer(&distance), 0)
+				ev.HasDoubleClickSettings = true
+				ev.DoubleClickInterval = time.Duration(interval) * time.Millisecond
+				ev.DoubleClickDistanceX = float64(distance)
+				ev.DoubleClickDistanceY = float64(distance)
+			}
+		}
+		s.send(ev)
 		if kind == platform.PointerUp && button == 0 && s.dragRequest == nil && s.lastPointer != 0 {
 			gdkEventFree(s.lastPointer)
 			s.lastPointer = 0
@@ -738,7 +868,32 @@ func initSurfaceCallbacks() {
 			}
 			s.lastKey = gdkEventCopy(event)
 		}
-		if s.textInput && gtkIMContextFilterKeypress(s.im, event) {
+		if s.input.FunctionalTarget != 0 {
+			var code uint16
+			gdkEventGetKeycode(event, &code)
+			if s.keypad.Handle(kind, field[uint32](event, 28), code, gdkMods(field[uint32](event, 24)), s.send, func() { s.filterIMKeypress(event) }) {
+				return true
+			}
+			if s.functional.Handle(kind, field[uint32](event, 28), code, gdkMods(field[uint32](event, 24)), s.send, func() bool { return s.filterIMKeypress(event) }) {
+				return true
+			}
+			// GdkEventKey's group is at byte 50 on the supported 64-bit ABIs.
+			// Translate the same physical key in its active group at level zero.
+			display := gtkWidgetGetDisplay(s.area)
+			keymap := gdkKeymapForDisplay(display)
+			state, symbol := field[uint32](event, 24), field[uint32](event, 28)
+			var base, actual, consumed uint32
+			group := int32(field[uint8](event, 50))
+			if keymap != 0 {
+				gdkKeymapTranslate(keymap, uint32(code), 0, group, &base, nil, nil, nil)
+				gdkKeymapTranslate(keymap, uint32(code), state, group, &actual, nil, nil, &consumed)
+			}
+			// Held keys must still release if a layout reload makes translation fail.
+			if s.functional.HandlePrintableLayout(kind, symbol, code, gdkMods(state), rune(gdkKeyvalToUnicode(base)), rune(gdkKeyvalToUnicode(symbol)), s.physicalKey(display, keymap, code), state&consumed&^uint32(3) != 0, s.send, func() bool { return s.filterIMKeypress(event) }) {
+				return true
+			}
+		}
+		if s.textInput && s.filterIMKeypress(event) {
 			return true
 		}
 		// A modifier key on its own: the state is the one before the
@@ -757,25 +912,30 @@ func initSurfaceCallbacks() {
 		if k == platform.KeyUnknown {
 			return false
 		}
-		s.send(platform.SurfaceEvent{Kind: kind, Key: k, Mods: gdkMods(field[uint32](event, 24))})
+		pad, _ := gdkinput.KeypadKey(field[uint32](event, 28))
+		s.send(platform.SurfaceEvent{Kind: kind, Key: k, Keypad: pad != platform.KeyUnknown, Mods: gdkMods(field[uint32](event, 24))})
 		return true
 	})
 	cbSurfaceFocusIn = purego.NewCallback(func(widget, event, data ptr) bool {
 		if s := b().surfaceOf(data); s != nil {
-			gtkIMContextFocusIn(s.im)
 			s.send(platform.SurfaceEvent{Kind: platform.SurfaceFocus})
+			if s.input.Active && s.im.Handle() == 0 {
+				s.replaceIM(true)
+			} else {
+				s.withIM(func(im ptr) { gtkIMContextFocusIn(im) })
+			}
 		}
 		return false
 	})
 	cbSurfaceFocusOut = purego.NewCallback(func(widget, event, data ptr) bool {
 		if s := b().surfaceOf(data); s != nil {
-			gtkIMContextFocusOut(s.im)
+			s.im.Replace(0, s.retireIM)
 			s.send(platform.SurfaceEvent{Kind: platform.SurfaceBlur})
 		}
 		return false
 	})
 	cbIMCommit = purego.NewCallback(func(im, str, data ptr) {
-		if s := b().surfaceOf(data); s != nil {
+		if s := b().surfaceOf(data); s.acceptIMInput(im) {
 			if c := s.input.Client; c != nil {
 				s.clientComposition.Replace(c, nil, goStr(str))
 				return
@@ -785,25 +945,42 @@ func initSurfaceCallbacks() {
 			}
 		}
 	})
+	cbIMPreeditStart = purego.NewCallback(func(im, data ptr) {
+		if s := b().surfaceOf(data); s.acceptIMInput(im) {
+			s.clientComposition.Start(s.input.Client)
+			if !s.acceptIMInput(im) {
+				return
+			}
+			s.keypad.Composing = true
+			s.functional.Preedit(true)
+		}
+	})
 	cbIMPreedit = purego.NewCallback(func(im, data ptr) {
 		s := b().surfaceOf(data)
-		if s == nil {
+		if !s.acceptIMInput(im) {
 			return
 		}
 		var str ptr
 		var cursor int32
-		gtkIMContextGetPreedit(s.im, &str, nil, &cursor)
+		gtkIMContextGetPreedit(im, &str, nil, &cursor)
 		text := takeStr(str)
-		if c := s.input.Client; c != nil {
-			s.clientComposition.Reset()
-			caret := platform.UTF16Len(string([]rune(text)[:min(int(cursor), len([]rune(text)))]))
-			c.SetMarkedText(nil, text, platform.TextRange{Start: caret, End: caret})
+		if !s.acceptIMInput(im) {
 			return
 		}
-		s.send(platform.SurfaceEvent{Kind: platform.TextComposition, Text: text, Caret: min(int(cursor), utf8.RuneCountInString(text))})
+		if text != "" {
+			s.keypad.Composing = true
+			s.functional.Preedit(true)
+		}
+		if c := s.input.Client; c != nil {
+			s.clientComposition.Preedit(c, nil, text, int(cursor))
+			return
+		}
+		s.send(platform.SurfaceEvent{Kind: platform.TextComposition, Text: text, Caret: max(0, min(int(cursor), utf8.RuneCountInString(text)))})
 	})
 	cbIMPreeditEnd = purego.NewCallback(func(im, data ptr) {
-		if s := b().surfaceOf(data); s != nil {
+		if s := b().surfaceOf(data); s.acceptIMInput(im) {
+			s.keypad.Composing = false
+			s.functional.Preedit(false)
 			if c := s.input.Client; c != nil {
 				s.clientComposition.End(c)
 				return

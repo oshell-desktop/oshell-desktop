@@ -103,7 +103,15 @@ type Selection struct {
 	size       uintptr
 	start, end GridRef
 	rectangle  bool
+	// Private Go metadata follows the unchanged public C prefix.
+	logical *logicalSelection
 }
+
+// Only this prefix crosses the public C ABI. The local metadata is excluded.
+const selectionCSize = unsafe.Offsetof(Selection{}.logical)
+
+// ABI 55: owned logical positions and auxiliary anchors, no native pointers.
+type logicalSelection [13]uint32
 
 // selectionFormatOptions is a GhosttyTerminalSelectionFormatOptions.
 type selectionFormatOptions struct {
@@ -258,7 +266,7 @@ func layouts() map[string]layout {
 		"GhosttyGridRef":                 {unsafe.Sizeof(gr), map[string]uintptr{"node": unsafe.Offsetof(gr.node), "x": unsafe.Offsetof(gr.x), "y": unsafe.Offsetof(gr.y)}},
 		"GhosttyPoint":                   {unsafe.Sizeof(pt), map[string]uintptr{"tag": 0, "value": unsafe.Offsetof(pt.x)}},
 		"GhosttyPointCoordinate":         {8, map[string]uintptr{"x": unsafe.Offsetof(pt.x) - unsafe.Offsetof(pt.x), "y": unsafe.Offsetof(pt.y) - unsafe.Offsetof(pt.x)}},
-		"GhosttySelection":               {unsafe.Sizeof(sel), map[string]uintptr{"start": unsafe.Offsetof(sel.start), "end": unsafe.Offsetof(sel.end), "rectangle": unsafe.Offsetof(sel.rectangle)}},
+		"GhosttySelection":               {selectionCSize, map[string]uintptr{"start": unsafe.Offsetof(sel.start), "end": unsafe.Offsetof(sel.end), "rectangle": unsafe.Offsetof(sel.rectangle)}},
 		"GhosttyTerminalSelectionFormatOptions": {unsafe.Sizeof(sfo), map[string]uintptr{
 			"emit": unsafe.Offsetof(sfo.emit), "unwrap": unsafe.Offsetof(sfo.unwrap), "trim": unsafe.Offsetof(sfo.trim), "selection": unsafe.Offsetof(sfo.selection),
 		}},

@@ -11,6 +11,7 @@ import (
 // event handles a surface event on the main thread. It reports whether
 // an element takes files dragged over or dropped at the event's position.
 func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
+	rt.observeInteraction(ev)
 	if ev.Kind != platform.SurfaceFrame {
 		// Whatever the event changes, the next frame builds anew.
 		rt.redraw = false
@@ -38,7 +39,9 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 		rt.pointerMove(x, y)
 	case platform.PointerDown:
 		rt.pointerMove(x, y)
-		rt.pointerDown(x, y, ev.Button, Modifiers(ev.Mods), ev.Clicks)
+		rt.pointerDown(x, y, ev.Button, Modifiers(ev.Mods), ev.Clicks, ev)
+	case platform.PointerCancel:
+		rt.cancelPointer()
 	case platform.PointerUp:
 		rt.pointerMove(x, y)
 		rt.pointerUp(ev.Button, ev.Clicks)
@@ -55,15 +58,25 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 		rt.scroll(float32(ev.DX), float32(ev.DY), Modifiers(ev.Mods), ev.Precise)
 	case platform.KeyPressed:
 		rt.modsChanged(Modifiers(ev.Mods))
-		taken = rt.keyDown(Modifiers(ev.Mods), Key(ev.Key), ev.Repeat)
+		taken = rt.keyDown(InputEvent{Kind: InputKeyDown, Key: Key(ev.Key), Mods: Modifiers(ev.Mods), Repeat: ev.Repeat, Keypad: ev.Keypad, Unshifted: ev.Unshifted, TextPending: ev.TextPending, Shifted: ev.Shifted, BaseLayout: ev.BaseLayout, Text: ev.Text})
 	case platform.ModifiersChanged:
 		rt.modsChanged(Modifiers(ev.Mods))
 	case platform.KeyReleased:
+		rt.syncFunctionalKeyFocus()
 		rt.modsChanged(Modifiers(ev.Mods))
-		if h := rt.focusHandler(); h != nil {
-			rt.deliver(h, InputEvent{Kind: InputKeyUp, Key: Key(ev.Key), Mods: Modifiers(ev.Mods)})
+		id := inputKeyIdentity{Key(ev.Key), ev.Keypad, ev.Unshifted}
+		owner := rt.functionalKeys[id].owner
+		delete(rt.functionalKeys, id)
+		if h := rt.focusHandler(); h != nil && (!h.functionalInput || owner == h.id) {
+			rt.deliver(h, InputEvent{Kind: InputKeyUp, Key: Key(ev.Key), Mods: Modifiers(ev.Mods), Keypad: ev.Keypad, Unshifted: ev.Unshifted, TextPending: ev.TextPending, Shifted: ev.Shifted, BaseLayout: ev.BaseLayout})
 		}
 	case platform.TextInput:
+		if ev.Literal {
+			if h := rt.focusHandler(); h != nil {
+				rt.deliver(h, InputEvent{Kind: InputText, Text: ev.Text, Literal: true})
+				break
+			}
+		}
 		rt.editEvent(rt.replaced(editEvent{kind: editInsert, text: ev.Text}, ev))
 	case platform.TextComposition:
 		rt.editEvent(rt.replaced(editEvent{kind: editCompose, text: ev.Text, caret: ev.Caret}, ev))
@@ -74,24 +87,13 @@ func (rt *engine) event(ev platform.SurfaceEvent) (taken bool) {
 		rt.blinkStart = time.Now()
 		rt.requestFrame()
 	case platform.SurfaceBlur:
-		// Native drag tracking owns cancellation and may change focus while
-		// crossing windows. Only an in-window value drag ends on blur.
-		if rt.drag == nil || !rt.drag.native {
-			rt.dragCancel()
-		}
 		rt.windowFocused = false
-		rt.selection.dragging = false
+		rt.syncFunctionalKeyFocus()
+		// Losing focus cancels local capture. A synthetic release could
+		// activate a link or copy a terminal selection that was never released.
+		rt.cancelPointer()
 		// Keys let go of elsewhere never come back up here.
 		rt.modsChanged(0)
-		if p := rt.pressed; p != nil {
-			// The release will not come: an element taking its input
-			// gets one now.
-			if p.input != nil {
-				rt.deliver(p, InputEvent{Kind: InputPointerUp, Button: rt.pressButton, Mods: rt.mods, Clicks: 1})
-			}
-			p.pressed = false
-			rt.pressed = nil
-		}
 		rt.requestFrame()
 	case platform.FileDragOver:
 		taken = rt.fileDrag(x, y)
@@ -174,6 +176,11 @@ func (rt *engine) setHover(chain []uint64) bool {
 }
 
 func (rt *engine) pointerMove(x, y float32) {
+	// A drag outside the host click rectangle ends the estimated series, even
+	// if the pointer returns before the next press. Native counts still win.
+	if lp := &rt.lastPress; rt.pressed != nil && (abs32(x-lp.x) > lp.distanceX || abs32(y-lp.y) > lp.distanceY) {
+		lp.clicks = 0
+	}
 	if d := &rt.scrollDrag; d.st != nil {
 		s := d.st
 		g := d.bars(rt.c.theme.scrollbarWidth())
@@ -236,7 +243,8 @@ func (rt *engine) pointerMove(x, y float32) {
 
 const interactive = flagClickable | flagFocusable | flagEditable | flagSelectable | flagDragWindow | flagDraggable | flagTrackPointer
 
-func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, count int) {
+func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, count int, native platform.SurfaceEvent) {
+	clicks := rt.pointerClicks(x, y, button, count, native)
 	chain := rt.hitChain(x, y)
 	rt.setHover(chain)
 	if len(chain) > 0 {
@@ -275,9 +283,9 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, count in
 			rt.blinkStart = time.Now()
 		}
 	}
-	if h := rt.handler(chain); h != nil && rt.deliver(h, InputEvent{Kind: InputPointerDown, Button: button, Mods: mods, Clicks: max(count, 1)}) {
+	if h := rt.handler(chain); h != nil && rt.deliver(h, InputEvent{Kind: InputPointerDown, Button: button, Mods: mods, Clicks: clicks, HasTimestamp: native.HasTimestamp, Timestamp: native.Timestamp, HasDoubleClickSettings: native.HasDoubleClickSettings, DoubleClickInterval: native.DoubleClickInterval, DoubleClickDistanceX: float32(native.DoubleClickDistanceX), DoubleClickDistanceY: float32(native.DoubleClickDistanceY)}) {
 		// It takes the moves and the release.
-		rt.pressed, rt.pressButton = h, button
+		rt.pressed, rt.pressButton, rt.pressClicks = h, button, clicks
 		h.pressed = true
 		h.pressPending = true
 		h.pressX, h.pressY = x-h.x, y-h.y
@@ -296,14 +304,6 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, count in
 		rt.openMenuButton(target)
 		return
 	}
-	// Count quick successive presses at the same place.
-	now := time.Now()
-	clicks := 1
-	lp := &rt.lastPress
-	if lp.id == target.id && now.Sub(lp.at) < 500*time.Millisecond && abs32(x-lp.x) < 5 && abs32(y-lp.y) < 5 {
-		clicks = lp.clicks + 1
-	}
-	lp.at, lp.x, lp.y, lp.id, lp.clicks = now, x, y, target.id, clicks
 	if button == 0 && target.flags&flagDragWindow != 0 && target.flags&(interactive&^flagDragWindow) == 0 {
 		if clicks == 2 {
 			rt.host.titleBarDoubleClicked()
@@ -312,7 +312,7 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, count in
 		}
 		return
 	}
-	rt.pressed, rt.pressButton = target, button
+	rt.pressed, rt.pressButton, rt.pressClicks = target, button, clicks
 	target.pressed, target.pressMods = true, mods
 	target.pressPending = true
 	target.pressX, target.pressY = x-target.x, y-target.y
@@ -341,7 +341,10 @@ func (rt *engine) pointerUp(button, clicks int) {
 		rt.setHover(rt.hitChain(rt.pointerX, rt.pointerY))
 		return
 	}
-	if p := rt.pressed; p != nil && p.input != nil {
+	if p := rt.pressed; p != nil && p.input != nil && button == rt.pressButton {
+		if clicks <= 0 {
+			clicks = rt.pressClicks
+		}
 		rt.deliver(p, InputEvent{Kind: InputPointerUp, Button: button, Mods: rt.mods, Clicks: max(clicks, 1)})
 	}
 	if button == 1 && rt.menuRelease() {
@@ -523,7 +526,10 @@ func (rt *engine) claimedBy(k keyEvent, window bool) bool {
 
 // keyDown handles a key pressed, and reports whether an element took it as
 // it came (HandleInput).
-func (rt *engine) keyDown(mods Modifiers, key Key, repeat bool) bool {
+func (rt *engine) keyDown(ev InputEvent) bool {
+	rt.syncFunctionalKeyFocus()
+	epoch := rt.keyEpoch
+	mods, key := ev.Mods, ev.Key
 	if rt.inspectKey(mods, key) {
 		return true
 	}
@@ -531,9 +537,28 @@ func (rt *engine) keyDown(mods Modifiers, key Key, repeat bool) bool {
 	if key == KeyEscape && mods == 0 && rt.dragCancel() {
 		return true
 	}
-	if h := rt.focusHandler(); h != nil && !rt.claimed(k) && rt.deliver(h, InputEvent{Kind: InputKeyDown, Key: key, Mods: mods, Repeat: repeat}) {
-		rt.blinkStart = time.Now()
-		return true
+	if h := rt.focusHandler(); h != nil && !rt.claimed(k) {
+		id := inputKeyIdentity{ev.Key, ev.Keypad, ev.Unshifted}
+		var serial uint64
+		if h.functionalInput {
+			if rt.functionalKeys == nil {
+				rt.functionalKeys = make(map[inputKeyIdentity]functionalKeyPress)
+			}
+			previous := rt.functionalKeys[id]
+			rt.keySerial++
+			serial = rt.keySerial
+			rt.functionalKeys[id] = functionalKeyPress{owner: previous.owner, serial: serial}
+		}
+		if rt.deliver(h, ev) {
+			if serial != 0 && rt.focusHandler() == h && rt.keyEpoch == epoch {
+				if current, ok := rt.functionalKeys[id]; ok && current.serial == serial {
+					current.owner = h.id
+					rt.functionalKeys[id] = current
+				}
+			}
+			rt.blinkStart = time.Now()
+			return true
+		}
 	}
 	if (key == KeyContextMenu && mods == 0 || key == KeyF10 && mods == Shift) && !rt.claimed(k) && rt.menuKey() {
 		return false
@@ -780,10 +805,14 @@ const imeContext = 512
 // updateTextInput tells the host where text input goes, and the text
 // around the caret.
 func (rt *engine) updateTextInput() {
+	rt.syncFunctionalKeyFocus()
 	var t platform.TextInputState
 	base := 0
 	if s := rt.states[rt.focused]; s != nil && s.textClient != nil && rt.windowFocused && s.flags&flagDisabled == 0 && (s.editor == nil || !s.editor.readOnly) {
 		t.Active, t.Client = true, s.textAdapter
+		if s.editor != nil {
+			t.Password, t.NoSpellcheck = s.editor.password, s.editor.noSpellcheck
+		}
 		sel := s.textAdapter.Selection()
 		caret := sel.Caret()
 		if bounds, _, ok := s.textAdapter.BoundsForRange(TextInputRange{Start: caret, End: caret}); ok {
@@ -794,9 +823,15 @@ func (rt *engine) updateTextInput() {
 	} else if s != nil && s.editor == nil && s.input != nil && s.takesText && rt.windowFocused {
 		// An element taking text itself: no text around the caret.
 		t.Active = true
+		if s.functionalInput {
+			t.FunctionalTarget = s.id
+		}
 		t.Caret = platform.RectF{X: float64(s.x + s.caret.X), Y: float64(s.y + s.caret.Y), W: float64(s.caret.W), H: float64(s.caret.H)}
 	}
 	if t != rt.ime.state {
+		if t.FunctionalTarget != rt.ime.state.FunctionalTarget {
+			rt.clearFunctionalKeys()
+		}
 		if t.Client != rt.ime.state.Client {
 			if old, ok := rt.ime.state.Client.(*textInputAdapter); ok {
 				old.release()
@@ -1134,3 +1169,61 @@ func (rt *engine) modsChanged(mods Modifiers) {
 // or modifier event said: a view showing each row's shortcut while Cmd is
 // held reads it, and draws again as it changes.
 func (c *context) Modifiers() Modifiers { return c.rt.mods }
+
+// Functional-input handlers receive only releases paired with a press they
+// accepted in this focus lifetime. Modifiers are deliberately not identity:
+// Shift/Ctrl can be released before the character key.
+type functionalKeyPress struct{ owner, serial uint64 }
+
+type inputKeyIdentity struct {
+	key       Key
+	keypad    bool
+	unshifted rune
+}
+
+func (rt *engine) clearFunctionalKeys() {
+	rt.functionalKeys = nil
+	rt.keyEpoch++
+	rt.keyFocus = rt.focused
+}
+
+func (rt *engine) syncFunctionalKeyFocus() {
+	var owner uint64
+	if s := rt.states[rt.focused]; s != nil && rt.windowFocused && s.functionalInput && s.takesText && s.input != nil && s.flags&flagDisabled == 0 {
+		owner = s.id
+	}
+	if rt.keyFocus != rt.focused || rt.functionalFocus != owner {
+		old := rt.functionalFocus
+		rt.functionalFocus = owner
+		rt.clearFunctionalKeys()
+		if old != 0 && old != owner {
+			rt.deliver(rt.states[old], InputEvent{Kind: InputCancel})
+		}
+	}
+}
+
+// A lost capture is not a release inside the control. Detach ownership before
+// callbacks, so a reentrant notification cannot finish the gesture twice.
+func (rt *engine) cancelPointer() {
+	rt.lastPress.clicks = 0
+	rt.menu.release, rt.menu.releaseText = 0, 0
+	p := rt.pressed
+	rt.pressed = nil
+	rt.scrollDrag.st = nil
+	rt.selection.dragging = false
+	if rt.drag == nil || !rt.drag.native {
+		rt.dragCancel()
+	}
+	if p != nil {
+		p.pressed = false
+		p.pressPending = false
+		if p.editor != nil {
+			p.editor.release()
+		}
+		if p.input != nil {
+			rt.deliver(p, InputEvent{Kind: InputPointerCancel, Button: rt.pressButton, Mods: rt.mods})
+		}
+	}
+	rt.setHover(rt.hitChain(rt.pointerX, rt.pointerY))
+	rt.requestFrame()
+}

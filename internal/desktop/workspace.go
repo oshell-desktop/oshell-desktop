@@ -55,7 +55,9 @@ func (a *App) themeSettings(c *ui.Context, settings core.Settings) {
 	c.SetTheme(t)
 }
 func (a *App) view(c *ui.Context) {
+	defer a.resumeDeferredUpdate() // Modal teardown may happen after drain during this frame.
 	a.drain()
+	a.observeTabDetails(c)
 	c.UseSoftwareRenderer(!a.config.Settings.Metal)
 	a.theme(c)
 	if a.lockedWorkspace(c) {
@@ -83,8 +85,10 @@ func (a *App) view(c *ui.Context) {
 				a.filesView(c, t.active)
 			}
 		})
-		a.composerView(c.Key("composer"))
-		if a.config.Settings.QuickSendVisible {
+		if !a.focusFullscreen.deep {
+			a.composerView(c.Key("composer"))
+		}
+		if a.config.Settings.QuickSendVisible && !a.focusFullscreen.deep {
 			a.sendBar(c.Key("quick-send"))
 		}
 		if !a.focusFullscreen.chrome {
@@ -269,7 +273,7 @@ func (a *App) connectionMenu(m *ui.Menu) {
 		a.showQuickSwitch()
 	}
 	m.Separator()
-	tree := quickConnectionTree(a.config.Profiles)
+	tree := quickConnectionTree(a.presentationConfig().Profiles)
 	if len(tree) == 0 {
 		m.Item("暂无快捷会话").Disabled(true)
 	} else {
@@ -282,8 +286,10 @@ func (a *App) connectionMenu(m *ui.Menu) {
 }
 
 type linkRootDrag struct {
-	Key   string
-	Owner *App
+	Snapshot   *core.Config
+	Generation uint64
+	Key        string
+	Owner      *App
 }
 
 func (a *App) moveLinkRoot(source, before string) {
@@ -301,7 +307,8 @@ func (a *App) moveLinkRoot(source, before string) {
 func (a *App) linksBar(c *ui.Context) {
 	ui.Row(c).Height(30).Padding(2, 8).Gap(3).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
 		flatButton(c, "添加当前会话到链接栏", plusIcon, "").Disabled(a.activePane() == nil || a.activePane().profile.Kind == "blank").OnClick(a.addCurrentLink)
-		scroll := ui.ScrollHorizontal(c).Grow(1).MinWidth(0).Height(26).Label("快捷链接栏")
+		linkDragOver := false
+		scroll := ui.ScrollHorizontal(c).TrackScroll(&a.linkScroll).Grow(1).MinWidth(0).Height(26).Label("快捷链接栏")
 		scroll.ContextMenu(func(menu *ui.Menu) { a.linkContextMenu(menu, nil) })
 		scroll.Children(func() {
 			ui.Row(c).Gap(5).Children(func() {
@@ -310,17 +317,7 @@ func (a *App) linksBar(c *ui.Context) {
 					var element ui.Element
 					switch item.Kind {
 					case "folder":
-						openFolder := func() {
-							if a.win != nil && mygo.App.IsReady() {
-								bounds := element.Bounds()
-								menu, window := a.nativeLinkFolderMenu(item.Folder), a.win
-								go mygo.RunOnMain(func() {
-									if !a.stopped.Load() && window.IsVisible() {
-										menu.PopupAt(window, int(bounds.X), int(bounds.Y+bounds.H))
-									}
-								})
-							}
-						}
+						openFolder := func() { a.openLinkMenu(item.Key(), item.Folder) }
 						element = flatButton(c.Key(item.Key()), "快捷目录 "+item.Name, folderIcon, item.Name).OnClick(openFolder).Role(ui.RoleMenuButton)
 						element.HandleInput(func(event ui.InputEvent) bool {
 							if event.Kind == ui.InputKeyDown && event.Key == ui.KeyDown {
@@ -340,8 +337,12 @@ func (a *App) linksBar(c *ui.Context) {
 						}
 						element = flatButton(c.Key(item.Key()), label+item.Name, icon, item.Name).OnClick(func() { a.request(profile, 0) })
 					}
-					element.Drag(linkRootDrag{Key: item.Key(), Owner: a})
-					if drag, hover := ui.DragOver[linkRootDrag](element); hover && drag.Owner == a {
+					element.Drag(a.linkDrag(item.Key()))
+					if item.Kind == "folder" {
+						a.linkFolderPopover(c.Key(item.Key()+"-menu"), element, item.Key())
+					}
+					if drag, hover := ui.DragOver[linkRootDrag](element); hover && a.acceptsLinkDrag(drag) {
+						linkDragOver = true
 						x, _, _ := element.PointerPosition()
 						rect := element.Bounds()
 						_, folder := linkDropDestination(drag.Key, item, index, items, x/max(rect.W, 1))
@@ -353,18 +354,11 @@ func (a *App) linksBar(c *ui.Context) {
 							element.BorderWidth(0, 2, 0, 0).BorderColor(c.Theme().Accent)
 						}
 					}
-					if drag, dropped := ui.Drop[linkRootDrag](element); dropped && drag.Owner == a {
+					if drag, dropped := ui.Drop[linkRootDrag](element); dropped && a.acceptsLinkDrag(drag) {
 						x, _, _ := element.PointerPosition()
 						rect := element.Bounds()
 						before, folder := linkDropDestination(drag.Key, item, index, items, x/max(rect.W, 1))
-						source := drag.Key
-						a.post(func() {
-							if folder != "" {
-								a.moveLinkIntoFolder(source, folder)
-							} else {
-								a.moveLinkRoot(source, before)
-							}
-						})
+						a.post(func() { a.applyLinkDrop(drag, before, folder) })
 					}
 					element.ContextMenu(func(menu *ui.Menu) { a.linkContextMenu(menu, &item) })
 				}
@@ -372,17 +366,17 @@ func (a *App) linksBar(c *ui.Context) {
 				if len(items) == 0 {
 					tail.Children(func() { ui.Text(c, "快捷链接 /Links").FontSize(11).TextColor(c.Theme().TextMuted).Padding(0, 4) })
 				}
-				if drag, dropped := ui.Drop[linkRootDrag](tail); dropped && drag.Owner == a {
-					source := drag.Key
-					a.post(func() { a.moveLinkRoot(source, "") })
+				if drag, dropped := ui.Drop[linkRootDrag](tail); dropped && a.acceptsLinkDrag(drag) {
+					a.post(func() { a.applyLinkDrop(drag, "", "") })
 				}
 			})
 		})
-		if drag, dropped := ui.Drop[linkRootDrag](scroll); dropped && drag.Owner == a {
-			source := drag.Key
-			a.post(func() { a.moveLinkRoot(source, "") })
+		if drag, dropped := ui.Drop[linkRootDrag](scroll); dropped && a.acceptsLinkDrag(drag) {
+			a.post(func() { a.applyLinkDrop(drag, "", "") })
 		}
-		flatButton(c, "所有快捷链接", chevronIcon, "").Menu(func(menu *ui.Menu) { a.linksMenu(menu, "") })
+		a.scrollLinkDrag(c, scroll, linkDragOver)
+		all := flatButton(c, "所有快捷链接", chevronIcon, "").OnClick(func() { a.openLinkMenu("all", "") })
+		a.linkFolderPopover(c.Key("all-link-menu"), all, "all")
 	})
 }
 func (a *App) profileByID(id string) (core.Profile, bool) {
@@ -472,6 +466,7 @@ func (a *App) groupTabBar(c *ui.Context, g *tabGroup) {
 	widths := make([]float32, len(tabs))
 	totalWidth := float32(0)
 	for i, t := range tabs {
+		t.name = a.displayTabTitle(t)
 		widths[i] = preferredTabWidth(fmt.Sprintf("%d  %s", i+1, t.name))
 		totalWidth += widths[i] + 1
 	}
@@ -533,7 +528,8 @@ func (a *App) groupTabBar(c *ui.Context, g *tabGroup) {
 						}
 						ui.Text(c, "●").FontSize(8).TextColor(dot).Tooltip(status)
 
-						title := tabTitleButton(c, t.name, fmt.Sprintf("%d  %s", i+1, t.name), t.id == g.active, t.unread).ContextMenu(func(m *ui.Menu) { a.tabStripMenu(m, g, t) }).Tooltip(a.tabConnectionDetails(t) + "\n连接状态：" + status + "\n\n双击可新建相同会话；拖到其他窗口标签栏可合并，拖到窗口外空白处可新建窗口；Esc 取消。").Grow(1).MinWidth(0)
+						title := tabTitleButton(c, t.name, fmt.Sprintf("%d  %s", i+1, t.name), t.id == g.active, t.unread).ContextMenu(func(m *ui.Menu) { a.tabStripMenu(m, g, t) }).Grow(1).MinWidth(0)
+						a.tabDetailsHover(c, title, t)
 						a.terminalTabDrag(title, t)
 						a.tabTitleEvents(title, t)
 						tabBarButton(c, "关闭 "+t.name, closeIcon).ContextMenu(func(m *ui.Menu) { a.tabStripMenu(m, g, t) }).Width(22).OnClick(func() { a.requestSessionClose(t, nil) })
@@ -588,9 +584,9 @@ func (a *App) nodeView(c *ui.Context, t *tab, n *node) {
 		}
 	}).Children(func() {
 		// A single terminal needs only its tab. Pane headers appear after splitting.
-		if t.root.pane == nil {
+		if t.root.pane == nil && !a.focusFullscreen.deep {
 			ui.Row(c).Height(22).Padding(0, 8).Gap(5).Background(paneBackground).TextColor(paneForeground.Alpha(.75)).Children(func() {
-				terminalHeaderButton(c, "选择分屏 "+p.profile.Name, nil, p.hostname, paneForeground).Tooltip(paneConnectionDetails(p)).Height(22).Grow(1).OnClick(func() { t.active = p; p.focus.Focus() })
+				terminalHeaderButton(c, "选择分屏 "+p.profile.Name, nil, a.paneDisplayTitle(p), paneForeground).Tooltip(paneConnectionDetails(p)).Height(22).Grow(1).OnClick(func() { t.active = p; p.focus.Focus() })
 				label := "放大分屏"
 				if t.zoomed == p {
 					label = "恢复分屏"
@@ -600,6 +596,7 @@ func (a *App) nodeView(c *ui.Context, t *tab, n *node) {
 			})
 		}
 		if p.term != nil {
+			a.terminalSearchBar(c.Key("terminal-search"), t, p)
 			if strings.HasPrefix(p.status, "已断开") {
 				ui.Row(c).Height(27).Padding(3, 10).Gap(8).Background(c.Theme().Surface).Children(func() {
 					ui.Text(c, p.status).SingleLine().Grow(1).TextColor(c.Theme().TextMuted)
@@ -637,6 +634,13 @@ func (a *App) sendBar(c *ui.Context) {
 			}
 		}).Width(166).Height(25).Label("快速发送范围")
 		input := ui.TextInput(c, &a.quick).Grow(1).MinWidth(0).Height(25).Label("快捷命令").Bind(&a.features.operators.quickFocus).Placeholder("输入命令，回车发送；右侧选择历史命令")
+		input.HandleInput(func(ev ui.InputEvent) bool {
+			if ev.Kind == ui.InputKeyDown && !input.Composing() && ev.Mods == 0 && (ev.Key == ui.KeyUp || ev.Key == ui.KeyDown) {
+				a.navigateQuickHistory(ev.Key == ui.KeyUp)
+				return true
+			}
+			return false
+		})
 		if input.Submitted() {
 			a.prepareSend()
 		}

@@ -4,6 +4,7 @@ package core
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -36,8 +37,11 @@ func (t *transport) startTunnels(ctx context.Context, rules []TunnelRule) error 
 	return nil
 }
 func (t *transport) acceptTunnel(ctx context.Context, l net.Listener, r TunnelRule) {
-	defer t.untrack(l)
-	defer l.Close()
+	defer func() {
+		if err := l.Close(); err == nil || errors.Is(err, net.ErrClosed) {
+			t.untrack(l)
+		}
+	}()
 	for {
 		in, e := l.Accept()
 		if e != nil {

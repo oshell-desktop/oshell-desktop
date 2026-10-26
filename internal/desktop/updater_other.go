@@ -17,6 +17,7 @@ import (
 var showUpdateConfirmation = mygo.Dialog.Message
 
 type updateController struct {
+	pendingInstall    bool
 	confirming        bool
 	installing        bool
 	scheduledSource   string
@@ -79,7 +80,7 @@ func (a *App) validateUpdateSettings() error {
 func (a *App) updateSettingsView(c *ui.Context) {
 	state := a.updateState()
 	settings := &a.features.settingsDraft
-	ui.Text(c, "GitHub Release 更新").FontSize(18).Bold()
+	ui.Text(c, "签名更新").FontSize(18).Bold()
 	version := mygo.App.Version()
 	if version == "" {
 		version = "开发构建"
@@ -95,7 +96,7 @@ func (a *App) updateSettingsView(c *ui.Context) {
 			ui.Text(c, "已保存访问令牌").TextColor(c.Theme().TextMuted)
 		}
 	})
-	ui.Text(c, "从 GitHub Release 获取正式版本并校验 SHA-256。私有仓库令牌需要 Contents 读取权限。安装会关闭连接和传输并重新启动；保留配置、凭据，启动失败自动回滚。").Wrap()
+	ui.Text(c, "从静态更新信息获取正式版本，并用内置公钥校验元数据及安装包签名。私有仓库通过已签名的 latest.json 附件更新，令牌需要 Contents 读取权限。安装会关闭连接和传输并重新启动；保留配置、凭据，启动失败自动回滚。").Wrap()
 	ui.Row(c).Gap(8).Children(func() {
 		ui.Button(c, "检查更新").Disabled(state.busy || state.confirming).OnClick(func() {
 			if settings.UpdateRepository != updateRepository(a.config.Settings.UpdateRepository) {
@@ -115,6 +116,7 @@ func (a *App) updateSettingsView(c *ui.Context) {
 		}
 		if state.prepared != nil && !state.busy && !state.confirming {
 			ui.Button(c, "丢弃已下载更新").OnClick(func() {
+				state.pendingInstall = false
 				state.prepared.Discard()
 				state.prepared = nil
 				state.status = "已丢弃更新"
@@ -200,7 +202,7 @@ func (a *App) checkForUpdates(automatic bool) {
 		state.candidate = nil
 	}
 	state.busy = true
-	state.status = "正在检查 GitHub Release…"
+	state.status = "正在检查签名更新…"
 	ctx, cancel := context.WithCancel(context.Background())
 	state.cancel = cancel
 	cache := state.cache
@@ -286,12 +288,18 @@ func (a *App) installUpdate() {
 		return
 	}
 	if a.updateDialogsOpen() {
-		state.status = "请先关闭其他对话框，再安装更新"
+		state.pendingInstall = true
+		state.status = "等待其他对话框关闭后继续安装"
 		return
 	}
 	count := a.activeConnections()
 	if a.hub != nil {
 		count = a.hub.connectionCount()
+	}
+	state.pendingInstall = false
+	if count == 0 {
+		a.commitUpdate()
+		return
 	}
 	state.confirming = true
 	prepared := state.prepared
@@ -323,7 +331,11 @@ func (a *App) commitUpdate() {
 		state.status = "更新仓库已变化，请重新检查"
 		return
 	}
-	if state.busy || state.prepared == nil || a.passwordLocked() || a.configurationBusy() || a.updateDialogsOpen() {
+	if a.updateDialogsOpen() {
+		state.pendingInstall = true
+		return
+	}
+	if state.busy || state.prepared == nil || a.passwordLocked() || a.configurationBusy() {
 		return
 	}
 	state.busy = true
@@ -332,7 +344,7 @@ func (a *App) commitUpdate() {
 	a.setConfigurationBusy(true)
 	prepared := state.prepared
 	go func() {
-		err := prepared.Start()
+		err := startPortableUpdate(prepared)
 		a.updateMain(func() {
 			if err != nil {
 				state.busy = false
@@ -469,6 +481,7 @@ func (a *App) invokeUpdater() {
 }
 func (h *applicationHub) stopUpdates() {
 	state := &h.updates
+	state.pendingInstall = false
 	if state.timer != nil {
 		state.timer.Stop()
 	}
@@ -490,7 +503,7 @@ func (a *App) updateDialogsOpen() bool {
 	}
 	for _, window := range apps {
 		f := &window.features
-		if window.modalActive() || f.vaultBusy || f.findOpen || f.settingsCapture != "" {
+		if window.modalActive() || f.vaultBusy || window.hasOpenTerminalSearch() || f.settingsCapture != "" {
 			return true
 		}
 	}
@@ -532,3 +545,14 @@ func (a *App) confirmAvailableUpdate() {
 		})
 	}()
 }
+
+func (a *App) resumeDeferredUpdate() {
+	state := a.updateState()
+	if !state.pendingInstall || state.prepared == nil || state.busy || state.confirming || a.stopped.Load() || a.hub != nil && a.hub.quitting || a.passwordLocked() || a.configurationBusy() || a.updateDialogsOpen() {
+		return
+	}
+	state.pendingInstall = false
+	a.installUpdate()
+}
+
+var startPortableUpdate = func(update *core.PortableUpdate) error { return update.Start() }

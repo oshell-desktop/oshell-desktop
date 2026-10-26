@@ -82,7 +82,7 @@ func (a *App) sharedSyncSettings(c *ui.Context) {
 	f := &a.features.sharedSync
 	a.syncStatusCard(c)
 	ui.Text(c, "多设备同步").Bold()
-	ui.Text(c, "仅同步会话、目录、快捷链接、代理和加密密码；主题、字体、快捷键等客户端设置保留在本机。").Wrap()
+	ui.Text(c, "默认仅同步会话资料；可选择其他类别，未选择的设置保留在本机。").Wrap()
 	current := "none"
 	if f.options.Enabled {
 		current = f.options.Backend
@@ -120,22 +120,14 @@ func (a *App) sharedSyncSettings(c *ui.Context) {
 		owner := a.syncStatusOwner()
 		active := &owner.features.sharedSync
 		if active.busy || active.manualQueued || active.deferred {
-			ui.Button(c, "取消本次").OnClick(func() {
-				active.manualQueued = false
-				active.deferred = false
-				active.status = "本次同步已取消，本地修改保留"
-				active.phase = core.SyncCancelled
-				owner.invalidateSyncPresentation()
-				if active.cancel != nil {
-					active.cancel()
-				}
-			})
+			ui.Button(c, "取消本次").OnClick(owner.cancelSharedSync)
 		}
 		if (f.plan != nil || f.pendingDraft) && !f.busy {
 			ui.Button(c, "处理待确认差异").OnClick(a.startSavedSharedSync)
 			ui.Button(c, "放弃本机冲突草稿…").OnClick(a.discardSharedConflictDraft)
 		}
 	})
+	a.syncPolicySettings(c)
 	if f.probeStatus != "" {
 		ui.Text(c, f.probeStatus).Wrap()
 	}
@@ -156,6 +148,10 @@ func (a *App) saveSharedSyncSettingsThen(done func()) {
 	expected := f.savedOptions
 	expectedVault := f.savedVaultRevision
 	options.Version = 1
+	if err := options.Policy.Validate(); err != nil {
+		f.status = err.Error()
+		return
+	}
 	if options.Backend != "directory" {
 		options.RequireExisting = false
 	}
@@ -195,6 +191,7 @@ func (a *App) saveSharedSyncSettingsThen(done func()) {
 				f.password = ""
 			}
 			if a.hub != nil {
+				a.hub.syncAutomaticFailed = false
 				a.hub.scheduleSharedSync(2 * time.Second)
 			}
 			a.clearSharedSyncPlan()
@@ -240,6 +237,9 @@ func (a *App) startSharedSync() {
 		f.status = "请先保存并启用同步设置"
 		return
 	}
+	if background && !options.Policy.Effective().Automatic {
+		return
+	}
 	master, e := a.vault.MasterSecret()
 	if e != nil {
 		a.sharedSyncFailed(e)
@@ -275,6 +275,8 @@ func (a *App) startSharedSync() {
 	f.cancel = cancel
 	cfg := a.config.Clone()
 	engine := &core.SharedSyncEngine{Manual: !background, Store: a.store, Vault: a.vault, Transport: transport, Replica: core.SharedReplicaStore{Directory: a.store.Dir, Target: options.Target()}}
+	policy := options.Policy.Effective()
+	engine.Selection = &policy.Content
 	f.diagnostics = engine.Diagnostics()
 	engine.Progress = func(event core.SyncEvent, issue error) {
 		a.post(func() {
@@ -302,6 +304,7 @@ func (a *App) startSharedSync() {
 			a.invalidateSyncPresentation()
 			if err != nil {
 				f.status = err.Error()
+				a.scheduleSyncResult(err)
 				a.invalidateSyncPresentation()
 				if !background {
 					a.status = f.status
@@ -316,6 +319,13 @@ func (a *App) startSharedSync() {
 			f.choices = map[string]core.SharedMergeChoice{}
 			if plan.InitialChoiceRequired || len(plan.Conflicts) > 0 {
 				f.conflictOpen = !background
+				if f.conflictOpen && a.win != nil {
+					a.win.Show()
+					a.win.Focus()
+				}
+				if a.hub != nil {
+					a.hub.armSharedSync(0)
+				}
 				f.status = "共享配置有待确认差异"
 				a.status = f.status
 				return
@@ -378,6 +388,7 @@ func (a *App) commitSharedSync() {
 				f.status = "同步完成"
 			}
 			a.status = f.status
+			a.scheduleSyncResult(err)
 			if errors.Is(err, core.ErrSyncDeferred) && !errors.Is(err, context.Canceled) {
 				f.phase = core.SyncQueued
 				f.pendingLocal = true
@@ -404,7 +415,7 @@ func (a *App) sharedSyncConflictDialog(c *ui.Context) {
 		ui.Column(c).Width(min(float32(1000), max(float32(520), width-48))).Gap(12).Children(func() {
 			ui.Text(c, "共享配置差异").FontSize(20).Bold()
 			if f.plan.InitialChoiceRequired {
-				ui.Text(c, fmt.Sprintf("共享端有 %d 个会话，本机有 %d 个。合并会保留各自的目录、代理和快捷链接；客户端设置保留在本机。", len(f.plan.Remote.Profiles), len(f.plan.Local.Profiles))).Wrap()
+				ui.Text(c, fmt.Sprintf("共享端有 %d 个会话，本机有 %d 个。仅应用已选择的同步类别；未选类别保留原值。", len(f.plan.Remote.Profiles), len(f.plan.Local.Profiles))).Wrap()
 				for _, option := range []struct {
 					title string
 					merge bool
@@ -437,28 +448,73 @@ func (a *App) sharedSyncConflictDialog(c *ui.Context) {
 // One timer per application, event-debounced after edits and otherwise once a
 // minute, matching the source app. Disabled sync leaves no timer running.
 func (h *applicationHub) scheduleSharedSync(delay time.Duration) {
+	windows := h.configurationWindows()
+	if len(windows) > 0 {
+		if options, err := windows[0].loadSyncOptions(); err == nil {
+			p := options.Policy.Effective()
+			if options.Enabled && p.Automatic && h.syncAutomaticFailed {
+				if h.syncTimer != nil {
+					return
+				}
+				delay = time.Duration(p.RetryInterval) * time.Second
+			} else if delay == 2*time.Second {
+				if p.AfterChanges {
+					delay = time.Duration(p.ChangeDelay) * time.Second
+				} else {
+					// An unrelated save must not postpone the periodic check forever.
+					if options.Enabled && p.Automatic && h.syncTimer != nil {
+						return
+					}
+					delay = time.Duration(p.CheckInterval) * time.Second
+				}
+			} else if delay == time.Minute {
+				delay = time.Duration(p.CheckInterval) * time.Second
+			}
+		}
+	}
+	h.armSharedSync(delay)
+}
+
+func (h *applicationHub) armSharedSync(delay time.Duration) {
+	h.syncTimerGeneration++
+	generation := h.syncTimerGeneration
 	if h.syncTimer != nil {
 		h.syncTimer.Stop()
 		h.syncTimer = nil
 	}
+	h.nextSync = time.Time{}
 	windows := h.configurationWindows()
 	if h.quitting || len(windows) == 0 {
 		return
 	}
-	options, e := core.SyncOptionsStatus(h.store.Dir)
-	if e != nil || !options.Enabled {
+	options, e := windows[0].loadSyncOptions()
+	if e != nil || !options.Enabled || !options.Policy.Effective().Automatic || delay <= 0 {
 		return
 	}
 	owner := windows[0]
+	h.nextSync = time.Now().Add(delay)
 	h.syncTimer = time.AfterFunc(delay, func() {
 		owner.post(func() {
+			if h.syncTimerGeneration != generation {
+				return
+			}
 			h.syncTimer = nil
+			h.nextSync = time.Time{}
 			_, locked := owner.vault.State()
-			if !locked && !owner.syncEditingBlocked() && !owner.configurationBusy() && !owner.syncOperationBusy() && owner.syncStatusOwner().features.sharedSync.plan == nil {
+			if owner.syncStatusOwner().features.sharedSync.plan != nil {
+				return
+			}
+			if !locked && !owner.syncEditingBlocked() && !owner.configurationBusy() && !owner.syncOperationBusy() {
 				owner.features.sharedSync.background = true
 				owner.startSharedSync()
+			} else {
+				// Keep a queued change/startup check when periodic checks are disabled.
+				h.armSharedSync(time.Second)
+				return
 			}
-			h.scheduleSharedSync(time.Minute)
+			if !owner.syncOperationBusy() {
+				h.scheduleSharedSync(time.Minute)
+			}
 		})
 	})
 }

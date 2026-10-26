@@ -43,7 +43,7 @@ func TestManagedClipboardShortcutDoesNotOverrideApp(t *testing.T) {
 	tt := ui.NewTester(func(c *ui.Context) { View(c, term).Fill().AutoFocus() }, 400, 200)
 	x0, y0 := cellCenter(term, 0, 0)
 	x1, y1 := cellCenter(term, 7, 0)
-	tt.Press(x0-2, y0)
+	beginCharacterDrag(tt, x0-2, y0)
 	tt.Move(x1, y1)
 	tt.Release(x1+2, y1)
 	tt.SetClipboard("sentinel")

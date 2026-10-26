@@ -77,8 +77,18 @@ func Shape(s string, f Font) []Glyph {
 // Glyphs draws glyphs that Shape made, from x, on the baseline at y, in
 // color c.
 func (p *Painter) Glyphs(glyphs []Glyph, x, y float32, c Color) {
+	p.GlyphsScaled(glyphs, x, y, 1, 1, c)
+}
+
+// GlyphsScaled scales glyphs and their advances around the supplied baseline.
+// Rasterization uses the larger scale so stretched text retains sharp edges.
+func (p *Painter) GlyphsScaled(glyphs []Glyph, x, y, scaleX, scaleY float32, c Color) {
+	if scaleX <= 0 || scaleY <= 0 {
+		return
+	}
 	sys := p.rt.text
 	s := p.scale
+	factor := max(scaleX, scaleY)
 	shade := text.ShadeOf(c.R, c.G, c.B)
 	c = c.Alpha(p.opacity)
 	color := c.scene()
@@ -86,15 +96,15 @@ func (p *Painter) Glyphs(glyphs []Glyph, x, y float32, c Color) {
 	start := int32(len(p.s.Glyphs))
 	left, right := p.clip.X*s, (p.clip.X+p.clip.W)*s
 	var run *glyphRun
-	if sys.JoinsGlyphs() {
+	if sys.JoinsGlyphs() && scaleX == 1 && scaleY == 1 {
 		run = &glyphRun{}
 	}
 	for _, g := range glyphs {
 		if g.font == nil {
 			continue
 		}
-		pen := (x + g.X) * s
-		if pen > right || pen+(g.Advance+g.font.Size)*s < left {
+		pen := (x + g.X*scaleX) * s
+		if pen > right || pen+(g.Advance+g.font.Size)*s*scaleX < left {
 			continue
 		}
 		ix := float32(math.Floor(float64(pen)))
@@ -102,12 +112,12 @@ func (p *Painter) Glyphs(glyphs []Glyph, x, y float32, c Color) {
 		if g.thick {
 			shade = text.Thick
 		}
-		gi := sys.Glyph(g.font, g.id, s, pen, shade, p.opaque)
+		gi := sys.Glyph(g.font, g.id, s*factor, pen, shade, p.opaque && scaleX == factor)
 		if !gi.OK {
 			continue
 		}
 		sg := scene.Glyph{
-			X: ix + gi.Left, Y: baseline + gi.Top, W: float32(gi.W), H: float32(gi.H),
+			X: ix + gi.Left*scaleX/factor, Y: baseline + gi.Top*scaleY/factor, W: float32(gi.W) * scaleX / factor, H: float32(gi.H) * scaleY / factor,
 			U: gi.X, V: gi.Y, UW: gi.W, VH: gi.H,
 			Color: color, Wide: p.glyphWide(c), Colored: gi.Colored, Subpixel: gi.Subpixel, Thin: gi.Thin,
 		}

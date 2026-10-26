@@ -473,7 +473,7 @@ func (s *surface) sideButton(kind platform.SurfaceEventKind, back bool, mods pla
 
 func (s *surface) mouse(kind platform.SurfaceEventKind, ev id, button int) {
 	x, y := s.location(ev)
-	s.send(platform.SurfaceEvent{Kind: kind, X: x, Y: y, Button: button, Clicks: sendInt(ev, "clickCount"), Mods: eventMods(ev)})
+	s.send(platform.SurfaceEvent{Kind: kind, X: x, Y: y, Button: button, Clicks: sendInt(ev, "clickCount"), HasTimestamp: true, Timestamp: time.Duration(msgFloat(ev, sel("timestamp")) * float64(time.Second)), HasDoubleClickSettings: true, DoubleClickInterval: time.Duration(msgFloat(class("NSEvent"), sel("doubleClickInterval")) * float64(time.Second)), Mods: eventMods(ev)})
 }
 
 // macKeys maps virtual key codes that do not type a character.

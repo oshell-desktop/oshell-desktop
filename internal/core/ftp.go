@@ -3,6 +3,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jlaffaye/ftp"
 )
@@ -140,13 +142,32 @@ func (f *FTPFileSystem) ReadDir(p string) ([]os.FileInfo, error) {
 	if e := validFTPPath(p); e != nil {
 		return nil, e
 	}
-	entries, e := f.client.List(p)
+	entries, e := f.client.ListWithFallback(p)
 	if e != nil {
-		return nil, e
+		if errors.Is(e, ftp.ErrListingTooLarge) || errors.Is(e, ftp.ErrListingEncoding) {
+			return nil, e
+		}
+		names, fallbackErr := f.client.NameList(p)
+		if fallbackErr != nil {
+			return nil, errors.Join(e, fallbackErr)
+		}
+		out := make([]os.FileInfo, 0, len(names))
+		for _, name := range names {
+			if !utf8.ValidString(name) {
+				return nil, fmt.Errorf("FTP 文件名不是 UTF-8")
+			}
+			if safeEntry(name) {
+				out = append(out, ftpUnknownInfo{ftpInfo{&ftp.Entry{Name: name}}})
+			}
+		}
+		return out, nil
 	}
 	out := make([]os.FileInfo, 0, len(entries))
 	for _, entry := range entries {
-		if entry.Name == "." || entry.Name == ".." {
+		if !utf8.ValidString(entry.Name) {
+			return nil, fmt.Errorf("FTP 文件名不是 UTF-8")
+		}
+		if !safeEntry(entry.Name) {
 			continue
 		}
 		out = append(out, ftpInfo{entry})
@@ -200,6 +221,12 @@ func (f *FTPFileSystem) RemoveDirectory(p string) error {
 }
 
 type ftpInfo struct{ entry *ftp.Entry }
+
+// NLST supplies names only. Preserve that uncertainty instead of claiming that
+// a directory is an empty regular file. Opening it can probe CWD explicitly.
+type ftpUnknownInfo struct{ ftpInfo }
+
+func (ftpUnknownInfo) TypeKnown() bool { return false }
 
 func (i ftpInfo) Name() string { return i.entry.Name }
 func (i ftpInfo) Size() int64  { return int64(i.entry.Size) }
@@ -273,7 +300,7 @@ func (f *FTPFileSystem) Upload(ctx context.Context, local, remote string, report
 	var upload func(string, string, int) error
 	upload = func(local, remote string, depth int) error {
 		visited++
-		if depth > 64 || visited > 10000 {
+		if depth > 32 || visited > 10000 {
 			return fmt.Errorf("目录项目或层级过多")
 		}
 		if e := ctx.Err(); e != nil {
@@ -290,6 +317,9 @@ func (f *FTPFileSystem) Upload(ctx context.Context, local, remote string, report
 			return e
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
+			if depth > 0 {
+				return nil
+			}
 			return fmt.Errorf("不跟随符号链接")
 		}
 		if info.IsDir() {
@@ -350,7 +380,7 @@ func (f *FTPFileSystem) Download(ctx context.Context, remote, local string, repl
 	var download func(string, string, int) error
 	download = func(remote, local string, depth int) error {
 		visited++
-		if depth > 64 || visited > 10000 {
+		if depth > 32 || visited > 10000 {
 			return fmt.Errorf("目录项目或层级过多")
 		}
 		if e := ctx.Err(); e != nil {

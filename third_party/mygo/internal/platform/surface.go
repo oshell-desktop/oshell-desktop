@@ -3,6 +3,7 @@ package platform
 import (
 	"github.com/egoist/mygo/transfer"
 	"image"
+	"time"
 )
 
 // Surface is the drawing area of a window created with
@@ -92,6 +93,13 @@ type IdleSurface interface {
 type TextInputState struct {
 	// Active is true while an editable element has the keyboard.
 	Active bool
+	// Password and NoSpellcheck describe native input purposes, not stored
+	// content. Platforms may use them to configure their input methods.
+	Password, NoSpellcheck bool
+	// FunctionalTarget identifies a focused custom keyboard handler which needs
+	// layout, non-printing and keypad key identity as well as text. Zero keeps ordinary IME routing.
+	// Changing the identity invalidates held keys in platform adapters.
+	FunctionalTarget uint64
 	// Caret is the caret's rectangle, in DIPs relative to the surface.
 	Caret RectF
 	// Text is the input's text around the caret, and Start and End are the
@@ -185,25 +193,50 @@ const (
 	DataDragOver
 	DataDragLeave
 	DataDrop
+	// PointerCancel ends pointer capture without a click or drop.
+	PointerCancel
 )
 
 // SurfaceEvent is input on a Surface, or a change of it.
 type SurfaceEvent struct {
-	Kind SurfaceEventKind
+	// Unshifted identifies a layout-aware printable key. On key-down Text is
+	// its synchronous IME commit (possibly empty for Ctrl/Alt shortcuts).
+	// A zero value retains the platform's ordinary key-then-text path.
+	Unshifted rune
+	// TextPending preserves the platform's separate text/IME commit after a
+	// layout-aware key-down. False means Text is already the complete commit.
+	TextPending bool
+	// Shifted and BaseLayout are optional Unicode layout identities, independent
+	// of committed Text. They also accompany key-up when available.
+	Shifted, BaseLayout rune
+	// Literal marks a layout-composed InputText that must remain literal text.
+	Literal bool
+	Kind    SurfaceEventKind
 	// X and Y locate the pointer in DIPs relative to the surface.
 	X, Y float64
 	// Button is 0 for the primary button, 1 the secondary, 2 the middle.
 	Button int
 	Clicks int
+	// PointerDown may carry the source event clock, independent of dispatch delay.
+	// Compare timestamps only within one surface. Zero is valid when present.
+	HasTimestamp bool
+	Timestamp    time.Duration
+	// HasDoubleClickSettings distinguishes a valid zero interval from no host data.
+	// Distances are maximum axis deltas in DIPs, independent of render scale.
+	HasDoubleClickSettings                     bool
+	DoubleClickInterval                        time.Duration
+	DoubleClickDistanceX, DoubleClickDistanceY float64
 	// DX and DY are scroll distances in DIPs; Precise marks touchpads and
 	// other devices that scroll by pixels rather than by lines.
 	DX, DY  float64
 	Precise bool
 	Key     Key
-	Mods    Modifiers
-	Repeat  bool
-	Text    string
-	Caret   int
+	// Keypad distinguishes the numeric keypad from keys with the same meaning.
+	Keypad bool
+	Mods   Modifiers
+	Repeat bool
+	Text   string
+	Caret  int
 	// Replace makes TextInput replace, and TextComposition compose over,
 	// the runes From to To of the last TextInputState.Text, instead of the
 	// selection.
@@ -314,6 +347,33 @@ const (
 	// buttons of a mouse, and the keys of keyboards that have them.
 	KeyBack
 	KeyForward
+	KeyAdd
+	KeyMultiply
+	KeyClear
+	// Extended function keys are appended to preserve existing key values.
+	KeyF13
+	KeyF14
+	KeyF15
+	KeyF16
+	KeyF17
+	KeyF18
+	KeyF19
+	KeyF20
+	KeyF21
+	KeyF22
+	KeyF23
+	KeyF24
+	KeyF25
+	KeyF26
+	KeyF27
+	KeyF28
+	KeyF29
+	KeyF30
+	KeyF31
+	KeyF32
+	KeyF33
+	KeyF34
+	KeyF35
 )
 
 // KeyForRune returns the key typing r unshifted, KeyUnknown for others.

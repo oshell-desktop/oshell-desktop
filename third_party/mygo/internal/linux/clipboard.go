@@ -33,6 +33,11 @@ type gtkClipboardSource struct {
 	released func()
 }
 
+func (clipboard) Generation() (uint64, bool) {
+	clip() // Subscribe before a snapshot is taken, not at its first paste.
+	return clipboardGeneration, true
+}
+
 func initClipboardCallbacks() {
 	// Clipboard-only apps may never create a surface or initialize its drag
 	// adapter. Bind the shared selection primitives independently of it.

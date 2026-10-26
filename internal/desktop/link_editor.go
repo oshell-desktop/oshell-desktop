@@ -9,6 +9,8 @@ import (
 )
 
 type linkEditorState struct {
+	expanded                      map[string]*bool
+	searchExpanded                map[string]*bool
 	query                         string
 	index                         int
 	list                          ui.ListState

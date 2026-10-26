@@ -59,9 +59,13 @@ func proxyHandshake(ctx context.Context, c net.Conn, p ProxySettings, password, 
 		if e == nil {
 			r := bufio.NewReaderSize(c, 4096)
 			var response *http.Response
-			response, e = http.ReadResponse(r, &http.Request{Method: "CONNECT"})
+			var header []byte
+			header, e = readProxyHeader(r)
 			if e == nil {
-				if response.StatusCode != 200 {
+				response, e = http.ReadResponse(bufio.NewReader(bytes.NewReader(header)), &http.Request{Method: "CONNECT"})
+			}
+			if e == nil {
+				if response.ProtoMajor != 1 || response.StatusCode != 200 {
 					e = fmt.Errorf("HTTP 代理返回 %s", response.Status)
 				} else {
 					result = &bufferedConn{c, r}
@@ -141,7 +145,10 @@ func readSOCKSAddress(r io.Reader, kind byte) (string, error) {
 func connectSOCKS5(c net.Conn, address, user, password string) error {
 	methods := []byte{5, 1, 0}
 	if user != "" || password != "" {
-		methods = []byte{5, 2, 0, 2}
+		if len(user) > 255 || len(password) > 255 {
+			return fmt.Errorf("SOCKS5 用户名或密码过长")
+		}
+		methods = []byte{5, 1, 2}
 	}
 	if e := writeAll(c, methods); e != nil {
 		return e
@@ -152,6 +159,9 @@ func connectSOCKS5(c net.Conn, address, user, password string) error {
 	}
 	if r[0] != 5 {
 		return fmt.Errorf("代理未返回 SOCKS5")
+	}
+	if r[1] != methods[2] {
+		return fmt.Errorf("SOCKS5 代理选择了未提议的认证方式")
 	}
 	if r[1] == 2 {
 		if len(user) > 255 || len(password) > 255 {

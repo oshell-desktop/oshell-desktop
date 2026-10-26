@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -175,13 +176,22 @@ func (w *widgetTextInput) MarkedRange() (TextInputRange, bool) {
 }
 
 func (w *widgetTextInput) ReplaceText(r *TextInputRange, s string) {
-	w.prepare()
+	w.replaceText(r, s, false)
+}
+
+func (w *widgetTextInput) replaceText(r *TextInputRange, s string, privateRange bool) {
+	if !privateRange {
+		w.prepare()
+	}
 	ed := w.ed
 	if ed.readOnly {
 		return
 	}
-	if r == nil || ed.password {
-		if ed.compose != "" {
+	if r == nil || (ed.password && !privateRange) {
+		if ed.compose != "" || ed.compositionActive {
+			// GTK clears its preview before the final commit. The selection
+			// was already removed when composition began; preserve that undo
+			// transaction even while the preview is temporarily empty.
 			ed.compose = ""
 			ed.replace(ed.caret, ed.caret, s)
 		} else {
@@ -219,7 +229,7 @@ func (w *widgetTextInput) SetMarkedText(r *TextInputRange, s string, selected Te
 			wanted := platform.NormalizeTextRange(*r)
 			a, z = w.virtualRune(wanted.Start), w.virtualRune(wanted.End)
 		}
-		transaction := ed.compositionActive && ed.compose != ""
+		transaction := ed.compositionActive
 		ed.commitCompose()
 		if !transaction {
 			ed.record(false)
@@ -255,6 +265,50 @@ func (w *widgetTextInput) UnmarkText() {
 	// platform remembers the range; both operations share this undo step.
 	ed.compositionActive = transaction
 	w.publish()
+}
+
+// endMarkedText owns the deferred commit without copying or exposing a
+// password. The private range remains valid across visibility changes, but
+// not across edits, selection changes, a different binding, or a new preedit.
+func (w *widgetTextInput) endMarkedText() func(string) bool {
+	w.prepare()
+	ed := w.ed
+	if ed.compose == "" || ed.readOnly {
+		return func(string) bool { return false }
+	}
+	start := ed.caret
+	before := ed.buf.version
+	w.UnmarkText()
+	// Publishing an indexed edit can lose a compare-and-swap to an external
+	// writer. In that case loadBuffer advances the version again; the old
+	// preedit must never acquire a range in the replacement document.
+	if ed.buf.version != before+1 {
+		return func(string) bool { return false }
+	}
+	r := TextInputRange{Start: ed.buf.utf16At(start), End: ed.buf.utf16At(ed.caret)}
+	version := ed.buf.version
+	selection := ed.editorSelection.clone()
+	value, document := ed.value, ed.document
+	used := false
+	return func(text string) bool {
+		if used {
+			return false
+		}
+		used = true
+		w.prepare()
+		if w.state() == nil || w.rt.focused != w.id || !w.rt.windowFocused || ed.readOnly || ed.compose != "" ||
+			ed.buf.version != version || ed.value != value || ed.document != document ||
+			ed.caret != selection.caret || ed.anchor != selection.anchor || ed.visualSelection != selection.visualSelection || !slices.Equal(ed.selected, selection.selected) {
+			return false
+		}
+		// A bound string can be replaced before the next frame drains native
+		// edits. Accept its old published value or the exact new native value.
+		if value != nil && *value != ed.buf.s && (!ed.nativeDirty || *value != ed.nativeValue) {
+			return false
+		}
+		w.replaceText(&r, text, true)
+		return ed.buf.version == version+1
+	}
 }
 
 func (w *widgetTextInput) layout() *text.Layout {

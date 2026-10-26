@@ -83,7 +83,7 @@ func (a *App) aboutSettings(c *ui.Context) {
 	info := a.features.about
 	ui.Text(c, "OShell Desktop").FontSize(26).Bold()
 	ui.Text(c, fmt.Sprintf("版本：%s\n构建：%s\n架构：%s / %s\n最低系统要求：%s", info.version, info.build, runtime.GOOS, runtime.GOARCH, info.minimum)).Wrap()
-	ui.Text(c, "复刻基准：OShell 0.2.72；功能复刻仍在进行。").TextColor(c.Theme().TextMuted)
+	ui.Text(c, "源码核对基准：OShell 0.2.92；Windows / Linux 平台适配。").TextColor(c.Theme().TextMuted)
 	ui.Row(c).Gap(8).Children(func() {
 		ui.Button(c, "开源许可证").OnClick(func() { a.openAboutDocument("LICENSE") })
 		ui.Button(c, "第三方声明").OnClick(func() { a.openAboutDocument("THIRD_PARTY_NOTICES.md") })

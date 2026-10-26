@@ -90,11 +90,52 @@ const (
 	KeyArrowLeft
 	KeyArrowRight
 	KeyArrowUp
+	KeyNumLock
+	KeyNumpad0
+	KeyNumpad1
+	KeyNumpad2
+	KeyNumpad3
+	KeyNumpad4
+	KeyNumpad5
+	KeyNumpad6
+	KeyNumpad7
+	KeyNumpad8
+	KeyNumpad9
+	KeyNumpadAdd
+	KeyNumpadBackspace
+	KeyNumpadClear
+	KeyNumpadClearEntry
+	KeyNumpadComma
+	KeyNumpadDecimal
+	KeyNumpadDivide
+	KeyNumpadEnter
+	KeyNumpadEqual
+	KeyNumpadMemoryAdd
+	KeyNumpadMemoryClear
+	KeyNumpadMemoryRecall
+	KeyNumpadMemoryStore
+	KeyNumpadMemorySubtract
+	KeyNumpadMultiply
+	KeyNumpadParenLeft
+	KeyNumpadParenRight
+	KeyNumpadSubtract
+	KeyNumpadSeparator
+	KeyNumpadUp
+	KeyNumpadDown
+	KeyNumpadRight
+	KeyNumpadLeft
+	KeyNumpadBegin
+	KeyNumpadHome
+	KeyNumpadEnd
+	KeyNumpadInsert
+	KeyNumpadDelete
+	KeyNumpadPageUp
+	KeyNumpadPageDown
 )
 
 // KeyEscape and the function keys follow the 41 keys of the numpad.
 const (
-	KeyEscape Key = KeyArrowUp + 1 + 41 + iota
+	KeyEscape Key = KeyNumpadPageDown + 1 + iota
 	KeyF1
 )
 
@@ -130,6 +171,10 @@ type KeyEvent struct {
 	Text string
 	// Unshifted is the character the key types without modifiers.
 	Unshifted rune
+	// Alternates supplies layout metadata independently of committed Text.
+	// Zero Shifted/BaseLayout means absent; it never means infer from Text.
+	Alternates          bool
+	Shifted, BaseLayout rune
 	// Composing tells that an input method is composing.
 	Composing bool
 }
@@ -181,6 +226,9 @@ func (e *KeyEncoder) Encode(k KeyEvent) []byte {
 	call(fnKeyEventSetConsumedMods, e.ev, uintptr(k.Consumed))
 	call(fnKeyEventSetComposing, e.ev, b2u(k.Composing))
 	call(fnKeyEventSetUnshifted, e.ev, uintptr(k.Unshifted))
+	if fnKeyEventSetAlternates != 0 {
+		call(fnKeyEventSetAlternates, e.ev, b2u(k.Alternates), uintptr(k.Shifted), uintptr(k.BaseLayout))
+	}
 	// The event keeps the text's address until it is encoded.
 	var pin runtime.Pinner
 	defer pin.Unpin()
@@ -234,8 +282,9 @@ const (
 // MouseEncoder encodes pointer events in the format and for the events
 // the program asked for.
 type MouseEncoder struct {
-	h, ev uintptr
-	buf   [64]byte
+	eightBit bool
+	h, ev    uintptr
+	buf      [64]byte
 }
 
 // NewMouseEncoder makes a mouse encoder.
@@ -268,6 +317,7 @@ func (m *MouseEncoder) Free() {
 // Sync takes the terminal's mouse modes, the geometry of the screen in
 // pixels, and whether a button is held.
 func (m *MouseEncoder) Sync(t *Terminal, width, height, cellWidth, cellHeight, padLeft, padTop int, pressed bool) {
+	m.eightBit, _ = t.ControlEncoding()
 	call(fnMouseEncoderSetoptFromTerminal, m.h, t.h)
 	s := mouseEncoderSize{
 		size: unsafe.Sizeof(mouseEncoderSize{}), screenWidth: uint32(max(width, 1)), screenHeight: uint32(max(height, 1)),
@@ -293,7 +343,7 @@ func (m *MouseEncoder) Encode(action MouseAction, button int, mods Mods, x, y fl
 	if !ok(call(fnMouseEncoderEncode, m.h, m.ev, uintptr(unsafe.Pointer(&m.buf[0])), uintptr(len(m.buf)), uintptr(unsafe.Pointer(&n)))) || n == 0 {
 		return nil
 	}
-	return m.buf[:n]
+	return controlReport(m.buf[:n], m.eightBit)
 }
 
 // EncodeFocus returns the report of the terminal gaining or losing the
@@ -337,3 +387,6 @@ func PasteIsSafe(text string) bool {
 	b := []byte(text)
 	return cbool(call(fnPasteIsSafe, uintptr(unsafe.Pointer(&b[0])), uintptr(len(b))))
 }
+
+// KeyF26..KeyF35 are appended after existing native keys in OShell ABI 36.
+const KeyF26 Key = 176

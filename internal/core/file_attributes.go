@@ -9,6 +9,19 @@ import (
 
 type FileAttributes struct{ Permissions, Octal, User, Group string }
 
+func RemoteFileTypeKnown(info os.FileInfo) bool {
+	if info == nil {
+		return false
+	}
+	if source, ok := info.(interface{ TypeKnown() bool }); ok {
+		return source.TypeKnown()
+	}
+	if stat, ok := info.Sys().(*sftp.FileStat); ok && stat != nil {
+		return stat.Mode != 0
+	}
+	return true
+}
+
 // SFTP v3 supplies numeric UID/GID, not account names. Never resolve these
 // against the local machine: the remote host has a different account database.
 func RemoteFileAttributes(info os.FileInfo) FileAttributes {

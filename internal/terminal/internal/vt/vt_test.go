@@ -197,8 +197,9 @@ func TestSelection(t *testing.T) {
 	geo := Geometry{Columns: 20, CellWidth: 10, Height: 60}
 	a, _ := term.CellAt(0, 0)
 	g.Press(term, a, 2, 5, 1)
-	b, _ := term.CellAt(4, 0)
-	s, ok := g.Drag(term, b, 46, 5, geo, false)
+	// Swift's range ends at a logical character boundary, excluding that cell.
+	b, _ := term.CellAt(5, 0)
+	s, ok := g.Drag(term, b, 51, 5, geo, false)
 	if !ok {
 		t.Fatal("no selection")
 	}

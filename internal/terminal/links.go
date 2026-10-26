@@ -1,45 +1,55 @@
 package terminal
 
 import (
-	"regexp"
+	"net/url"
 	"strings"
 )
 
-// urlPattern finds the URLs programs print as text, which a Command+click
-// opens as it does hyperlinks.
-var urlPattern = regexp.MustCompile(`(?:https?|ftp|file)://[^\s"'<>` + "`" + `\x00-\x1f]+|mailto:[^\s"'<>` + "`" + `]+`)
-
-// urlAt returns the URL of text, a row whose runes are in columns cols, at
-// column col, or "".
-func urlAt(text []rune, cols []int, col int) string {
-	s := string(text)
-	for _, m := range urlPattern.FindAllStringIndex(s, -1) {
-		u := trimURL(s[m[0]:m[1]])
-		start := len([]rune(s[:m[0]]))
-		end := start + len([]rune(u))
-		if start < len(cols) && cols[start] <= col && col <= cols[end-1] {
-			return u
-		}
+// OShellTerminal.requestOpenLink accepts only these external URL schemes.
+func terminalLinkAllowed(link string) bool {
+	u, err := url.Parse(link)
+	if err != nil {
+		return false
 	}
-	return ""
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "mailto":
+		return true
+	}
+	return false
 }
 
-// trimURL trims what likely ends the sentence around a URL rather than the
-// URL: punctuation, and closing brackets that the URL did not open.
-func trimURL(u string) string {
-	for len(u) > 0 {
-		switch last := u[len(u)-1]; last {
-		case '.', ',', ';', ':', '!', '?':
-			u = u[:len(u)-1]
-			continue
-		case ')', ']', '}':
-			open := map[byte]string{')': "(", ']': "[", '}': "{"}[last]
-			if strings.Count(u, open) < strings.Count(u, string(last)) {
-				u = u[:len(u)-1]
-				continue
-			}
-		}
-		return u
+// linkAt uses logical cell coordinates and requires the terminal lock.
+func (v *view) linkAt(col, row int) string {
+	return v.linkMatchAt(col, row).text
+}
+
+type linkRowRange struct{ row, start, end int }
+type terminalLink struct {
+	text     string
+	explicit bool
+	ranges   []linkRowRange // absolute buffer rows
+}
+
+func (m terminalLink) clickURL() string {
+	if m.explicit {
+		// AppleTerminalView.urlAndParamsFrom splits every semicolon and
+		// takes the URL component immediately after the parameter component.
+		url, _, _ := strings.Cut(m.text, ";")
+		return url
 	}
-	return u
+	return m.text
+}
+
+func (v *view) linkMatchAt(col, row int) terminalLink {
+	if ref, ok := v.t.term.CellAt(col, row); ok {
+		start, end, found := v.t.term.HyperlinkRange(col, row)
+		if link := v.t.term.Hyperlink(ref); link != "" || found {
+			m := terminalLink{text: link, explicit: true}
+			if found {
+				m.ranges = []linkRowRange{{row + int(v.t.term.Scrollbar().Offset), start, end}}
+			}
+			return m
+		}
+	}
+	return v.implicitLinkMatchAt(col, row)
 }

@@ -1,10 +1,60 @@
 package ui
 
 import (
-	"github.com/egoist/mygo/internal/platform"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/egoist/mygo/internal/platform"
 )
+
+func TestNativePreeditCaretUsesClampedCharacterOffsets(t *testing.T) {
+	for _, tc := range []struct{ cursor, units int }{{-10, 0}, {-1, 0}, {0, 0}, {1, 1}, {2, 3}, {3, 4}, {4, 5}, {5, 6}, {99, 6}} {
+		t.Run(fmt.Sprint(tc.cursor), func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("preedit caret panicked: %v", r)
+				}
+			}()
+			c := &primitiveClient{text: "abc", selection: TextInputSelection{Range: TextInputRange{Start: 3, End: 3}}}
+			tt := primitiveTester(c)
+			defer tt.rt.close()
+			var composition platform.InputComposition
+			composition.Preedit(tt.h.ime.Client, nil, "a😀é中", tc.cursor)
+			if c.selection.Range != (TextInputRange{Start: 3 + tc.units, End: 3 + tc.units}) {
+				t.Fatalf("cursor=%d selection=%+v", tc.cursor, c.selection)
+			}
+		})
+	}
+}
+
+func TestNativeEmptyPreeditDoesNotDeleteUnmarkedSelection(t *testing.T) {
+	c := &primitiveClient{text: "abcd", selection: TextInputSelection{Range: TextInputRange{Start: 1, End: 3}}}
+	tt := primitiveTester(c)
+	defer tt.rt.close()
+	var composition platform.InputComposition
+	composition.Preedit(tt.h.ime.Client, nil, "", 0)
+	if c.text != "abcd" || c.changes != 0 || c.mark != nil || c.selection.Range != (TextInputRange{Start: 1, End: 3}) {
+		t.Fatalf("empty preview changed selection: %q changes=%d mark=%v", c.text, c.changes, c.mark)
+	}
+}
+
+func TestNativePreeditClearsOnlyActivePreview(t *testing.T) {
+	c := &primitiveClient{text: "abcd", selection: TextInputSelection{Range: TextInputRange{Start: 2, End: 2}}}
+	tt := primitiveTester(c)
+	defer tt.rt.close()
+	var composition platform.InputComposition
+	composition.Preedit(tt.h.ime.Client, nil, "候補😀", 99)
+	composition.Preedit(tt.h.ime.Client, nil, "", -1)
+	if c.text != "abcd" || c.selection.Range != (TextInputRange{Start: 2, End: 2}) {
+		t.Fatalf("clearing active preview changed surrounding text: %q %+v", c.text, c.selection)
+	}
+	composition.End(tt.h.ime.Client)
+	composition.Preedit(tt.h.ime.Client, nil, "新", 1)
+	if !composition.Replace(tt.h.ime.Client, nil, "字") || c.text != "ab字cd" {
+		t.Fatalf("new preview retained a previous pending range: %q", c.text)
+	}
+}
 
 // Test-only application state; the framework owns no document buffer.
 type primitiveClient struct {
@@ -119,6 +169,117 @@ func TestTextInputClientNativeEndBeforeCommit(t *testing.T) {
 	composition.Replace(client, nil, "!")
 	if c.text != "abcé候補!" {
 		t.Fatal("stale commit range survived reset", c.text)
+	}
+}
+
+func TestTextInputClientDelayedCommitDoesNotOverwriteChangedState(t *testing.T) {
+	for _, mode := range []string{"text", "selection", "new-preedit", "other-client", "stale-double-end", "long-preview"} {
+		t.Run(mode, func(t *testing.T) {
+			c := &primitiveClient{text: "abc", selection: TextInputSelection{Range: TextInputRange{Start: 3, End: 3}}}
+			tt := primitiveTester(c)
+			defer tt.rt.close()
+			client := tt.h.ime.Client
+			preview := "😀"
+			if mode == "long-preview" {
+				preview = strings.Repeat("x", 3000)
+			}
+			client.SetMarkedText(nil, preview, TextInputRange{Start: UTF16Len(preview), End: UTF16Len(preview)})
+			var order platform.InputComposition
+			order.End(client)
+			switch mode {
+			case "text":
+				c.text = "xyz😀"
+			case "stale-double-end":
+				c.text = "xyz😀"
+				order.End(client)
+			case "long-preview":
+				c.text = "abc!" + c.text[4:]
+			case "selection":
+				c.selection.Range = TextInputRange{Start: 0, End: 0}
+			case "new-preedit":
+				client.SetMarkedText(nil, "新", TextInputRange{Start: 1, End: 1})
+			case "other-client":
+				c = &primitiveClient{text: "other", selection: TextInputSelection{Range: TextInputRange{Start: 5, End: 5}}}
+				next := primitiveTester(c)
+				defer next.rt.close()
+				client = next.h.ime.Client
+			}
+			beforeText, beforeSelection, beforeMark, beforeChanges := c.text, c.selection, c.mark, c.changes
+			order.Replace(client, nil, "旧")
+			if c.text != beforeText || c.selection != beforeSelection || c.mark != beforeMark || c.changes != beforeChanges {
+				t.Fatalf("late commit changed new state: text=%q selection=%+v mark=%v", c.text, c.selection, c.mark)
+			}
+		})
+	}
+}
+
+func TestTextInputClientDuplicateEndStillReplacesOriginalPreview(t *testing.T) {
+	c := &primitiveClient{text: "abc", selection: TextInputSelection{Range: TextInputRange{Start: 3, End: 3}}}
+	tt := primitiveTester(c)
+	defer tt.rt.close()
+	client := tt.h.ime.Client
+	client.SetMarkedText(nil, "😀", TextInputRange{Start: 2, End: 2})
+	var order platform.InputComposition
+	order.End(client)
+	order.End(client)
+	order.Replace(client, nil, "é")
+	if c.text != "abcé" {
+		t.Fatalf("duplicate end lost pending range: %q", c.text)
+	}
+}
+
+type endCallbackClient struct {
+	platform.TextInputClient
+	afterUnmark func()
+}
+
+func (c *endCallbackClient) UnmarkText() { c.TextInputClient.UnmarkText(); c.afterUnmark() }
+
+func TestTextInputClientEndCallbackCannotRestoreOldRange(t *testing.T) {
+	for _, mode := range []string{"reset", "new-preedit"} {
+		c := &primitiveClient{text: "abc", selection: TextInputSelection{Range: TextInputRange{Start: 3, End: 3}}}
+		tt := primitiveTester(c)
+		client := &endCallbackClient{TextInputClient: tt.h.ime.Client}
+		client.SetMarkedText(nil, "😀", TextInputRange{Start: 2, End: 2})
+		var order platform.InputComposition
+		client.afterUnmark = func() {
+			if mode == "reset" {
+				order.Reset()
+			} else {
+				client.SetMarkedText(nil, "新", TextInputRange{Start: 1, End: 1})
+			}
+		}
+		order.End(client)
+		order.Replace(client, nil, "!")
+		if c.text != "abc😀!" {
+			t.Fatalf("%s restored old pending range: %q", mode, c.text)
+		}
+		tt.rt.close()
+	}
+}
+
+func TestTextInputClientExplicitRangeAndRecoveryAfterStaleCommit(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		c := &primitiveClient{text: "abc", selection: TextInputSelection{Range: TextInputRange{Start: 3, End: 3}}}
+		tt := primitiveTester(c)
+		client := tt.h.ime.Client
+		client.SetMarkedText(nil, "😀", TextInputRange{Start: 2, End: 2})
+		var order platform.InputComposition
+		order.End(client)
+		c.text = "xyz😀"
+		if explicit {
+			if !order.Replace(client, &TextInputRange{Start: 0, End: 1}, "X") || c.text != "Xyz😀" {
+				t.Fatalf("explicit replacement rejected: %q", c.text)
+			}
+		} else {
+			if order.Replace(client, nil, "旧") || c.text != "xyz😀" {
+				t.Fatalf("stale implicit replacement accepted: %q", c.text)
+			}
+			if !order.Replace(client, nil, "!") || c.text != "xyz😀!" {
+				t.Fatalf("fresh commit disabled: %q", c.text)
+			}
+		}
+		tt.rt.close()
 	}
 }
 

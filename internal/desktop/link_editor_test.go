@@ -58,6 +58,7 @@ func TestLockedWorkspaceHidesOpenLinkEditor(t *testing.T) {
 		t.Fatal(e)
 	}
 	a.vault.Lock()
+	a.workspaceAuthorized = false // Simulate a fresh, not-yet-authorized startup.
 	tt := ui.NewTester(a.view, 1000, 700)
 	if tt.HasText("快捷引用属性") || tt.HasText("PRIVATE_LINK_SOURCE") {
 		t.Fatal("locked workspace exposed existing editor", tt.Texts())

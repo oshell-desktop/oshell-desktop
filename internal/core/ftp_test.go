@@ -14,8 +14,12 @@ import (
 	"testing"
 )
 
-func ftpTestServer(t *testing.T) (Profile, string) {
+func ftpTestServer(t *testing.T, listingMode ...string) (Profile, string) {
 	t.Helper()
+	mode := ""
+	if len(listingMode) > 0 {
+		mode = listingMode[0]
+	}
 	root := t.TempDir()
 	listener, e := net.Listen("tcp", "127.0.0.1:0")
 	if e != nil {
@@ -106,7 +110,15 @@ func ftpTestServer(t *testing.T) (Profile, string) {
 							return
 						}
 						reply(229, fmt.Sprintf("Entering Extended Passive Mode (|||%d|)", data.Addr().(*net.TCPAddr).Port))
-					case "MLSD", "LIST", "STOR", "RETR":
+					case "MLSD", "LIST", "NLST", "STOR", "RETR":
+						if (mode == "raw-list" && command == "MLSD") || (mode == "raw-nlst" && (command == "MLSD" || command == "LIST")) {
+							reply(502, "listing unsupported")
+							continue
+						}
+						if command == "MLSD" && (mode == "list" || mode == "nlst" || mode == "invalid-utf8") || command == "LIST" && (mode == "nlst" || mode == "invalid-utf8") {
+							reply(502, "listing unsupported")
+							continue
+						}
 						if data == nil {
 							reply(425, "no data channel")
 							continue
@@ -119,18 +131,37 @@ func ftpTestServer(t *testing.T) (Profile, string) {
 							return
 						}
 						success := true
-						if command == "MLSD" || command == "LIST" {
+						if command == "MLSD" || command == "LIST" || command == "NLST" {
+							if strings.HasPrefix(mode, "raw-") && len(listingMode) > 1 {
+								io.WriteString(d, listingMode[1])
+								d.Close()
+								reply(226, "complete")
+								continue
+							}
 							entries, e := os.ReadDir(resolve(arg))
 							if e != nil {
 								success = false
 							} else {
 								for _, entry := range entries {
+									if mode == "partial" && command == "MLSD" && entry.Name() == "data.txt" {
+										continue
+									}
+									if command == "NLST" {
+										fmt.Fprintf(d, "%s\r\n", entry.Name())
+										continue
+									}
 									info, _ := entry.Info()
 									kind := "file"
 									if entry.IsDir() {
 										kind = "dir"
 									}
 									fmt.Fprintf(d, "type=%s;size=%d;modify=20261009000000; %s\r\n", kind, info.Size(), entry.Name())
+								}
+								if mode == "partial" && command == "MLSD" {
+									fmt.Fprint(d, "unrecognized listing row\r\n")
+								}
+								if mode == "invalid-utf8" && command == "NLST" {
+									fmt.Fprint(d, "bad\xffname\r\n")
 								}
 							}
 						} else if command == "STOR" {
@@ -153,6 +184,9 @@ func ftpTestServer(t *testing.T) (Profile, string) {
 							}
 						}
 						d.Close()
+						if mode == "fail-retr" && command == "RETR" {
+							success = false
+						}
 						if success {
 							reply(226, "complete")
 						} else {

@@ -54,30 +54,34 @@ type host interface {
 // the view function, lays them out, paints them and routes input to the
 // elements of the last frame. Main thread only, except where noted.
 type engine struct {
-	owner           weak.Pointer[engine]
-	epoch           uint64
-	parts           []any
-	public          *Context
-	arena           *elementOwner
-	handleChecks    bool
-	afterInputs     []inputAction
-	inputs          []*node
-	inputAt         int
-	afterInputAt    int
-	applyingInputs  bool
-	notices         []*state
-	typedInputs     []*state
-	focusFields     map[any]*focusField
-	refs            []*refState
-	actions         []action
-	textInputClosed bool
-	view            func(*context)
-	host            host
-	c               context
-	text            *text.System
-	scene           scene.Scene
-	painter         Painter
-	glyphRun        glyphRun
+	functionalKeys                map[inputKeyIdentity]functionalKeyPress
+	keyFocus, keyEpoch, keySerial uint64
+	functionalFocus               uint64
+	owner                         weak.Pointer[engine]
+	epoch                         uint64
+	parts                         []any
+	public                        *Context
+	arena                         *elementOwner
+	handleChecks                  bool
+	afterInputs                   []inputAction
+	inputs                        []*node
+	inputAt                       int
+	afterInputAt                  int
+	applyingInputs                bool
+	notices                       []*state
+	typedInputs                   []*state
+	focusFields                   map[any]*focusField
+	refs                          []*refState
+	actions                       []action
+	textInputClosed               bool
+	view                          func(*context)
+	interactionObserver           func(WindowInteraction)
+	host                          host
+	c                             context
+	text                          *text.System
+	scene                         scene.Scene
+	painter                       Painter
+	glyphRun                      glyphRun
 	// measured are the last spans laid out outside elements (richParams).
 	measured     [8]measuredSpans
 	nextMeasured int
@@ -153,6 +157,7 @@ type engine struct {
 	chain       []uint64
 	pressed     *state
 	pressButton int
+	pressClicks int
 	focused     uint64
 	// texts are selectable paragraphs in build order; selection spans those
 	// of one Selectable container (textselection.go).
@@ -248,10 +253,13 @@ type engine struct {
 	tips       tooltips
 	scrollDrag scrollDrag
 	lastPress  struct {
-		at     time.Time
-		x, y   float32
-		id     uint64
-		clicks int
+		timestamp            time.Duration
+		hasTimestamp         bool
+		at                   time.Time
+		x, y                 float32
+		distanceX, distanceY float32
+		clicks               int
+		button               int
 	}
 }
 
@@ -605,6 +613,13 @@ func (rt *engine) prune() {
 	unpressed := false
 	for id, s := range rt.states {
 		if s.seen != rt.frame || s.pass != rt.pass {
+			if rt.functionalFocus == id {
+				// Hidden tabs may never build a blurred frame. Cancel before the
+				// state (and its input callback) is recycled or kept out of sight.
+				rt.functionalFocus = 0
+				rt.clearFunctionalKeys()
+				rt.deliver(s, InputEvent{Kind: InputCancel})
+			}
 			if rt.pressed == s {
 				rt.pressed, unpressed = nil, true
 			}
@@ -709,6 +724,7 @@ func (rt *engine) armTimer() {
 
 func (rt *engine) close() {
 	rt.closed = true
+	rt.interactionObserver = nil
 	clear(rt.focusFields)
 	rt.focusFields = nil
 	for _, r := range rt.refs {
@@ -798,6 +814,7 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 	s.cursor, s.tip = e.cursor, e.tip
 	s.role = e.role
 	s.input, s.caret, s.takesText = e.inputFn, e.caret, e.takesText
+	s.functionalInput = e.functionalInput
 	if s.textClient != e.textClient {
 		if s.textAdapter != nil {
 			s.textAdapter.release()

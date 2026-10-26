@@ -56,7 +56,7 @@ func TestSessionTypeIconsAndLinkOrigin(t *testing.T) {
 					t.Fatal("actual session in Links became a shortcut")
 				}
 				if strings.HasPrefix(e.id, "link:") {
-					if style.image != linkIcon || style.badge != "" || !strings.Contains(sessionListTooltip(e.profile, true), "来源：/服务器/SSH 示例") {
+					if !style.shortcut || style.badge != "SSH" || !strings.Contains(sessionListTooltip(e.profile, true), "来源：/服务器/SSH 示例") {
 						t.Fatal("shortcut lost identity or origin")
 					}
 				}

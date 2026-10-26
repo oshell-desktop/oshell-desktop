@@ -46,7 +46,7 @@ func (a *App) duplicateConnectedTab(t *tab) {
 func (a *App) tabTitleEvents(title ui.Element, t *tab) {
 	state := ui.Local(title, "duplicate-on-release", func() struct{ pending, suppressClick bool } { return struct{ pending, suppressClick bool }{} })
 	title.HandleInput(func(ev ui.InputEvent) bool {
-		if ev.Kind == ui.InputPointerDown {
+		if ev.Kind == ui.InputPointerDown || ev.Kind == ui.InputPointerCancel {
 			state.pending = false
 			state.suppressClick = false
 		}

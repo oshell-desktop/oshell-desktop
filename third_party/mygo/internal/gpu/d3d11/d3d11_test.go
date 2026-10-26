@@ -61,6 +61,38 @@ func TestDrawsAsTheCPURenderer(t *testing.T) {
 	}
 }
 
+func TestFractionalImageRegionsMatchSoftware(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	pixels := make([]byte, 8*6*4)
+	for y := 0; y < 6; y++ {
+		for x := 0; x < 8; x++ {
+			i := (y*8 + x) * 4
+			pixels[i], pixels[i+1], pixels[i+2], pixels[i+3] = uint8(x*31), uint8(y*43), uint8((x+y)*17), 255
+		}
+	}
+	image := scene.NewImageRGBA(8, 6, pixels)
+	s := &scene.Scene{Width: 80, Height: 40, Clear: scene.Color{B: 255, A: 255}}
+	for _, region := range []struct{ dst, src scene.Rect }{
+		{scene.Rect{X: 2, Y: 2, W: 24, H: 16}, scene.Rect{X: 1, Y: .75, W: 6, H: 4.5}},
+		{scene.Rect{X: 32, Y: 2, W: 12, H: 16}, scene.Rect{X: 1, Y: .75, W: 3, H: 4.5}},
+		{scene.Rect{X: 44, Y: 2, W: 12, H: 16}, scene.Rect{X: 4, Y: .75, W: 3, H: 4.5}},
+		{scene.Rect{X: 62, Y: 2, W: 5, H: 20}, scene.Rect{W: 1e-7, H: 1e-7}},
+	} {
+		s.Ops = append(s.Ops, scene.Op{Kind: scene.OpImage, Rect: region.dst, Src: region.src, Image: image, FullImageSampling: true})
+	}
+	r, err := New(hiddenWindow(t, s.Width, s.Height))
+	if err != nil {
+		t.Skip("no Direct3D 11:", err)
+	}
+	defer r.Release()
+	if err := r.draw(s); err != nil {
+		t.Fatal(err)
+	}
+	pix, stride := r.readBack(t)
+	gputest.Compare(t, "fractional image regions", pix, stride, s)
+}
+
 // TestResizeSettles checks that while the window changes size the swap
 // chain draws into part of larger buffers, resized only when the window
 // outgrows them, and that once the settle timer asked for a frame, the

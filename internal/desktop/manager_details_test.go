@@ -8,6 +8,30 @@ import (
 	"testing"
 )
 
+func TestManagerParentConsumesActualClickSeriesAfterNavigation(t *testing.T) {
+	cfg := core.DefaultConfig()
+	cfg.Directories = []string{"outer/child"}
+	a := newApp(&core.Store{Dir: t.TempDir()}, cfg)
+	a.navigateManager("outer/child")
+	tt := ui.NewTester(a.managerView, 900, 580)
+	r, ok := tt.Find("../")
+	if !ok {
+		t.Fatal("parent row missing")
+	}
+	x, y := r.X+r.W/2, r.Y+r.H/2
+	for count := 1; count <= 5; count++ {
+		tt.ClickAt(x, y)
+		if a.managerGroup != "outer" {
+			t.Fatalf("click %d navigated rebuilt listing to %q", count, a.managerGroup)
+		}
+	}
+	tt.CancelPointer()
+	tt.ClickAt(x, y)
+	if a.managerGroup != "" {
+		t.Fatal("new series did not navigate to root", a.managerGroup)
+	}
+}
+
 func TestManagerParentSingleClickAndDoubleClickSuppression(t *testing.T) {
 	cfg := core.DefaultConfig()
 	cfg.Directories = []string{"outer/child"}
@@ -28,6 +52,9 @@ func TestManagerParentSingleClickAndDoubleClickSuppression(t *testing.T) {
 	}
 	if a.authOpen || a.managerGroup != "outer" {
 		t.Fatal("second click changed destination")
+	}
+	if !a.managerCellInput(other, ui.InputEvent{Kind: ui.InputPointerCancel}) || a.managerParentClick {
+		t.Fatal("capture cancellation retained parent click suppression")
 	}
 	if a.managerCellInput(other, ui.InputEvent{Kind: ui.InputPointerDown, Button: 0, Clicks: 1}) {
 		t.Fatal("new ordinary click swallowed")

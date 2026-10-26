@@ -39,7 +39,7 @@ func (a *App) fontPicker(c *ui.Context) {
 	combo.Popup(func(panel ui.Element) {
 		panel.Padding(5).Background(c.Theme().Background).Border(1, c.Theme().Border)
 		ui.Scroll(c).MaxHeight(280).Gap(3).Children(func() {
-			fonts := append([]core.FontEntry{{Name: "", Monospaced: true}, {Name: "DejaVu Sans Mono", Monospaced: true}}, a.features.fontCatalog...)
+			fonts := append([]core.FontEntry{{Name: "", Monospaced: true}, {Name: "DejaVu Sans Mono", Monospaced: true}, {Name: "Cascadia Code", Monospaced: true}}, a.features.fontCatalog...)
 			count := 0
 			for _, font := range fonts {
 				if combo.Filtering() && !strings.Contains(strings.ToLower(font.Name), strings.ToLower(s.FontFamily)) {
@@ -52,7 +52,7 @@ func (a *App) fontPicker(c *ui.Context) {
 				label := font.Name
 				if label == "" {
 					label = "系统等宽（自动）"
-				} else if label == "DejaVu Sans Mono" {
+				} else if label == "DejaVu Sans Mono" || label == "Cascadia Code" {
 					label += "（内置）"
 				} else if font.Monospaced {
 					label += "（等宽）"

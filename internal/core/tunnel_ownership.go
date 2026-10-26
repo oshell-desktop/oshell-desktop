@@ -2,9 +2,27 @@
 package core
 
 import (
+	"net"
 	"strings"
 	"sync"
 )
+
+// A failed listener Close is not evidence that its bound port was released.
+// Keep ownership until shutdown completes and every listener is confirmed closed.
+func (t *transport) releaseDrainedTunnels() {
+	t.mu.Lock()
+	drained := t.shutdownComplete
+	for closer := range t.closers {
+		if _, listener := closer.(net.Listener); listener {
+			drained = false
+			break
+		}
+	}
+	t.mu.Unlock()
+	if drained {
+		t.releaseTunnels()
+	}
+}
 
 var tunnelOwnership = struct {
 	sync.Mutex

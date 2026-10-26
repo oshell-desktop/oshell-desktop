@@ -1,17 +1,18 @@
 package core
 
-// Windows and Linux use GitHub's HTTPS API and asset digests as their trust
-// source. This is intentionally separate from the macOS Ed25519/Pages protocol.
+// Portable updates require pinned Ed25519 metadata and archive signatures.
+// The private-repository transport is optional; it never establishes trust.
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -19,6 +20,7 @@ import (
 const DefaultUpdateRepository = "oshell-desktop/oshell-desktop"
 
 type ReleaseUpdate struct {
+	verified           *VerifiedUpdate
 	Version, Notes     string
 	asset              releaseAsset
 	target             string
@@ -99,53 +101,11 @@ func CheckReleaseUpdate(ctx context.Context, cache *UpdateMetadataCache, source 
 	if len(credentials) > 0 {
 		token = credentials[0]
 	}
-	data, err := cache.Value(ctx, func(ctx context.Context) ([]byte, error) {
-		client := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-		request, err := http.NewRequestWithContext(ctx, "GET", "https://api.github.com/repos/"+source.Repository+"/releases/latest", nil)
-		if err != nil {
-			return nil, err
-		}
-		request.Header.Set("User-Agent", "OShell-Desktop")
-		request.Header.Set("Accept", "application/vnd.github+json")
-		if token != "" {
-			request.Header.Set("Authorization", "Bearer "+token)
-		}
-		response, err := client.Do(request)
-		if err != nil {
-			return nil, fmt.Errorf("无法连接 GitHub Release：%w", err)
-		}
-		defer response.Body.Close()
-		if response.StatusCode == 404 {
-			return nil, fmt.Errorf("仓库尚无正式 Release，或访问权限不足；私有仓库请配置访问令牌")
-		}
-		if response.StatusCode != 200 {
-			if response.StatusCode == 401 {
-				return nil, fmt.Errorf("GitHub 访问令牌无效或已过期")
-			}
-			return nil, &UpdateHTTPError{Status: response.StatusCode}
-		}
-		data, err := io.ReadAll(io.LimitReader(response.Body, UpdateMetadataLimit+1))
-		if err == nil {
-			_, err = decodeRelease(data, source, target, current)
-		}
-		return data, err
-	})
-	if err != nil {
-		return nil, err
-	}
-	update, err := decodeRelease(data, source, target, current)
-	if err == nil && update != nil && token != "" {
-		if update.asset.ID <= 0 {
-			return nil, fmt.Errorf("Release 附件缺少有效标识")
-		}
-		update.token = token
-		update.assetAPIURL = "https://api.github.com/repos/" + source.Repository + "/releases/assets/" + strconv.FormatInt(update.asset.ID, 10)
-	}
-	return update, err
+	return checkSignedPortableUpdate(ctx, cache, source, target, current, UpdateBuild, UpdatePublicKey, token)
 }
 func (u *ReleaseUpdate) download(ctx context.Context, directory string, progress func(int64, int64), client *http.Client) (path string, err error) {
-	if u == nil || u.asset.Size <= 0 {
-		return "", fmt.Errorf("请先检查更新")
+	if err = u.verifyAuthority(); err != nil {
+		return "", err
 	}
 	url := u.asset.URL
 	if u.token != "" {
@@ -218,6 +178,10 @@ func (u *ReleaseUpdate) download(ctx context.Context, directory string, progress
 	}
 	if count != u.asset.Size || !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), strings.TrimPrefix(u.asset.Digest, "sha256:")) {
 		return "", fmt.Errorf("更新包不完整或 SHA-256 校验失败")
+	}
+	signature, _ := base64.StdEncoding.DecodeString(u.verified.archive.Signature)
+	if !ed25519.Verify(u.verified.publicKey, hash.Sum(nil), signature) {
+		return "", fmt.Errorf("安装包签名验证失败")
 	}
 	if err = file.Sync(); err != nil {
 		return "", err

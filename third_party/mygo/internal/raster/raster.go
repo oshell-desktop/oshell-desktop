@@ -981,9 +981,13 @@ func (r *renderer) glyphs(op *scene.Op) {
 		if atlas == nil {
 			continue
 		}
+		if g.W <= 0 || g.H <= 0 || g.UW == 0 || g.VH == 0 {
+			continue
+		}
+		scaled := g.W != float32(g.UW) || g.H != float32(g.VH)
 		gx, gy := int(math.Round(float64(g.X))), int(math.Round(float64(g.Y)))
 		x0, y0 := max(gx, r.x0), max(gy, r.y0)
-		x1, y1 := min(gx+int(g.UW), r.x1), min(gy+int(g.VH), r.y1)
+		x1, y1 := min(gx+int(math.Ceil(float64(g.W))), r.x1), min(gy+int(math.Ceil(float64(g.H))), r.y1)
 		if x0 >= x1 || y0 >= y1 {
 			continue
 		}
@@ -997,7 +1001,7 @@ func (r *renderer) glyphs(op *scene.Op) {
 			boost = scene.ThinBoost
 		}
 		correct := contrast != 0 || boost != 0 || text.GammaRatios != [4]float32{}
-		if !g.Colored && !g.Subpixel && pt == nil && !correct && g.Color.A == 255 {
+		if !scaled && !g.Colored && !g.Subpixel && pt == nil && !correct && g.Color.A == 255 {
 			r.maskOpaque(atlas, g, gx, gy, image.Rect(x0, y0, x1, y1))
 			continue
 		}
@@ -1014,13 +1018,27 @@ func (r *renderer) glyphs(op *scene.Op) {
 					}
 				}
 				p := row[4*x : 4*x+4]
+				var sampled [4]byte
+				if scaled {
+					sampled = sampleGlyph(atlas, g, float32(x-gx)+0.5, float32(y-gy)+0.5)
+				}
 				switch {
 				case g.Colored:
-					s := atlas.Pix[(ay*atlas.W+ax)*4:]
+					var s []byte
+					if scaled {
+						s = sampled[:]
+					} else {
+						s = atlas.Pix[(ay*atlas.W+ax)*4:]
+					}
 					c := [4]float32{float32(s[0]) / 255 * alpha, float32(s[1]) / 255 * alpha, float32(s[2]) / 255 * alpha, float32(s[3]) / 255 * alpha}
 					blend(p, c, cov)
 				case g.Subpixel:
-					s := atlas.Pix[(ay*atlas.W+ax)*4:]
+					var s []byte
+					if scaled {
+						s = sampled[:]
+					} else {
+						s = atlas.Pix[(ay*atlas.W+ax)*4:]
+					}
 					if s[0]|s[1]|s[2] == 0 {
 						continue
 					}
@@ -1034,7 +1052,12 @@ func (r *renderer) glyphs(op *scene.Op) {
 					}
 					blendSubpixel(p, c, a, tint[3]*cov)
 				default:
-					m := atlas.Pix[ay*atlas.W+ax]
+					var m byte
+					if scaled {
+						m = sampled[0]
+					} else {
+						m = atlas.Pix[ay*atlas.W+ax]
+					}
 					if m == 0 {
 						continue
 					}
@@ -1050,6 +1073,29 @@ func (r *renderer) glyphs(op *scene.Op) {
 			}
 		}
 	}
+}
+
+// sampleGlyph filters only inside this glyph's atlas rectangle, keeping adjacent
+// glyphs out of stretched text. Ordinary text retains its original fast path.
+func sampleGlyph(a *scene.Atlas, g scene.Glyph, x, y float32) (out [4]byte) {
+	u, v := x*float32(g.UW)/g.W-0.5, y*float32(g.VH)/g.H-0.5
+	x0, y0 := int(math.Floor(float64(u))), int(math.Floor(float64(v)))
+	tx, ty := u-float32(x0), v-float32(y0)
+	channels := 1
+	if g.Colored || g.Subpixel {
+		channels = 4
+	}
+	at := func(x, y, c int) float32 {
+		x = int(g.U) + min(max(x, 0), int(g.UW)-1)
+		y = int(g.V) + min(max(y, 0), int(g.VH)-1)
+		return float32(a.Pix[(y*a.W+x)*channels+c])
+	}
+	for c := 0; c < channels; c++ {
+		top := at(x0, y0, c)*(1-tx) + at(x0+1, y0, c)*tx
+		bottom := at(x0, y0+1, c)*(1-tx) + at(x0+1, y0+1, c)*tx
+		out[c] = byte(top*(1-ty) + bottom*ty + 0.5)
+	}
+	return
 }
 
 // maskOpaque draws ordinary opaque text with 8-bit coverage. Integer
@@ -1102,6 +1148,10 @@ func (r *renderer) image(op *scene.Op) {
 	box := newShape(op.Rect, radii)
 	round := hasRadii(radii)
 	sx, sy := op.Src.W/op.Rect.W, op.Src.H/op.Rect.H
+	sampleBounds := op.Src
+	if op.FullImageSampling {
+		sampleBounds = scene.Rect{W: float32(img.W), H: float32(img.H)}
+	}
 	x0, y0, x1, y1 := r.pixelBounds(op.Rect)
 	for y := y0; y < y1; y++ {
 		row := r.dst.Pix[y*r.dst.Stride:]
@@ -1120,7 +1170,7 @@ func (r *renderer) image(op *scene.Op) {
 			if cov <= 0 {
 				continue
 			}
-			c := sample(img, op.Src.X+(px-op.Rect.X)*sx, op.Src.Y+(py-op.Rect.Y)*sy, op.Src)
+			c := sample(img, op.Src.X+(px-op.Rect.X)*sx, op.Src.Y+(py-op.Rect.Y)*sy, sampleBounds)
 			if op.Grayscale {
 				l := 0.2126*c[0] + 0.7152*c[1] + 0.0722*c[2]
 				c[0], c[1], c[2] = l, l, l

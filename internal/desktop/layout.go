@@ -157,11 +157,7 @@ func (a *App) activeConnections() int {
 			if p.closed {
 				return
 			}
-			if p.term != nil {
-				if p.term.HasActiveProcess() {
-					n++
-				}
-			} else if p.conn.Alive() || p.ftp != nil || p.status == "正在连接…" {
+			if paneNeedsCloseConfirmation(p) {
 				n++
 			}
 		})

@@ -29,7 +29,7 @@ func TestTerminalControlShortcutsReachFocusedTerminal(t *testing.T) {
 	for len(conn.text()) < len(want) && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if conn.text() != want || len(a.tabs) != 1 || a.features.sessionClose != nil || a.features.findOpen || a.authOpen {
+	if conn.text() != want || len(a.tabs) != 1 || a.features.sessionClose != nil || a.hasOpenTerminalSearch() || a.authOpen {
 		t.Fatalf("editing intercepted: sent %q", conn.text())
 	}
 }

@@ -78,8 +78,8 @@ func (r HighlightRule) ForHostname(host string) HighlightRule {
 var highlightColor = regexp.MustCompile(`^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$`)
 
 func (h HighlightSet) Validate() error {
-	if h.ID == "" || strings.TrimSpace(h.Name) == "" || len(h.Name) > 1024 || strings.ContainsFunc(h.Name, unicode.IsControl) || len(h.Rules) > 32 {
-		return fmt.Errorf("突出显示集名称无效，或规则超过 32 条")
+	if h.ID == "" || strings.TrimSpace(h.Name) == "" || len(h.Name) > 1024 || strings.ContainsFunc(h.Name, unicode.IsControl) {
+		return fmt.Errorf("突出显示集名称无效")
 	}
 	ids := map[string]bool{}
 	for _, r := range h.Rules {
@@ -105,7 +105,7 @@ func (c Config) ActiveHighlightRules(host string) []HighlightRule {
 	for _, set := range c.HighlightSets {
 		if set.ID == c.Settings.HighlightSetID {
 			result := make([]HighlightRule, 0, len(set.Rules))
-			for _, r := range set.Rules {
+			for _, r := range set.Rules[:min(len(set.Rules), 32)] {
 				if r.Enabled {
 					r = r.ForHostname(host)
 					if r.Pattern != "" {
@@ -132,9 +132,6 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	}
 	if _, exists := fields["highlightSets"]; !exists && len(value.Settings.Highlights) > 0 {
 		rules := value.Settings.Highlights
-		if len(rules) > 32 {
-			return fmt.Errorf("旧突出显示规则超过 32 条，请先分组整理")
-		}
 		for i := range rules {
 			if rules[i].ID == "" {
 				rules[i].ID = NewID()

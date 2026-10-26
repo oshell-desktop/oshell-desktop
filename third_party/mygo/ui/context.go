@@ -91,6 +91,7 @@ func (c *context) alloc() *node {
 }
 
 func (c *context) reset(now time.Time, w, h float32) {
+	c.rt.interactionObserver = nil
 	for _, f := range c.rt.focusFields {
 		clear(f.members)
 		f.members = f.members[:0]
@@ -516,11 +517,12 @@ type state struct {
 
 	// input, caret and takesText are those of the last frame's element
 	// (HandleInput, TextCaret).
-	input       func(InputEvent) bool
-	textClient  TextInputClient
-	textAdapter *textInputAdapter
-	caret       Rect
-	takesText   bool
+	input           func(InputEvent) bool
+	textClient      TextInputClient
+	textAdapter     *textInputAdapter
+	caret           Rect
+	takesText       bool
+	functionalInput bool
 	// scope is the dialog the element was in, 0 for none, and anchor the
 	// element it was a popover of (AttachTo, PopoverBase).
 	scope, anchor uint64

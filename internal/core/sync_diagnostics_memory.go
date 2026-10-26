@@ -16,6 +16,10 @@ var syncDiagnosticUse uint64
 
 func cloneSyncDiagnostic(doc SyncDiagnosticDocument) SyncDiagnosticDocument {
 	out := doc
+	if doc.Summary.Failure != nil {
+		failure := *doc.Summary.Failure
+		out.Summary.Failure = &failure
+	}
 	out.Entries = append([]SyncDiagnosticEntry(nil), doc.Entries...)
 	for i, entry := range out.Entries {
 		if entry.Failure != nil {

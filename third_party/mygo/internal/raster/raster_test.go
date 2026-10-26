@@ -36,6 +36,35 @@ func pixel(m *Image, x, y int) [4]byte {
 
 func near(a, b byte) bool { return a >= b-2 && a <= b+2 || a == b }
 
+func TestScaledGlyphs(t *testing.T) {
+	for _, colored := range []bool{false, true} {
+		channels := 1
+		if colored {
+			channels = 4
+		}
+		a := scene.NewAtlas(channels, 4, 4)
+		for i := range a.Pix {
+			a.Pix[i] = 255
+		}
+		s := &scene.Scene{Width: 24, Height: 12, MaskAtlas: a, ColorAtlas: a, Clear: scene.Color{A: 255}}
+		s.Glyphs = []scene.Glyph{{X: 2, Y: 2, W: 12, H: 2, U: 1, V: 1, UW: 2, VH: 2, Colored: colored, Color: scene.Color{R: 255, G: 255, B: 255, A: 255}}}
+		s.Ops = []scene.Op{{Kind: scene.OpGlyphs, Start: 0, End: 1}}
+		dst := NewImage(s.Width, s.Height)
+		Render(dst, s)
+		for y := 0; y < 12; y++ {
+			for x := 0; x < 24; x++ {
+				want := byte(0)
+				if x >= 2 && x < 14 && y >= 2 && y < 4 {
+					want = 255
+				}
+				if got := pixel(dst, x, y); got[0] != want {
+					t.Fatalf("colored=%v at %d,%d=%v want=%d", colored, x, y, got, want)
+				}
+			}
+		}
+	}
+}
+
 func TestRenderShapes(t *testing.T) {
 	s := &scene.Scene{Width: 200, Height: 120, Clear: scene.Color{R: 255, G: 255, B: 255, A: 255}}
 	s.Ops = append(s.Ops,

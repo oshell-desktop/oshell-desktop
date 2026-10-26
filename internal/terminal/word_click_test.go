@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -35,14 +36,14 @@ func TestProgressiveDoubleClickAndTripleLine(t *testing.T) {
 			t.Fatalf("click %d selected %q, want %q", i+1, tt.Clipboard(), want)
 		}
 	}
-	// Word dragging keeps the broader whitespace policy, including punctuation.
+	// The fifth press uses the row branch; its drag also clears the word seed.
 	x, y := cellCenter(term, 8, 0)
 	tt.Press(x, y)
 	x, y = cellCenter(term, 21, 0)
 	tt.Move(x, y)
 	tt.Release(x, y)
 	if got := tt.Clipboard(); got != "/home/file.txt /etc/name.conf" {
-		t.Fatalf("expanded drag selected %q", got)
+		t.Fatalf("fifth-click row drag selected %q", got)
 	}
 	for range 2 {
 		clickWord(term, tt, 8, 0)
@@ -52,44 +53,64 @@ func TestProgressiveDoubleClickAndTripleLine(t *testing.T) {
 	}
 }
 
+// Explicit event times exercise the direct-caller fallback. Window-wide counts
+// are covered separately through Tester, without mutating the terminal's clock.
 func TestProgressiveDoubleClickAfterPauseAndReset(t *testing.T) {
 	term, tt := wordClickFixture(t, "/home/file.txt /etc/name.conf", 500)
-	// Make room in the monotonic clock to simulate a pause without sleeping.
-	clickWord(term, tt, 8, 0)
-	term.v.gestureStart = time.Now().Add(-2 * time.Second)
+	clickWord(term, tt, 8, 0) // allocate the gesture
 	term.v.wordClicks = wordClickState{}
+	at := time.Second
+	got := ""
+	click := func(col int) { at += 100 * time.Millisecond; got = timedWordClick(t, term, col, 0, 0, at) }
 	for range 2 {
-		clickWord(term, tt, 8, 0)
+		click(8)
 	}
-	if tt.Clipboard() != "file" {
-		t.Fatal(tt.Clipboard())
+	if got != "file" {
+		t.Fatal(got)
 	}
-	term.v.wordClicks.last -= uint64(600 * time.Millisecond)
+	at += 600 * time.Millisecond
 	for range 2 {
-		clickWord(term, tt, 8, 0)
+		click(8)
 	}
-	if tt.Clipboard() != "/home/file.txt" {
-		t.Fatal("second double click after pause did not expand", tt.Clipboard())
+	if got != "/home/file.txt" {
+		t.Fatal("second double click after pause did not expand", got)
 	}
 	for range 2 {
-		clickWord(term, tt, 21, 0)
+		click(21)
 	}
-	if tt.Clipboard() != "name" {
-		t.Fatal("another position inherited whitespace selection", tt.Clipboard())
+	if got != "name" {
+		t.Fatal("another position inherited whitespace selection", got)
 	}
 	term.Feed([]byte(" changed"))
 	for range 2 {
-		clickWord(term, tt, 21, 0)
+		click(21)
 	}
-	if tt.Clipboard() != "name" {
-		t.Fatal("new output did not reset selection progression", tt.Clipboard())
+	if got != "/etc/name.conf" {
+		t.Fatal("unrelated output incorrectly reset word seed", got)
 	}
 	tt.Key(0, ui.KeyEscape)
 	for range 2 {
-		clickWord(term, tt, 21, 0)
+		click(21)
 	}
-	if tt.Clipboard() != "name" {
-		t.Fatal("keyboard input did not reset selection progression", tt.Clipboard())
+	if got != "name" {
+		t.Fatal("keyboard input did not reset fallback selection progression", got)
+	}
+}
+
+func TestWordClickHostCountSurvivesKeyboardSeedReset(t *testing.T) {
+	term, tt := wordClickFixture(t, "/home/file.txt end", 500)
+	for range 4 {
+		clickWord(term, tt, 8, 0)
+	}
+	tt.Key(0, ui.KeyEscape)
+	if term.v.wordClicks.seed != nil {
+		t.Fatal("key retained word seed")
+	}
+	for range 2 {
+		clickWord(term, tt, 8, 0)
+	}
+	if got := tt.Clipboard(); got != "/home/file.txt end" {
+		t.Fatal("terminal replaced host fifth/sixth count after key", got)
 	}
 }
 
@@ -122,5 +143,18 @@ func TestProgressiveShiftDoubleClickStillSelectsWhitespace(t *testing.T) {
 	term.mu.Unlock()
 	if text != "/home/file.txt" {
 		t.Fatal("Shift double click regressed", text)
+	}
+}
+
+func TestTripleClickPhysicalWrappedRow(t *testing.T) {
+	term, tt := wordClickFixture(t, "", 240)
+	cols, _ := term.Size()
+	term.Feed([]byte(strings.Repeat("A", cols) + strings.Repeat("B", cols)))
+	tt.Frame()
+	for range 3 {
+		clickWord(term, tt, 2, 1)
+	}
+	if got := tt.Clipboard(); got != strings.Repeat("B", cols-1) {
+		t.Fatalf("physical row copied %q, want %d B cells", got, cols-1)
 	}
 }

@@ -56,12 +56,12 @@ func TestSurrounding(handle uintptr) (text string, caret int, ok bool) {
 		mustBind(libGTK, &gtkIMMulticontextSetContextID, "gtk_im_multicontext_set_context_id")
 	}
 	const simple = "gtk-im-context-simple"
-	if goStr(gtkIMMulticontextGetContextID(s.im)) != simple {
-		gtkIMMulticontextSetContextID(s.im, cs(simple))
+	if goStr(gtkIMMulticontextGetContextID(s.im.Handle())) != simple {
+		gtkIMMulticontextSetContextID(s.im.Handle(), cs(simple))
 	}
 	var p ptr
 	var cursor int32
-	if !gtkIMContextGetSurrounding(s.im, &p, &cursor) {
+	if !gtkIMContextGetSurrounding(s.im.Handle(), &p, &cursor) {
 		return "", 0, true
 	}
 	text = takeStr(p)
@@ -79,13 +79,13 @@ func TestComposeOver(handle uintptr, text string, caret int, commit bool, from, 
 	}
 	if from >= 0 {
 		_, cursor, _ := TestSurrounding(handle)
-		gtkIMContextDeleteSurrounding(s.im, int32(from-cursor), int32(length))
+		gtkIMContextDeleteSurrounding(s.im.Handle(), int32(from-cursor), int32(length))
 	}
 	if commit {
 		if gSignalEmitString == nil {
 			mustBind(libGObject, &gSignalEmitString, "g_signal_emit_by_name")
 		}
-		gSignalEmitString(s.im, cs("commit"), cs(text))
+		gSignalEmitString(s.im.Handle(), cs("commit"), cs(text))
 	} else {
 		// Input methods compose in contexts out of the test's reach: send
 		// what the preedit-changed signal would.

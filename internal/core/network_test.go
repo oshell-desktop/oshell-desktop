@@ -28,6 +28,7 @@ type testSSH struct {
 	auth                             atomic.Int32
 	keepAliveRequests                atomic.Int32
 	ignoreKeepAlive, rejectKeepAlive atomic.Bool
+	rejectSFTP                       atomic.Bool
 }
 
 func startSSH(t *testing.T, password string, configure ...func(*ssh.ServerConfig)) *testSSH {
@@ -191,6 +192,7 @@ func startSSH(t *testing.T, password string, configure ...func(*ssh.ServerConfig
 								case "shell":
 									r.Reply(true, nil)
 									io.Copy(ch, ch)
+									ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{0}))
 									return
 								case "exec":
 									var payload struct{ Command string }
@@ -213,7 +215,7 @@ func startSSH(t *testing.T, password string, configure ...func(*ssh.ServerConfig
 								case "subsystem":
 									var payload struct{ Name string }
 									ssh.Unmarshal(r.Payload, &payload)
-									if payload.Name != "sftp" {
+									if payload.Name != "sftp" || server.rejectSFTP.Load() {
 										r.Reply(false, nil)
 										continue
 									}

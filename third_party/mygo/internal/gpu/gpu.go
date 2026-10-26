@@ -265,7 +265,7 @@ func (b *Builder) Build(s *scene.Scene, image func(*scene.Image) uintptr) {
 				}
 				aw, ah := float32(a.W), float32(a.H)
 				in := Instance{
-					Rect:   [4]float32{float32(math.Round(float64(g.X))), float32(math.Round(float64(g.Y))), float32(g.UW), float32(g.VH)},
+					Rect:   [4]float32{float32(math.Round(float64(g.X))), float32(math.Round(float64(g.Y))), g.W, g.H},
 					Radii:  s.Text.GammaRatios,
 					Inner:  [4]float32{contrast, boost},
 					UV:     [4]float32{float32(g.U) / aw, float32(g.V) / ah, float32(g.U+g.UW) / aw, float32(g.V+g.VH) / ah},

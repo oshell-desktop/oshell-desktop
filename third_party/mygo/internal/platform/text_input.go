@@ -38,23 +38,154 @@ type TextInputClient interface {
 	IndexForPoint(x, y float64) (int, bool)
 }
 
-// InputComposition preserves the native end-preedit/commit ordering without
-// owning text. Some input methods unmark before delivering their result.
-type InputComposition struct{ pending *TextRange }
+// InputComposition preserves native end-preedit/commit ordering. A remembered
+// range is usable only while its client and surrounding document stay unchanged.
+type InputComposition struct {
+	pending   *endedComposition
+	epoch     uint64
+	canceling bool
+}
 
-func (c *InputComposition) Reset() { c.pending = nil }
+type endedComposition struct {
+	client      TextInputClient
+	commit      func(string) bool
+	rangeWanted TextRange
+	context     TextContext
+	selection   TextSelection
+	text        string
+	actual      TextRange
+}
+
+func (c *InputComposition) Reset() { c.pending = nil; c.epoch++ }
+
+// CancelNative isolates synchronous callbacks from an input method's reset.
+// GTK XIM may emit commit during reset; it is not a user-confirmed result.
+func (c *InputComposition) CancelNative(cancel func()) {
+	c.Reset()
+	if c.canceling {
+		return
+	}
+	c.canceling = true
+	defer func() {
+		c.Reset()
+		c.canceling = false
+	}()
+	cancel()
+}
+
+func (c *InputComposition) Canceling() bool { return c.canceling }
+
+// Start separates a new native sequence from a cancelled empty preview.
+// Empty updates inside one sequence must not create additional undo steps.
+func (c *InputComposition) Start(client TextInputClient) {
+	if c.canceling {
+		return
+	}
+	c.Reset()
+	if owner, ok := client.(interface{ BeginMarkedText() }); ok {
+		owner.BeginMarkedText()
+	}
+}
+
+// Preedit delivers native composition text. The caret is a Unicode character
+// offset, while the client interface uses UTF-16 offsets.
+func (c *InputComposition) Preedit(client TextInputClient, r *TextRange, text string, cursor int) {
+	if c.canceling {
+		return
+	}
+	c.Reset()
+	if text == "" {
+		if _, marked := client.MarkedRange(); !marked {
+			// Cancellation must not replace an unrelated selection.
+			return
+		}
+	}
+	caret := 0
+	for _, ch := range text {
+		if cursor <= 0 {
+			break
+		}
+		caret += utf16.RuneLen(ch)
+		cursor--
+	}
+	client.SetMarkedText(r, text, TextRange{Start: caret, End: caret})
+}
+
 func (c *InputComposition) End(client TextInputClient) {
-	if r, ok := client.MarkedRange(); ok {
-		c.pending = &r
+	if c.canceling {
+		return
+	}
+	r, marked := client.MarkedRange()
+	if !marked {
+		// Some IMEs end twice before committing. Keep the first range only
+		// for Replace to validate. Dropping it here would redirect a stale
+		// commit to the new selection. No second unmark call is needed.
+		return
+	}
+	c.Reset()
+	epoch := c.epoch
+	// Built-in editors can retain a private range and revision, including
+	// password controls whose native text queries deliberately hide offsets.
+	if owner, ok := client.(interface {
+		EndMarkedText() (func(string) bool, bool)
+	}); ok {
+		if commit, handled := owner.EndMarkedText(); handled {
+			if commit == nil {
+				commit = func(string) bool { return false }
+			}
+			if c.epoch == epoch {
+				c.pending = &endedComposition{client: client, commit: commit}
+			}
+			return
+		}
 	}
 	client.UnmarkText()
-}
-func (c *InputComposition) Replace(client TextInputClient, r *TextRange, text string) {
-	if r == nil && c.pending != nil {
-		r = c.pending
+	if c.epoch != epoch {
+		return
 	}
-	c.pending = nil
+	if _, marked := client.MarkedRange(); marked {
+		return
+	}
+	context := ClientTextContext(client)
+	text, actual := client.TextForRange(r)
+	selection := client.Selection()
+	if c.epoch == epoch {
+		c.pending = &endedComposition{client: client, rangeWanted: r, context: context, text: text, actual: actual, selection: selection}
+	}
+}
+
+// Replace reports whether this result was delivered. A stale implicit result
+// is dropped, not redirected to the client's new selection. Explicit ranges
+// remain independent operations and discard any previous pending range.
+func (c *InputComposition) Replace(client TextInputClient, r *TextRange, text string) bool {
+	if c.canceling {
+		return false
+	}
+	pending := c.pending
+	c.Reset()
+	if r == nil && pending != nil {
+		if pending.commit != nil {
+			return pending.client == client && pending.commit(text)
+		}
+		epoch := c.epoch
+		if !pending.matches(client) || c.epoch != epoch {
+			return false
+		}
+		r = &pending.rangeWanted
+	}
 	client.ReplaceText(r, text)
+	return true
+}
+
+func (p *endedComposition) matches(client TextInputClient) bool {
+	if p.client != client || p.selection != client.Selection() || p.context != ClientTextContext(client) {
+		return false
+	}
+	// The pending preedit can be longer than the surrounding-text window.
+	// Check the entire replacement range as well, without reading the whole
+	// document or exposing it to the native input method.
+	text, actual := client.TextForRange(p.rangeWanted)
+	return p.text == text && p.actual == actual
 }
 
 // UTF16Len counts native text offsets without allocating an encoded string.

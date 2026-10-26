@@ -7,6 +7,16 @@ import (
 	"time"
 )
 
+func canSaveSessionPassword(profile core.Profile, cred core.Credentials, vault *core.Vault) bool {
+	if vault == nil || cred.ExternalLaunch {
+		return false
+	}
+	if _, locked := vault.State(); locked {
+		return false
+	}
+	return profile.Kind == "ssh" || profile.Kind == "sftp" || profile.Kind == "ftp"
+}
+
 // Existing-session callers must never recreate a deleted configuration.
 func (a *App) saveAuthenticatedPassword(profile core.Profile, password string, identity core.SSHIdentity, vault *core.Vault, revision string, protection ...string) {
 	a.saveAuthenticatedSessionPassword(profile, password, identity, vault, revision, true, protection...)
@@ -15,6 +25,10 @@ func (a *App) saveAuthenticatedPassword(profile core.Profile, password string, i
 // Called on the UI thread only after the complete protocol login succeeds.
 func (a *App) saveAuthenticatedSessionPassword(profile core.Profile, password string, identity core.SSHIdentity, vault *core.Vault, revision string, requireExisting bool, protection ...string) *core.Profile {
 	if password == "" || vault == nil {
+		return nil
+	}
+	if _, locked := vault.State(); locked {
+		a.status = "主密码缓存已清除，本次登录密码未保存"
 		return nil
 	}
 	if a.vault != vault {

@@ -19,6 +19,7 @@ type commandConn struct {
 	reader  io.ReadCloser
 	writer  io.WriteCloser
 	command *exec.Cmd
+	peer    net.Addr
 	done    chan struct{}
 	once    sync.Once
 }
@@ -38,7 +39,7 @@ func (c *commandConn) Close() error {
 	return nil
 }
 func (c *commandConn) LocalAddr() net.Addr              { return proxyAddr("local proxy command") }
-func (c *commandConn) RemoteAddr() net.Addr             { return proxyAddr("SSH proxy command") }
+func (c *commandConn) RemoteAddr() net.Addr             { return c.peer }
 func (c *commandConn) SetDeadline(time.Time) error      { return nil }
 func (c *commandConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *commandConn) SetWriteDeadline(time.Time) error { return nil }
@@ -50,11 +51,11 @@ func (p proxyAddr) String() string { return string(p) }
 
 // The command originates only from the user's OpenSSH configuration, never
 // from imported session fields or remote terminal output.
-func dialProxyCommand(ctx context.Context, template string, p Profile) (net.Conn, error) {
+func dialProxyCommand(ctx context.Context, template string, p Profile, originalHost ...string) (net.Conn, error) {
 	if strings.ContainsAny(template, "\x00\r\n") {
 		return nil, fmt.Errorf("ProxyCommand 包含不支持的字符")
 	}
-	command, e := expandProxyCommand(template, p)
+	command, e := expandProxyCommand(template, p, originalHost...)
 	if e != nil {
 		return nil, e
 	}
@@ -73,7 +74,9 @@ func dialProxyCommand(ctx context.Context, template string, p Profile) (net.Conn
 	cmd.Stdin = inRead
 	cmd.Stdout = outWrite
 	cmd.Stderr = io.Discard
-	c := &commandConn{reader: output, writer: input, command: cmd, done: make(chan struct{})}
+	// Host-key verification needs a valid host:port even for a pipe transport.
+	// Keep its network type distinct: this is not an observed TCP endpoint.
+	c := &commandConn{reader: output, writer: input, command: cmd, peer: proxyAddr(p.Address()), done: make(chan struct{})}
 	// Killing just the shell leaves its child holding the pipes open. Cancel
 	// the connection and process tree together so blocked SSH reads wake up.
 	cmd.Cancel = func() error { return c.Close() }
@@ -90,16 +93,39 @@ func dialProxyCommand(ctx context.Context, template string, p Profile) (net.Conn
 	return c, nil
 }
 
-func expandProxyCommand(template string, p Profile) (string, error) {
-	values := map[byte]string{'h': p.Host, 'p': strconv.Itoa(p.Port), 'r': p.Username}
+func expandProxyCommand(template string, p Profile, originalHost ...string) (string, error) {
+	original := p.Host
+	if len(originalHost) > 0 && originalHost[0] != "" {
+		original = originalHost[0]
+	}
+	values := map[byte]string{'h': p.Host, 'n': original, 'p': strconv.Itoa(p.Port), 'r': p.Username}
 	if runtime.GOOS == "windows" {
 		for _, v := range values {
 			if strings.ContainsAny(v, "&|<>^%!\"\r\n") {
 				return "", fmt.Errorf("ProxyCommand 身份字段含有不安全的命令字符")
 			}
 		}
-		s := strings.NewReplacer("%%", "\x01", "%h", p.Host, "%p", strconv.Itoa(p.Port), "%r", p.Username).Replace(template)
-		return strings.ReplaceAll(s, "\x01", "%"), nil
+		var out strings.Builder
+		for i := 0; i < len(template); i++ {
+			if template[i] != '%' {
+				out.WriteByte(template[i])
+				continue
+			}
+			i++
+			if i == len(template) {
+				return "", fmt.Errorf("ProxyCommand 变量不完整")
+			}
+			if template[i] == '%' {
+				out.WriteByte('%')
+				continue
+			}
+			value, ok := values[template[i]]
+			if !ok {
+				return "", fmt.Errorf("不支持的 ProxyCommand 变量 %%%c", template[i])
+			}
+			out.WriteString(value)
+		}
+		return out.String(), nil
 	}
 	var out strings.Builder
 	quote := byte(0)
@@ -129,7 +155,10 @@ func expandProxyCommand(template string, p Profile) (string, error) {
 			out.WriteByte(b)
 			continue
 		}
-		if b == '%' && i+1 < len(template) {
+		if b == '%' {
+			if i+1 == len(template) {
+				return "", fmt.Errorf("ProxyCommand 变量不完整")
+			}
 			i++
 			code := template[i]
 			if code == '%' {

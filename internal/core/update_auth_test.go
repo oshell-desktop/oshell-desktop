@@ -53,7 +53,9 @@ func TestPrivateReleaseUsesAuthenticatedAssetAPI(t *testing.T) {
 	data := []byte("private release fixture")
 	hash := sha256.Sum256(data)
 	asset := releaseAsset{ID: 123, Name: releaseAssetName("windows-amd64"), URL: "https://github.com/owner/repo/releases/download/v0.3.2/" + releaseAssetName("windows-amd64"), State: "uploaded", Digest: "sha256:" + hex.EncodeToString(hash[:]), Size: int64(len(data))}
-	metadata, _ := json.Marshal(githubRelease{Tag: "v0.3.2", Assets: []releaseAsset{asset}})
+	_, signed, pub := signedPortableFixture(t, "windows-amd64", "0.3.2", data)
+	setPortableSigningKey(t, pub)
+	metadata, _ := json.Marshal(privateSignedMetadata{Release: githubRelease{Tag: "v0.3.2", Assets: []releaseAsset{asset}}, Signed: signed})
 	cache := &UpdateMetadataCache{data: metadata, expires: time.Now().Add(time.Minute)}
 	u, e := CheckReleaseUpdate(context.Background(), cache, source, "windows-amd64", "0.3.1", "synthetic-token")
 	if e != nil || u == nil {

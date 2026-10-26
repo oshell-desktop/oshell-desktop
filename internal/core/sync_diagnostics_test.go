@@ -12,6 +12,40 @@ import (
 	"time"
 )
 
+func TestSyncDiagnosticsFailureSurvivesQueueAndReopen(t *testing.T) {
+	d := SyncDiagnostics{Directory: t.TempDir(), Target: "fixture", Backend: "directory"}
+	for _, event := range []SyncEvent{SyncFailed, SyncLocalChanged, SyncQueued, SyncCancelled} {
+		var err error
+		if event == SyncFailed {
+			err = context.DeadlineExceeded
+		}
+		if err := d.Record(event, false, 0, err, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	doc, err := d.read()
+	if err != nil || doc.Summary.Failure == nil || doc.Summary.Failure.Kind != "network" {
+		t.Fatal("queued/cancelled event discarded persistent failure", err, doc.Summary)
+	}
+	copy := cloneSyncDiagnostic(doc)
+	copy.Summary.Failure.Kind = "tls"
+	if doc.Summary.Failure.Kind != "network" {
+		t.Fatal("summary alias")
+	}
+	other := d
+	other.Target = "other"
+	if other.SummaryForTarget(doc).Failure != nil {
+		t.Fatal("failure crossed targets")
+	}
+	if err := d.Record(SyncUnchanged, true, 0, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	doc, err = d.read()
+	if err != nil || doc.Summary.Failure != nil {
+		t.Fatal("success retained failure", err)
+	}
+}
+
 func TestSyncDiagnosticsRedactionPersistenceAndExport(t *testing.T) {
 	d := SyncDiagnostics{Directory: t.TempDir(), Target: "https://user:private-password@example.invalid/private/path", Backend: "webdav"}
 	if e := d.Record(SyncStarted, true, 0, nil, ""); e != nil {

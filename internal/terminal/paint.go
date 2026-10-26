@@ -3,8 +3,10 @@ package terminal
 import (
 	"math"
 	"oshell-desktop/internal/core"
+	"oshell-desktop/internal/terminal/internal/bidilayout"
 	"slices"
 	"time"
+	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 	"oshell-desktop/internal/terminal/internal/vt"
@@ -15,16 +17,22 @@ const padX, padY = 6, 4
 
 // rowCache is what a row of the screen draws, made when it changes:
 // backgrounds, runs of glyphs, lines and drawn characters, in cells.
+type columnSpan struct{ start, end int }
+
 type rowCache struct {
-	ok    bool
-	bgs   []bgSpan
-	runs  []glyphRun
-	decos []deco
-	boxes []boxCell
-	selA  int
-	selB  int
-	sel   bool
-	wide  []int16 // the columns of wide characters
+	bidi         bidilayout.Row
+	selected     []columnSpan
+	mode         vt.LineMode
+	ok           bool
+	bgs          []bgSpan
+	runs         []glyphRun
+	decos        []deco
+	boxes        []boxCell
+	placeholders []kittyPlaceholder
+	selA         int
+	selB         int
+	sel          bool
+	wide         []int16 // the columns of wide characters
 }
 
 type bgSpan struct {
@@ -110,7 +118,7 @@ func (v *view) paint(p *ui.Painter, r ui.Rect) {
 	}
 	t.resize(gridSize{v.cols, v.rows, v.cellW, v.cellH})
 	if v.ticking && v.gesture != nil {
-		v.autoscroll()
+		v.autoscrollAt(p.Now())
 	}
 	t.term.ClampHistory(t.historyLines)
 	t.rmu.Lock()
@@ -123,8 +131,12 @@ func (v *view) paint(p *ui.Painter, r ui.Rect) {
 	held := t.held
 	if !held {
 		t.rs.BeginUpdate(t.term)
+		v.graphics = t.term.RenderGraphics(v.cellW, v.cellH)
+		v.refreshBidi()
+		v.bidiFrame = v.bidi
 	}
 	v.scrollbar = t.term.Scrollbar()
+	linksChanged := v.refreshLinkHover(held)
 	if t.term.AltScreen() || v.scrollbar.Total <= v.scrollbar.Len {
 		v.overlay.hide()
 		t.stopScrollbarFade()
@@ -136,7 +148,7 @@ func (v *view) paint(p *ui.Painter, r ui.Rect) {
 		rs.EndUpdate()
 	}
 	colors := rs.Colors()
-	full := rs.Dirty() == vt.Full || colors != v.colors || v.highlightVersion != highlightVersion
+	full := rs.Dirty() == vt.Full || colors != v.colors || v.highlightVersion != highlightVersion || (!held && v.bidiDirty) || linksChanged
 	v.rules = rules
 	v.highlightVersion = highlightVersion
 	v.colors, v.cursor = colors, rs.Cursor()
@@ -149,8 +161,16 @@ func (v *view) paint(p *ui.Painter, r ui.Rect) {
 	for y := 0; y < rows && rs.NextRow(); y++ {
 		line := &v.lines[y]
 		if full || !line.ok || rs.RowDirty() {
-			v.buildRow(line, rs, cols)
+			var presentation vt.BidiPresentation
+			if y < len(v.bidiFrame) {
+				presentation = v.bidiFrame[y]
+			}
+			v.buildRow(line, rs, cols, presentation, v.hoveredLinkColumns(y))
 		}
+	}
+	if !held {
+		v.bidiDirty = false
+		v.prepareGraphics()
 	}
 	rs.Clean()
 	v.draw(p, r)
@@ -198,8 +218,8 @@ func (v *view) resolve(s vt.Style) resolved {
 }
 
 // buildRow makes the cache of the render state's current row.
-func (v *view) buildRow(line *rowCache, rs *vt.RenderState, cols int) {
-	*line = rowCache{ok: true, bgs: line.bgs[:0], runs: line.runs[:0], decos: line.decos[:0], boxes: line.boxes[:0], wide: line.wide[:0]}
+func (v *view) buildRow(line *rowCache, rs *vt.RenderState, cols int, presentation vt.BidiPresentation, link columnSpan) {
+	*line = rowCache{ok: true, mode: rs.RowLineMode(), bgs: line.bgs[:0], runs: line.runs[:0], decos: line.decos[:0], boxes: line.boxes[:0], placeholders: line.placeholders[:0], wide: line.wide[:0], selected: line.selected[:0], bidi: presentation.Row}
 	cells := rs.RowCells()
 	highlights := v.rowHighlights(rs, cells)
 	line.selA, line.selB, line.sel = rs.RowSelection()
@@ -236,9 +256,18 @@ func (v *view) buildRow(line *rowCache, rs *vt.RenderState, cols int) {
 		run.text, run.cols, run.widths = run.text[:0], run.cols[:0], run.widths[:0]
 	}
 	var buf []rune
-	for x := 0; x < len(cells) && x < cols; x++ {
-		c := cells[x]
-		if c.Wide == vt.SpacerTail || c.Wide == vt.SpacerHead {
+	var previousPlaceholder *kittyPlaceholder
+	for index, x := 0, 0; x < len(cells) && x < cols; index++ {
+		logical, display := x, ""
+		if len(line.bidi.Cells) > 0 {
+			if index >= len(line.bidi.Cells) {
+				break
+			}
+			logical, display = line.bidi.Cells[index].Column, line.bidi.Cells[index].Display
+		}
+		c := cells[logical]
+		if len(line.bidi.Cells) == 0 && (c.Wide == vt.SpacerTail || c.Wide == vt.SpacerHead) {
+			x++
 			continue
 		}
 		w := 1
@@ -246,7 +275,18 @@ func (v *view) buildRow(line *rowCache, rs *vt.RenderState, cols int) {
 			w = 2
 			line.wide = append(line.wide, int16(x))
 		}
-		st := styleOf(c, x)
+		if line.sel && logical <= line.selB && logical+w > line.selA {
+			n := len(line.selected)
+			if n > 0 && line.selected[n-1].end == x {
+				line.selected[n-1].end = x + w
+			} else {
+				line.selected = append(line.selected, columnSpan{x, x + w})
+			}
+		}
+		st := styleOf(c, logical)
+		if link.end > link.start && logical < link.end && logical+w > link.start {
+			st.underline, st.ul, st.hasUl = vt.UnderlineDashed, st.fg, true
+		}
 		if c.HasBackground {
 			bg := c.Background
 			if c.Palette {
@@ -254,7 +294,7 @@ func (v *view) buildRow(line *rowCache, rs *vt.RenderState, cols int) {
 			}
 			st.bg, st.hasBg = color(bg), true
 		}
-		if h, ok := highlights[x]; ok {
+		if h, ok := highlights[logical]; ok {
 			if h.Foreground.A > 0 {
 				st.fg = h.Foreground
 			}
@@ -282,24 +322,48 @@ func (v *view) buildRow(line *rowCache, rs *vt.RenderState, cols int) {
 		if st.overline {
 			v.addDeco(line, x, x+w, decoOverline, st.fg)
 		}
+		// Placeholders remain images even when SGR hides or blinks text.
+		// Decode before resolving colors; highlight/selection do not change IDs.
+		if c.Codepoint == kittyPlaceholderScalar {
+			chars := []rune{c.Codepoint}
+			if c.Grapheme {
+				chars = rs.CellGraphemes(logical, nil)
+			}
+			if placeholder, ok := decodeKittyPlaceholder(chars, rs.CellStyle(logical), x, previousPlaceholder); ok {
+				line.placeholders = append(line.placeholders, placeholder)
+				previousPlaceholder = &line.placeholders[len(line.placeholders)-1]
+				c.Codepoint, c.Grapheme, display = ' ', false, ""
+			}
+		} else {
+			previousPlaceholder = nil
+		}
 		cp := c.Codepoint
 		if cp == 0 || st.invisible {
 			cp = ' '
 		}
-		if drawn(cp) {
-			line.boxes = append(line.boxes, boxCell{x, cp, st.fg})
-			cp = ' '
-		}
 		buf = buf[:0]
 		if c.Grapheme && cp != ' ' {
-			buf = rs.CellGraphemes(x, buf)
+			buf = rs.CellGraphemes(logical, buf)
 		}
 		if len(buf) == 0 {
 			buf = append(buf, cp)
 		}
+		if display != "" && !st.invisible {
+			buf = append(buf[:0], []rune(display)...)
+		}
+		if len(buf) == 1 && drawn(buf[0]) {
+			line.boxes = append(line.boxes, boxCell{x, buf[0], st.fg})
+			buf[0] = ' '
+		}
+		isolated := len(line.bidi.Cells) > 0 && bidilayout.Isolate(string(buf))
+		if len(line.bidi.Cells) > 0 {
+			st.variant |= 8
+		}
 		emoji := v.preferColorEmoji && core.ColorEmojiCluster(buf)
-		if emoji {
+		if isolated || emoji {
 			flush()
+		}
+		if emoji {
 			st.variant |= 4
 		}
 		if len(run.text) > 0 && (st.variant != run.variant || st.fg != run.fg) {
@@ -322,9 +386,10 @@ func (v *view) buildRow(line *rowCache, rs *vt.RenderState, cols int) {
 			}
 			run.widths = append(run.widths, ww)
 		}
-		if emoji {
+		if isolated || emoji {
 			flush()
 		}
+		x += w
 	}
 	flush()
 }
@@ -422,7 +487,22 @@ func (v *view) shape(text string, variant int, scale float32) []ui.Glyph {
 		f.Family = core.ColorEmojiFamily()
 	}
 	f.Size *= scale
-	g := ui.Shape(text, f)
+	var g []ui.Glyph
+	if variant&8 == 0 {
+		g = ui.Shape(text, f)
+	} else {
+		// The terminal has already resolved and mirrored this visual run.
+		// Override host BiDi so it cannot mirror punctuation a second time.
+		n := utf8.RuneCountInString(text)
+		for _, glyph := range ui.Shape("\u202d"+text+"\u202c", f) {
+			if glyph.Cluster < 1 || glyph.Cluster > n {
+				continue
+			}
+			glyph.Cluster--
+			glyph.Runes = min(glyph.Runes, n-glyph.Cluster)
+			g = append(g, glyph)
+		}
+	}
 	v.shaped.put(k, g)
 	return g
 }
@@ -438,6 +518,7 @@ func (v *view) draw(p *ui.Painter, r ui.Rect) {
 	if !v.t.opts.Transparent {
 		p.Fill(r, color(v.colors.Background), 0)
 	}
+	v.drawGraphics(p, ox, oy, 1)
 	selection := v.theme.Selection
 	if selection.A == 0 {
 		selection = color(v.colors.Foreground).Alpha(0.3)
@@ -445,13 +526,22 @@ func (v *view) draw(p *ui.Painter, r ui.Rect) {
 	for y := range v.lines {
 		line := &v.lines[y]
 		ry := oy + float32(y)*ch
-		for _, b := range line.bgs {
-			p.Fill(ui.Rect{X: ox + float32(b.x0)*cw, Y: ry, W: float32(b.x1-b.x0) * cw, H: ch}, b.c, 0)
+		lcw := cw * lineHorizontalScale(line.mode)
+		background := func() {
+			for _, b := range line.bgs {
+				p.Fill(ui.Rect{X: ox + float32(b.x0)*lcw, Y: ry, W: float32(b.x1-b.x0) * lcw, H: ch}, b.c, 0)
+			}
+			for _, span := range line.selected {
+				p.Fill(ui.Rect{X: ox + float32(span.start)*lcw, Y: ry, W: float32(span.end-span.start) * lcw, H: ch}, selection, 0)
+			}
 		}
-		if line.sel {
-			p.Fill(ui.Rect{X: ox + float32(line.selA)*cw, Y: ry, W: float32(line.selB-line.selA+1) * cw, H: ch}, selection, 0)
+		if line.mode != vt.LineSingle {
+			p.Clip(ui.Rect{X: ox, Y: ry, W: float32(v.cols) * cw, H: ch}, 0, background)
+		} else {
+			background()
 		}
 	}
+	v.drawGraphics(p, ox, oy, 2)
 	cur, curColor, curText, block := v.cursorRect(ox, oy, cw, ch)
 	if block {
 		p.Fill(cur, curColor, 0)
@@ -459,17 +549,41 @@ func (v *view) draw(p *ui.Painter, r ui.Rect) {
 	for y := range v.lines {
 		line := &v.lines[y]
 		ry := oy + float32(y)*ch
-		text := func(over ui.Color) { v.drawText(p, line, ox, ry, cw, ch, base, over) }
+		text := func(over ui.Color) {
+			if line.mode == vt.LineSingle {
+				v.drawText(p, line, ox, ry, cw, ch, base, over)
+				return
+			}
+			clip := ui.Rect{X: ox, Y: oy, W: float32(v.cols) * cw, H: float32(v.rows) * ch}
+			if line.mode != vt.LineDoubleWidth {
+				clip.Y, clip.H = ry, ch
+			}
+			p.Clip(clip, 0, func() { v.drawText(p, line, ox, ry, cw, ch, base, over) })
+		}
 		if !line.sel || v.theme.SelectionText.A == 0 {
 			text(ui.Color{})
 			continue
 		}
 		// The selected text takes the selection's color in its cells,
 		// as far as its glyphs reach.
-		a, b := ox+float32(line.selA)*cw, ox+float32(line.selB+1)*cw
-		p.Clip(ui.Rect{X: r.X, Y: r.Y, W: a - r.X, H: r.H}, 0, func() { text(ui.Color{}) })
-		p.Clip(ui.Rect{X: a, Y: r.Y, W: b - a, H: r.H}, 0, func() { text(v.theme.SelectionText) })
-		p.Clip(ui.Rect{X: b, Y: r.Y, W: r.X + r.W - b, H: r.H}, 0, func() { text(ui.Color{}) })
+		lcw := cw * lineHorizontalScale(line.mode)
+		at := r.X
+		for _, span := range line.selected {
+			a, b := ox+float32(span.start)*lcw, ox+float32(span.end)*lcw
+			if a > at {
+				p.Clip(ui.Rect{X: at, Y: r.Y, W: a - at, H: r.H}, 0, func() { text(ui.Color{}) })
+			}
+			p.Clip(ui.Rect{X: a, Y: r.Y, W: b - a, H: r.H}, 0, func() { text(v.theme.SelectionText) })
+			at = b
+		}
+		if at < r.X+r.W {
+			p.Clip(ui.Rect{X: at, Y: r.Y, W: r.X + r.W - at, H: r.H}, 0, func() { text(ui.Color{}) })
+		}
+	}
+	v.drawKittyPlaceholders(p, ox, oy)
+	v.drawGraphics(p, ox, oy, 3)
+	if block && len(v.graphics) != 0 {
+		p.Fill(cur, curColor, 0) // The caret stays visible above terminal images.
 	}
 	if cur.W > 0 && !block {
 		if v.focused || v.cursor.Style != vt.CursorBlock {
@@ -483,29 +597,21 @@ func (v *view) draw(p *ui.Painter, r ui.Rect) {
 		line := &v.lines[v.cursor.Y]
 		ry := oy + float32(v.cursor.Y)*ch
 		p.Clip(cur, 0, func() {
-			for _, run := range line.runs {
-				for i, col := range run.cols {
-					if int(col) == v.cursor.X {
-						p.Glyphs(run.glyphs[i:i+1], ox, ry+base, curText)
-					}
-				}
-			}
-			for _, b := range line.boxes {
-				if b.x == v.cursor.X {
-					drawBox(p, b.r, ui.Rect{X: ox + float32(b.x)*cw, Y: ry, W: cw, H: ch}, curText)
-				}
-			}
+			v.drawText(p, line, ox, ry, cw, ch, base, curText)
 		})
 	}
 	if v.preedit != "" && v.focused {
-		v.drawPreedit(p, ox, oy, cw, ch, base)
+		v.drawPreedit(p, ox, oy, cw, ch, base, max(cw, r.W-2*padX), r.Y+r.H)
 	}
 	v.drawScrollbar(p, r)
+	v.drawLinkPreview(p, r)
 }
 
 // drawText draws the glyphs, drawn characters and lines of a row, in their
 // colors or, when over is not zero, in over.
 func (v *view) drawText(p *ui.Painter, line *rowCache, ox, ry, cw, ch, base float32, over ui.Color) {
+	sx, sy, offset := lineTransform(line.mode, ch)
+	ry += offset
 	pick := func(c ui.Color) ui.Color {
 		if over.A > 0 {
 			return over
@@ -513,14 +619,15 @@ func (v *view) drawText(p *ui.Painter, line *rowCache, ox, ry, cw, ch, base floa
 		return c
 	}
 	for _, run := range line.runs {
-		p.Glyphs(run.glyphs, ox, ry+base, pick(run.c))
+		p.GlyphsScaled(run.glyphs, ox, ry+base*sy, sx, sy, pick(run.c))
 	}
+	cw, ch, base = cw*sx, ch*sy, base*sy
 	for _, b := range line.boxes {
 		drawBox(p, b.r, ui.Rect{X: ox + float32(b.x)*cw, Y: ry, W: cw, H: ch}, pick(b.c))
 	}
 	for _, d := range line.decos {
 		d.c = pick(d.c)
-		v.drawDeco(p, d, ox, ry, cw, ch, base)
+		v.drawDeco(p, d, ox, ry, cw, ch, base, sx, sy)
 	}
 }
 
@@ -549,6 +656,11 @@ func (v *view) cursorRect(ox, oy, cw, ch float32) (r ui.Rect, c, text ui.Color, 
 	if cu.WideTail && x > 0 {
 		x--
 	}
+	x = v.visualColumn(cu.Y, x)
+	gridWidth := float32(v.cols) * cw
+	if cu.Y >= 0 && cu.Y < len(v.lines) {
+		cw *= lineHorizontalScale(v.lines[cu.Y].mode)
+	}
 	if v.theme.AutoCursor {
 		background := color(v.colors.Background)
 		if cu.Y >= 0 && cu.Y < len(v.lines) {
@@ -567,6 +679,10 @@ func (v *view) cursorRect(ox, oy, cw, ch float32) (r ui.Rect, c, text ui.Color, 
 		w *= 2
 	}
 	r = ui.Rect{X: ox + float32(x)*cw, Y: oy + float32(cu.Y)*ch, W: w, H: ch}
+	if float32(x)*cw >= gridWidth {
+		return ui.Rect{}, c, text, false
+	}
+	r.W = min(r.W, gridWidth-float32(x)*cw)
 	px := 1 / v.scale
 	style := cu.Style
 	if !v.focused && style == vt.CursorBlock {
@@ -593,14 +709,15 @@ func (v *view) wideAt(y, x int) bool {
 }
 
 // drawDeco draws an underline, a strikethrough or an overline.
-func (v *view) drawDeco(p *ui.Painter, d deco, ox, ry, cw, ch, base float32) {
+func (v *view) drawDeco(p *ui.Painter, d deco, ox, ry, cw, ch, base, sx, sy float32) {
 	px := 1 / v.scale
-	thick := max(float32(math.Round(float64(v.font.size*v.scale/14))), 1) * px
+	stroke := max(float32(math.Round(float64(v.font.size*v.scale/14))), 1) * px
+	thick := stroke * sy
 	x0, x1 := ox+float32(d.x0)*cw, ox+float32(d.x1)*cw
-	ul := ry + base + max(float32(math.Round(float64(v.font.size*v.scale/10))), 1)*px
+	ul := ry + base + max(float32(math.Round(float64(v.font.size*v.scale/10))), 1)*px*sy
 	switch d.kind {
 	case decoStrike:
-		p.Fill(ui.Rect{X: x0, Y: ry + base - v.font.size*0.3, W: x1 - x0, H: thick}, d.c, 0)
+		p.Fill(ui.Rect{X: x0, Y: ry + base - v.font.size*0.3*sy, W: x1 - x0, H: thick}, d.c, 0)
 	case decoOverline:
 		p.Fill(ui.Rect{X: x0, Y: ry, W: x1 - x0, H: thick}, d.c, 0)
 	case vt.UnderlineDouble:
@@ -618,7 +735,7 @@ func (v *view) drawDeco(p *ui.Painter, d deco, ox, ry, cw, ch, base float32) {
 		}
 		p.StrokePath(&path, thick, d.c)
 	case vt.UnderlineDotted, vt.UnderlineDashed:
-		step, dash := 2*thick, thick
+		step, dash := 2*stroke*sx, stroke*sx
 		if d.kind == vt.UnderlineDashed {
 			step, dash = cw/2, cw/4
 		}
@@ -631,17 +748,25 @@ func (v *view) drawDeco(p *ui.Painter, d deco, ox, ry, cw, ch, base float32) {
 }
 
 // drawPreedit draws an input method's composition over the cursor.
-func (v *view) drawPreedit(p *ui.Painter, ox, oy, cw, ch, base float32) {
-	g := ui.Shape(v.preedit, v.fonts[0])
-	w := float32(0)
-	for _, gl := range g {
-		w = max(w, gl.X+gl.Advance)
+func (v *view) drawPreedit(p *ui.Painter, ox, oy, cw, ch, base, width, bottom float32) {
+	sx := float32(1)
+	if y := v.cursor.Y; y >= 0 && y < len(v.lines) {
+		sx = lineHorizontalScale(v.lines[y].mode)
 	}
-	x, y := ox+float32(v.cursor.X)*cw, oy+float32(v.cursor.Y)*ch
-	p.Fill(ui.Rect{X: x, Y: y, W: w, H: ch}, color(v.colors.Background), 0)
+	indent := float32(v.visualColumn(v.cursor.Y, v.cursor.X)) * cw * sx
+	lines := v.preeditShape.lines(v.preedit, v.fonts[0], width, indent, cw)
+	y := oy + float32(v.cursor.Y)*ch
 	fg := color(v.colors.Foreground)
-	p.Glyphs(g, x, y+base, fg)
-	p.Fill(ui.Rect{X: x, Y: y + ch - 1/v.scale, W: w, H: 1 / v.scale}, fg, 0)
+	for i, line := range lines {
+		ly := y + float32(i)*ch
+		if ly >= bottom {
+			break
+		}
+		// Only used fragments cover the terminal: the prompt and the rest
+		// of each row remain visible. The overlay never writes to the grid.
+		p.Fill(ui.Rect{X: ox + line.X, Y: ly, W: line.Width, H: ch}, color(v.colors.Background), 0)
+		p.Glyphs(line.Glyphs, ox, ly+base, fg)
+	}
 }
 
 // The transparent overlay never reserves space or changes terminal geometry.

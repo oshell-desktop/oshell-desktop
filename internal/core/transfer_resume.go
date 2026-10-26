@@ -57,7 +57,7 @@ func (c *SFTPCheckpoint) Run(ctx context.Context, client *sftp.Client, progress 
 	if err != nil {
 		return err
 	}
-	if !info.Mode().IsRegular() {
+	if !RemoteFileTypeKnown(info) || !info.Mode().IsRegular() {
 		return ErrResumeRegularOnly
 	}
 	if c.initialized && (info.Size() != c.size || !info.ModTime().Equal(c.modified) || c.Upload && !os.SameFile(c.sourceInfo, info)) {
@@ -76,7 +76,7 @@ func (c *SFTPCheckpoint) Run(ctx context.Context, client *sftp.Client, progress 
 	if err != nil {
 		return err
 	}
-	if !opened.Mode().IsRegular() || opened.Size() != info.Size() || !opened.ModTime().Equal(info.ModTime()) || c.Upload && !os.SameFile(opened, info) {
+	if !RemoteFileTypeKnown(opened) || !opened.Mode().IsRegular() || opened.Size() != info.Size() || !opened.ModTime().Equal(info.ModTime()) || c.Upload && !os.SameFile(opened, info) {
 		return errors.New("源文件在打开期间发生变化")
 	}
 	if !c.initialized {
@@ -112,7 +112,7 @@ func (c *SFTPCheckpoint) Run(ctx context.Context, client *sftp.Client, progress 
 		if err != nil {
 			return fmt.Errorf("续传片段不可用：%w", err)
 		}
-		if !staged.Mode().IsRegular() {
+		if !RemoteFileTypeKnown(staged) || !staged.Mode().IsRegular() {
 			return errors.New("续传片段不是普通文件")
 		}
 		if c.Upload {
@@ -129,7 +129,7 @@ func (c *SFTPCheckpoint) Run(ctx context.Context, client *sftp.Client, progress 
 	if err != nil {
 		return err
 	}
-	if !staged.Mode().IsRegular() || staged.Size() > c.size {
+	if !RemoteFileTypeKnown(staged) || !staged.Mode().IsRegular() || staged.Size() > c.size {
 		return errors.New("续传片段大小无效")
 	}
 	if !c.Upload {
@@ -197,7 +197,7 @@ func (c *SFTPCheckpoint) Run(ctx context.Context, client *sftp.Client, progress 
 	if err != nil {
 		return err
 	}
-	if end.Size() != c.size || !end.ModTime().Equal(c.modified) {
+	if !RemoteFileTypeKnown(end) || !end.Mode().IsRegular() || end.Size() != c.size || !end.ModTime().Equal(c.modified) {
 		return errors.New("传输过程中源文件已变化，未发布目标文件")
 	}
 	var current os.FileInfo
@@ -209,7 +209,7 @@ func (c *SFTPCheckpoint) Run(ctx context.Context, client *sftp.Client, progress 
 	if err != nil {
 		return err
 	}
-	if !current.Mode().IsRegular() || current.Size() != c.size || !current.ModTime().Equal(c.modified) || c.Upload && !os.SameFile(current, c.sourceInfo) {
+	if !RemoteFileTypeKnown(current) || !current.Mode().IsRegular() || current.Size() != c.size || !current.ModTime().Equal(c.modified) || c.Upload && !os.SameFile(current, c.sourceInfo) {
 		return errors.New("源路径已变化，未发布目标文件")
 	}
 	if !c.Upload {

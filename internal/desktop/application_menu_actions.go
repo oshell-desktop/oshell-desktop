@@ -25,7 +25,7 @@ func (a *App) passwordMenuAction(action string) {
 	if action == "lock" {
 		if master && !locked {
 			a.lockWorkspaceSecrets()
-			a.showVault()
+			a.status = "已清除密码缓存；已连接终端继续运行"
 		}
 		return
 	}

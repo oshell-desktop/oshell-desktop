@@ -14,6 +14,7 @@ import (
 // Clipboard text is an opaque reference, never a configuration or password.
 type sessionConfigurationClipboard struct {
 	token, scope, vaultRevision string
+	generation                  uint64
 	vault                       *core.Vault
 	profiles                    []core.Profile
 	proxies                     []core.ProxyProfile
@@ -60,8 +61,28 @@ func (a *App) copyManagerConfigurations(c *ui.Context) {
 		a.status = "复制失败：无法写入剪贴板"
 		return
 	}
+	generation, ok := c.ClipboardGeneration()
+	text := c.ReadClipboard()
+	after, valid := c.ClipboardGeneration()
+	if !ok || !valid || generation != after || text != snapshot.token {
+		*a.sessionClipboard() = nil
+		a.status = "复制失败：无法确认剪贴板代次，请重新复制"
+		return
+	}
+	snapshot.generation = generation
 	*a.sessionClipboard() = snapshot
 	a.status = fmt.Sprintf("已复制 %d 个会话配置，进入目标目录后按 Ctrl+V 粘贴", len(profiles))
+}
+
+func (a *App) readManagerClipboard(c *ui.Context) *sessionConfigurationClipboard {
+	before, ok := c.ClipboardGeneration()
+	snapshot := a.managerClipboardSnapshot(c.ReadClipboard())
+	after, valid := c.ClipboardGeneration()
+	if snapshot != nil && (!ok || !valid || before != after || after != snapshot.generation) {
+		*a.sessionClipboard() = nil
+		return nil
+	}
+	return snapshot
 }
 
 func (a *App) managerClipboardSnapshot(text string) *sessionConfigurationClipboard {
@@ -80,7 +101,7 @@ func (a *App) managerClipboardSnapshot(text string) *sessionConfigurationClipboa
 }
 
 func (a *App) pasteManagerConfigurations(c *ui.Context) {
-	snapshot := a.managerClipboardSnapshot(c.ReadClipboard())
+	snapshot := a.readManagerClipboard(c)
 	if snapshot == nil {
 		a.status = "粘贴失败：请先在会话管理中复制会话配置"
 		return
@@ -137,7 +158,7 @@ func (a *App) managerClipboardMenu(c *ui.Context, m *ui.Menu) bool {
 		a.copyManagerConfigurations(c)
 		return true
 	}
-	if m.Item("粘贴会话配置").Shortcut(ui.Ctrl, ui.KeyV).Disabled(a.managerClipboardSnapshot(c.ReadClipboard()) == nil).Chosen() {
+	if m.Item("粘贴会话配置").Shortcut(ui.Ctrl, ui.KeyV).Disabled(a.readManagerClipboard(c) == nil).Chosen() {
 		a.pasteManagerConfigurations(c)
 		return true
 	}

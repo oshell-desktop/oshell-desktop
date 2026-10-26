@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/egoist/mygo/ui"
 	"oshell-desktop/internal/core"
+	"strings"
 	"time"
 )
 
@@ -155,11 +156,22 @@ func (a *App) saveSessionCredential(p core.Profile, connect bool) bool {
 	return true
 }
 func (a *App) finishSavedDraft(p core.Profile, connect bool) {
+	localSaved := true
+	if validTitleMode(a.draftTitleMode) {
+		local := a.localUI.clone()
+		if local.TitleModes == nil {
+			local.TitleModes = map[string]string{}
+		}
+		local.TitleModes[strings.ToLower(p.ID)] = a.draftTitleMode
+		localSaved = a.saveLocalPreferences(local)
+	}
 	a.features.sessionPassword.password = ""
 	a.features.sessionPassword.revealed = false
 	a.selected = p.ID
 	a.editing = false
-	a.status = "已保存 " + p.Name
+	if localSaved {
+		a.status = "已保存 " + p.Name
+	}
 	if !connect {
 		a.restoreManagerReturn(&p)
 	} else {
