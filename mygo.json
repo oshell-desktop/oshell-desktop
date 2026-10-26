@@ -1,7 +1,7 @@
 {
   "name": "OShell Desktop",
   "identifier": "dev.oshell.desktop",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "out": "dist",
   "icon": "resources/icon.png",
   "resources": [
