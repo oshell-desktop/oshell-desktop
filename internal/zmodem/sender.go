@@ -40,10 +40,26 @@ var cancelEcho = []byte{
 // ErrCancelled is returned when the receiver aborts via ≥5 consecutive CANs.
 var ErrCancelled = errors.New("ZMODEM transfer cancelled by receiver")
 
-// ErrSkipped is returned when the receiver asks the sender to stop via a
-// ZSKIP or ZABORT header — the Term 4.8 "Skip file" / "Skip batch" buttons.
-// Not a transport error; the session ended by user choice on the far end.
+// ErrSkipped means an individual file was declined, not that the batch failed.
 var ErrSkipped = errors.New("ZMODEM transfer skipped by receiver")
+
+var ErrRemoteFile = errors.New("ZMODEM receiver reported a file error")
+var ErrAborted = fmt.Errorf("ZMODEM receiver aborted batch: %w", ErrCancelled)
+
+func peerRejection(frame byte) error {
+	switch frame {
+	case FrameZSKIP:
+		return ErrSkipped
+	case FrameZABORT:
+		return ErrAborted
+	default:
+		return ErrRemoteFile
+	}
+}
+
+func isPeerRejection(err error) bool {
+	return errors.Is(err, ErrSkipped) || errors.Is(err, ErrAborted) || errors.Is(err, ErrRemoteFile)
+}
 
 // rzTrigger is the preamble terminals like NComm / Term 4.8 require before
 // recognizing a ZMODEM session. Modern receivers (lrzsz) tolerate it harmlessly.
@@ -238,10 +254,10 @@ func (s *sender) waitForZrpos() (uint32, error) {
 			return 0, ErrSkipped
 		case FrameZABORT:
 			logger.Info("ZMODEM receiver sent ZABORT — ending session")
-			return 0, ErrSkipped
+			return 0, ErrAborted
 		case FrameZFERR:
 			logger.Info("ZMODEM receiver sent ZFERR — aborting transfer")
-			return 0, ErrSkipped
+			return 0, ErrRemoteFile
 		case FrameZNAK, FrameZRINIT:
 			if resends >= maxZfileResends {
 				return 0, fmt.Errorf("ZMODEM ZFILE resend limit exceeded")
@@ -412,10 +428,10 @@ func (s *sender) streamData(startOffset uint32) error {
 			return ErrSkipped
 		case FrameZABORT:
 			logger.Info("ZMODEM receiver sent ZABORT — ending session")
-			return ErrSkipped
+			return ErrAborted
 		case FrameZFERR:
 			logger.Info("ZMODEM receiver sent ZFERR — aborting transfer")
-			return ErrSkipped
+			return ErrRemoteFile
 		}
 	}
 	return nil
@@ -711,7 +727,7 @@ func (s *sender) sendCurrentFile(finalizeOnSkip bool) error {
 	// Receiver responds with ZRPOS(offset), or ZSKIP/ZABORT to decline.
 	offset, err := s.waitForZrpos()
 	if err != nil {
-		if errors.Is(err, ErrSkipped) {
+		if isPeerRejection(err) {
 			if finalizeOnSkip {
 				s.gracefulClose()
 			}
@@ -723,7 +739,7 @@ func (s *sender) sendCurrentFile(finalizeOnSkip bool) error {
 	for {
 		// The peer may reject ZEOF and request a final retransmission.
 		if err := s.streamData(offset); err != nil {
-			if errors.Is(err, ErrSkipped) && finalizeOnSkip {
+			if isPeerRejection(err) && finalizeOnSkip {
 				s.gracefulClose()
 			}
 			return err
@@ -744,7 +760,7 @@ func (s *sender) sendCurrentFile(finalizeOnSkip bool) error {
 			if finalizeOnSkip {
 				s.gracefulClose()
 			}
-			return ErrSkipped
+			return peerRejection(frame)
 		}
 	}
 }

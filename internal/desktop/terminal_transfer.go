@@ -118,6 +118,8 @@ func (a *App) configureTerminalTransferWithPicker(p *pane, opts *terminal.Option
 				p.transfer.dismissAt = time.Now().Add(transferNoticeDismissDelay)
 			case errors.Is(err, context.Canceled) || errors.Is(err, zmodem.ErrCancelled):
 				p.transfer.status = "ZMODEM · 已取消"
+			case errors.Is(err, zmodem.ErrSkipped):
+				p.transfer.status = "ZMODEM · 已结束，" + err.Error()
 			default:
 				p.transfer.status = "ZMODEM · 传输失败：" + err.Error()
 			}
@@ -126,31 +128,18 @@ func (a *App) configureTerminalTransferWithPicker(p *pane, opts *terminal.Option
 }
 
 func chooseTransferPaths(ctx context.Context, parent *mygo.Window, upload bool) ([]string, error) {
-	type result struct {
-		paths []string
-		err   error
+	title := "选择 ZMODEM 下载目录（同名文件将跳过）"
+	if upload {
+		title = "选择 ZMODEM 上传文件"
 	}
-	ch := make(chan result, 1)
-	go func() {
-		title := "选择 ZMODEM 下载目录（同名文件将跳过）"
-		if upload {
-			title = "选择 ZMODEM 上传文件"
-		}
-		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: parent, Title: title, Multiple: upload, Directory: !upload, CreateDirectories: !upload})
-		ch <- result{paths, err}
-	}()
-	select {
-	case r := <-ch:
-		if r.err != nil {
-			return nil, r.err
-		}
-		if len(r.paths) == 0 {
-			return nil, context.Canceled
-		}
-		return r.paths, ctx.Err()
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	paths, err := mygo.Dialog.OpenContext(ctx, mygo.OpenDialogOptions{Parent: parent, Title: title, Multiple: upload, Directory: !upload, CreateDirectories: !upload})
+	if err != nil {
+		return nil, err
 	}
+	if len(paths) == 0 {
+		return nil, context.Canceled
+	}
+	return paths, nil
 }
 
 // Complete downloads become visible in one operation without replacing an

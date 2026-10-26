@@ -25,7 +25,13 @@ func TestLiveDirectorySwitchKeepsWorkingConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := t.TempDir()
-	for _, target := range []string{first, t.TempDir()} {
+	// Exercise a path spelling that differs from its canonical directory,
+	// as can also happen with a Windows runner's short-name temp root.
+	for _, target := range []string{first + string(os.PathSeparator) + ".", t.TempDir()} {
+		canonicalTarget, err := filepath.EvalSymlinks(target)
+		if err != nil {
+			t.Fatal(err)
+		}
 		a.prepareSettings()
 		a.loadSharedSyncSettings()
 		a.selectSyncMethod("directory")
@@ -34,8 +40,11 @@ func TestLiveDirectorySwitchKeepsWorkingConfiguration(t *testing.T) {
 		a.applySyncDraft(func() { done = true })
 		drainSharedSync(t, a)
 		saved, err := core.LoadSyncOptions(s.Dir)
-		if err != nil || !done || saved.Address != target || !saved.Enabled || saved.RequireExisting {
-			t.Fatal("live switch failed", err, a.features.settingsError)
+		if err != nil || !done || !saved.Enabled || saved.RequireExisting {
+			t.Fatalf("live switch failed: load=%v done=%v enabled=%v requireExisting=%v settings=%q", err, done, saved.Enabled, saved.RequireExisting, a.features.settingsError)
+		}
+		if saved.Address != canonicalTarget {
+			t.Fatalf("live switch target: got %q, want canonical %q (selected %q)", saved.Address, canonicalTarget, target)
 		}
 		pending, err := core.LoadPendingSyncDirectory(s.Dir)
 		if err != nil || pending != nil {

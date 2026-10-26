@@ -393,8 +393,8 @@ func TestZabortInsteadOfZrpos(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		if !errors.Is(err, zmodem.ErrSkipped) {
-			t.Fatalf("want ErrSkipped, got %v", err)
+		if !errors.Is(err, zmodem.ErrCancelled) {
+			t.Fatalf("want ErrCancelled, got %v", err)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatalf("sender did not exit after ZABORT")
@@ -406,7 +406,7 @@ func TestZabortInsteadOfZrpos(t *testing.T) {
 }
 
 // TestZferrEndsSession covers the "receiver hit a fatal file error" path
-// — ZFERR is rare but our handler treats it the same as ZSKIP/ZABORT.
+// — ZFERR must remain distinct from a skipped file or cancelled batch.
 func TestZferrEndsSession(t *testing.T) {
 	pinClock(t, fixedEpoch)
 	server, client := testutil.Pair(t)
@@ -420,8 +420,8 @@ func TestZferrEndsSession(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		if !errors.Is(err, zmodem.ErrSkipped) {
-			t.Fatalf("want ErrSkipped, got %v", err)
+		if !errors.Is(err, zmodem.ErrRemoteFile) {
+			t.Fatalf("want ErrRemoteFile, got %v", err)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatalf("sender did not exit after ZFERR")
@@ -533,8 +533,8 @@ func TestZabortMidStream(t *testing.T) {
 
 	select {
 	case err := <-errCh:
-		if !errors.Is(err, zmodem.ErrSkipped) {
-			t.Fatalf("want ErrSkipped, got %v", err)
+		if !errors.Is(err, zmodem.ErrCancelled) {
+			t.Fatalf("want ErrCancelled, got %v", err)
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatalf("sender did not exit after ZABORT")

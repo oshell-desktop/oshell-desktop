@@ -4,6 +4,7 @@ package windows
 
 import (
 	"encoding/binary"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -22,6 +23,7 @@ var (
 	iidIFileOpenDialog  = guid("d57c7288-d4ad-4768-be02-9d969532d960")
 	clsidFileSaveDialog = guid("c0b4e2f3-ba21-4773-8dba-335ec946eb8b")
 	iidIFileSaveDialog  = guid("84bccd23-5fde-4cdb-aea4-af64b83d78ab")
+	iidIOleWindow       = guid("00000114-0000-0000-c000-000000000046")
 	iidIShellItem       = guid("43826d1e-e718-42ee-bc55-a1e261c37bfe")
 )
 
@@ -37,6 +39,7 @@ const (
 	fdSetOkButtonLabel = 18
 	fdSetFileNameLabel = 19
 	fdGetResult        = 20
+	fdClose            = 23
 	fodGetResults      = 27
 
 	siGetDisplayName = 5
@@ -51,7 +54,8 @@ const (
 	fosFileMustExist    = 0x1000
 	fosForceShowHidden  = 0x10000000
 
-	sigdnFileSysPath = 0x80058000
+	sigdnFileSysPath  = 0x80058000
+	hrDialogCancelled = 0x800704c7
 )
 
 func ownerOf(pw platform.Window) uintptr {
@@ -62,9 +66,9 @@ func ownerOf(pw platform.Window) uintptr {
 }
 
 func (d dialogs) ShowOpenDialog(parent platform.Window, o *platform.OpenDialogOptions, cb func([]string, error)) {
-	dlg := createFileDialog(&clsidFileOpenDialog, &iidIFileOpenDialog)
-	if dlg == 0 {
-		cb(nil, platform.ErrUnsupported)
+	dlg, err := createFileDialog(&clsidFileOpenDialog, &iidIFileOpenDialog)
+	if err != nil {
+		cb(nil, err)
 		return
 	}
 	defer release(dlg)
@@ -80,36 +84,83 @@ func (d dialogs) ShowOpenDialog(parent platform.Window, o *platform.OpenDialogOp
 	if o.ShowHiddenFiles {
 		opts |= fosForceShowHidden
 	}
-	setupFileDialog(dlg, opts, o.Title, o.ButtonLabel, "", o.DefaultPath, o.Filters)
-	if failed(comCall(dlg, fdShow, ownerOf(parent))) {
-		cb(nil, nil) // canceled
+	if err := setupFileDialog(dlg, opts, o.Title, o.ButtonLabel, "", o.DefaultPath, o.Filters); err != nil {
+		cb(nil, err)
+		return
+	}
+	stop := o.WatchCancellation(func() { closeFileDialog(dlg) })
+	defer stop()
+	if hr := comCall(dlg, fdShow, ownerOf(parent)); failed(hr) {
+		cb(nil, fileDialogShowError(hr))
 		return
 	}
 	var items uintptr
-	if failed(comCall(dlg, fodGetResults, uintptr(unsafe.Pointer(&items)))) || items == 0 {
-		cb(nil, nil)
+	if hr := comCall(dlg, fodGetResults, uintptr(unsafe.Pointer(&items))); failed(hr) {
+		cb(nil, hresultError("IFileOpenDialog.GetResults", hr))
+		return
+	}
+	if items == 0 {
+		cb(nil, fmt.Errorf("mygo: file dialog returned no result collection"))
 		return
 	}
 	defer release(items)
+	paths, err := fileDialogPaths(items)
+	cb(paths, err)
+}
+
+func closeFileDialog(dlg uintptr) {
+	// Close may acknowledge the request while the Shell keeps its modal window
+	// open. Also post the window's standard close message on the UI thread.
+	ole := queryInterface(dlg, &iidIOleWindow)
+	var hwnd uintptr
+	if ole != 0 {
+		comCall(ole, 3, uintptr(unsafe.Pointer(&hwnd))) // IOleWindow.GetWindow
+		release(ole)
+	}
+	comCall(dlg, fdClose, hrDialogCancelled)
+	if hwnd != 0 {
+		postMessage(hwnd, wmClose, 0, 0)
+	}
+}
+
+func fileDialogPaths(items uintptr) ([]string, error) {
 	var n uint32
-	comCall(items, siaGetCount, uintptr(unsafe.Pointer(&n)))
+	if hr := comCall(items, siaGetCount, uintptr(unsafe.Pointer(&n))); failed(hr) {
+		return nil, hresultError("IShellItemArray.GetCount", hr)
+	}
+	if n == 0 {
+		return nil, fmt.Errorf("mygo: file dialog returned an empty selection")
+	}
 	var paths []string
 	for i := uint32(0); i < n; i++ {
 		var item uintptr
-		if comCall(items, siaGetItemAt, uintptr(i), uintptr(unsafe.Pointer(&item))) == sOK {
-			if p := itemPath(item); p != "" {
-				paths = append(paths, p)
-			}
-			release(item)
+		if hr := comCall(items, siaGetItemAt, uintptr(i), uintptr(unsafe.Pointer(&item))); failed(hr) {
+			return nil, hresultError("IShellItemArray.GetItemAt", hr)
 		}
+		if item == 0 {
+			return nil, fmt.Errorf("mygo: file dialog returned a nil item")
+		}
+		path, err := itemPath(item)
+		release(item)
+		if err != nil {
+			return nil, err
+		}
+		paths = append(paths, path)
 	}
-	cb(paths, nil)
+	return paths, nil
+}
+
+func fileDialogShowError(hr uintptr) error {
+	if uint32(hr) == hrDialogCancelled {
+		return nil
+	}
+	return hresultError("IFileDialog.Show", hr)
 }
 
 func (d dialogs) ShowSaveDialog(parent platform.Window, o *platform.SaveDialogOptions, cb func(string, error)) {
-	dlg := createFileDialog(&clsidFileSaveDialog, &iidIFileSaveDialog)
-	if dlg == 0 {
-		cb("", platform.ErrUnsupported)
+	dlg, err := createFileDialog(&clsidFileSaveDialog, &iidIFileSaveDialog)
+	if err != nil {
+		cb("", err)
 		return
 	}
 	defer release(dlg)
@@ -117,41 +168,62 @@ func (d dialogs) ShowSaveDialog(parent platform.Window, o *platform.SaveDialogOp
 	if o.ShowHiddenFiles {
 		opts |= fosForceShowHidden
 	}
-	setupFileDialog(dlg, opts, o.Title, o.ButtonLabel, o.NameFieldLabel, o.DefaultPath, o.Filters)
-	if failed(comCall(dlg, fdShow, ownerOf(parent))) {
-		cb("", nil)
+	if err := setupFileDialog(dlg, opts, o.Title, o.ButtonLabel, o.NameFieldLabel, o.DefaultPath, o.Filters); err != nil {
+		cb("", err)
+		return
+	}
+	if hr := comCall(dlg, fdShow, ownerOf(parent)); failed(hr) {
+		cb("", fileDialogShowError(hr))
 		return
 	}
 	var item uintptr
-	if failed(comCall(dlg, fdGetResult, uintptr(unsafe.Pointer(&item)))) || item == 0 {
-		cb("", nil)
+	if hr := comCall(dlg, fdGetResult, uintptr(unsafe.Pointer(&item))); failed(hr) {
+		cb("", hresultError("IFileDialog.GetResult", hr))
+		return
+	}
+	if item == 0 {
+		cb("", fmt.Errorf("mygo: file dialog returned no item"))
 		return
 	}
 	defer release(item)
-	cb(itemPath(item), nil)
+	path, err := itemPath(item)
+	cb(path, err)
 }
 
-func createFileDialog(clsid, iid *GUID) uintptr {
+func createFileDialog(clsid, iid *GUID) (uintptr, error) {
 	var dlg uintptr
 	hr, _, _ := procCoCreateInstance.Call(uintptr(unsafe.Pointer(clsid)), 0, clsctxInprocServer, uintptr(unsafe.Pointer(iid)), uintptr(unsafe.Pointer(&dlg)))
 	if failed(hr) {
-		return 0
+		return 0, hresultError("CoCreateInstance(file dialog)", hr)
 	}
-	return dlg
+	if dlg == 0 {
+		return 0, fmt.Errorf("mygo: CoCreateInstance returned a nil file dialog")
+	}
+	return dlg, nil
 }
 
-func setupFileDialog(dlg uintptr, opts uint32, title, button, nameLabel, defaultPath string, filters []platform.FileFilter) {
+func setupFileDialog(dlg uintptr, opts uint32, title, button, nameLabel, defaultPath string, filters []platform.FileFilter) error {
 	var current uint32
-	comCall(dlg, fdGetOptions, uintptr(unsafe.Pointer(&current)))
-	comCall(dlg, fdSetOptions, uintptr(current|opts))
+	if hr := comCall(dlg, fdGetOptions, uintptr(unsafe.Pointer(&current))); failed(hr) {
+		return hresultError("IFileDialog.GetOptions", hr)
+	}
+	if hr := comCall(dlg, fdSetOptions, uintptr(current|opts)); failed(hr) {
+		return hresultError("IFileDialog.SetOptions", hr)
+	}
 	if title != "" {
-		comCall(dlg, fdSetTitle, uintptr(unsafe.Pointer(u16(title))))
+		if hr := comCall(dlg, fdSetTitle, uintptr(unsafe.Pointer(u16(title)))); failed(hr) {
+			return hresultError("IFileDialog.SetTitle", hr)
+		}
 	}
 	if button != "" {
-		comCall(dlg, fdSetOkButtonLabel, uintptr(unsafe.Pointer(u16(strings.ReplaceAll(button, "_", "")))))
+		if hr := comCall(dlg, fdSetOkButtonLabel, uintptr(unsafe.Pointer(u16(strings.ReplaceAll(button, "_", ""))))); failed(hr) {
+			return hresultError("IFileDialog.SetOkButtonLabel", hr)
+		}
 	}
 	if nameLabel != "" {
-		comCall(dlg, fdSetFileNameLabel, uintptr(unsafe.Pointer(u16(nameLabel))))
+		if hr := comCall(dlg, fdSetFileNameLabel, uintptr(unsafe.Pointer(u16(nameLabel)))); failed(hr) {
+			return hresultError("IFileDialog.SetFileNameLabel", hr)
+		}
 	}
 	if defaultPath != "" {
 		dir, name := defaultPath, ""
@@ -159,12 +231,21 @@ func setupFileDialog(dlg uintptr, opts uint32, title, button, nameLabel, default
 			dir, name = filepath.Dir(defaultPath), filepath.Base(defaultPath)
 		}
 		var folder uintptr
-		if r, _, _ := procSHCreateItemFromParsingName.Call(uintptr(unsafe.Pointer(u16(dir))), 0, uintptr(unsafe.Pointer(&iidIShellItem)), uintptr(unsafe.Pointer(&folder))); !failed(r) && folder != 0 {
-			comCall(dlg, fdSetFolder, folder)
-			release(folder)
+		if hr, _, _ := procSHCreateItemFromParsingName.Call(uintptr(unsafe.Pointer(u16(dir))), 0, uintptr(unsafe.Pointer(&iidIShellItem)), uintptr(unsafe.Pointer(&folder))); failed(hr) {
+			return hresultError("SHCreateItemFromParsingName", hr)
+		}
+		if folder == 0 {
+			return fmt.Errorf("mygo: file dialog default folder is nil")
+		}
+		hr := comCall(dlg, fdSetFolder, folder)
+		release(folder)
+		if failed(hr) {
+			return hresultError("IFileDialog.SetFolder", hr)
 		}
 		if name != "" {
-			comCall(dlg, fdSetFileName, uintptr(unsafe.Pointer(u16(name))))
+			if hr := comCall(dlg, fdSetFileName, uintptr(unsafe.Pointer(u16(name)))); failed(hr) {
+				return hresultError("IFileDialog.SetFileName", hr)
+			}
 		}
 	}
 	// COMDLG_FILTERSPEC {pszName, pszSpec} pairs; the strings stay alive
@@ -185,16 +266,23 @@ func setupFileDialog(dlg uintptr, opts uint32, title, button, nameLabel, default
 		}
 	}
 	if len(specs) > 0 {
-		comCall(dlg, fdSetFileTypes, uintptr(len(specs)), uintptr(unsafe.Pointer(&specs[0])))
+		if hr := comCall(dlg, fdSetFileTypes, uintptr(len(specs)), uintptr(unsafe.Pointer(&specs[0]))); failed(hr) {
+			return hresultError("IFileDialog.SetFileTypes", hr)
+		}
 	}
+	return nil
 }
 
-func itemPath(item uintptr) string {
+func itemPath(item uintptr) (string, error) {
 	var p uintptr
-	if failed(comCall(item, siGetDisplayName, sigdnFileSysPath, uintptr(unsafe.Pointer(&p)))) {
-		return ""
+	if hr := comCall(item, siGetDisplayName, sigdnFileSysPath, uintptr(unsafe.Pointer(&p))); failed(hr) {
+		return "", hresultError("IShellItem.GetDisplayName", hr)
 	}
-	return takeWstr(p)
+	path := takeWstr(p)
+	if path == "" {
+		return "", fmt.Errorf("mygo: selected item has no filesystem path")
+	}
+	return path, nil
 }
 
 func (d dialogs) ShowMessageBox(parent platform.Window, o *platform.MessageBoxOptions, cb func(platform.MessageBoxResult, error)) {

@@ -4,10 +4,13 @@ package terminal
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
+	"oshell-desktop/internal/zmodem"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,6 +19,8 @@ type transferController struct {
 	term     *Terminal
 	detector transferDetector
 	active   *protocolSession
+	// Cancellation must not wait behind feed's bounded-buffer backpressure.
+	cancellable atomic.Pointer[protocolSession]
 }
 type protocolSession struct {
 	ctx    context.Context
@@ -23,6 +28,7 @@ type protocolSession struct {
 	pipe   *protocolPipe
 	done   chan struct{}
 	err    error
+	canRun int // input reader only; includes runs split across network reads
 }
 
 func newTransferController(t *Terminal) *transferController { return &transferController{term: t} }
@@ -50,14 +56,13 @@ func (t *Terminal) CancelTransfer() {
 }
 func (t *Terminal) SetAutomaticTransfers(enabled bool) { t.transferEnabled.Store(enabled) }
 func (c *transferController) cancel() {
-	c.mu.Lock()
-	active := c.active
-	c.mu.Unlock()
+	active := c.cancellable.Load()
 	if active != nil {
 		active.cancel()
 	}
 }
 func (c *transferController) finishInput() {
+	c.cancel()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.active != nil {
@@ -77,7 +82,7 @@ func (c *transferController) process(data []byte) {
 			continue
 		default:
 		}
-		n, ok := session.pipe.feed(data)
+		n, ok := session.feed(data)
 		if ok {
 			return
 		}
@@ -101,6 +106,7 @@ func (c *transferController) start(upload bool, prefix []byte) {
 	session := &protocolSession{ctx: ctx, cancel: cancel, done: make(chan struct{})}
 	session.pipe = newProtocolPipe(ctx, session.done, func(p []byte) (int, error) { return c.term.in.raw(ctx, p) })
 	c.active = session
+	c.cancellable.Store(session)
 	c.term.in.pauseWithCancel(true, session.cancel)
 	go func() {
 		session.err = c.term.opts.TransferHandler(ctx, upload, session.pipe)
@@ -110,7 +116,7 @@ func (c *transferController) start(upload bool, prefix []byte) {
 		defer c.mu.Unlock()
 		c.complete(session)
 	}()
-	n, ok := session.pipe.feed(prefix)
+	n, ok := session.feed(prefix)
 	if !ok {
 		<-session.done
 		c.complete(session)
@@ -129,8 +135,10 @@ func (c *transferController) complete(session *protocolSession) {
 		return
 	}
 	c.active = nil
+	c.cancellable.CompareAndSwap(session, nil)
 	tail := session.pipe.takeTail()
-	if session.err != nil {
+	finishedBatch := session.err == nil || errors.Is(session.err, zmodem.ErrSkipped)
+	if !finishedBatch {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		c.term.in.raw(ctx, []byte{0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 8, 8, 8, 8, 8, 8, 8, 8})
 		cancel()
@@ -142,9 +150,25 @@ func (c *transferController) complete(session *protocolSession) {
 	if c.term.opts.TransferFinished != nil {
 		c.term.opts.TransferFinished(session.err)
 	}
-	if len(tail) > 0 && session.err == nil {
+	if len(tail) > 0 && finishedBatch {
 		c.process(tail)
 	}
+}
+
+func (s *protocolSession) feed(data []byte) (int, bool) {
+	// Escaped file data cannot contain five consecutive raw CAN bytes.
+	// Observe aborts even while the handler is waiting for a file picker.
+	for _, b := range data {
+		if b == 0x18 {
+			s.canRun++
+			if s.canRun >= 5 {
+				s.cancel()
+			}
+		} else {
+			s.canRun = 0
+		}
+	}
+	return s.pipe.feed(data)
 }
 
 type protocolPipe struct {
@@ -271,6 +295,7 @@ func (a terminalAddr) String() string { return string(a) }
 // Drain a cancelled transfer before switching the same terminal to local tools.
 // Protocol abort bytes must still target the old transport epoch.
 func (c *transferController) endSession() {
+	c.cancel()
 	c.mu.Lock()
 	active := c.active
 	if active != nil {

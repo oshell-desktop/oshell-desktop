@@ -531,6 +531,9 @@ type FileFilter struct {
 
 // OpenDialogOptions configures an open panel.
 type OpenDialogOptions struct {
+	// BindCancellation installs a main-thread native close callback. Stop must
+	// run on the main thread before releasing the dialog, including async sheets.
+	BindCancellation           func(cancel func()) (stop func())
 	Title                      string
 	DefaultPath                string
 	ButtonLabel                string
@@ -542,6 +545,13 @@ type OpenDialogOptions struct {
 	ShowHiddenFiles            bool
 	CreateDirectories          bool
 	TreatPackagesAsDirectories bool
+}
+
+func (o *OpenDialogOptions) WatchCancellation(cancel func()) func() {
+	if o.BindCancellation != nil {
+		return o.BindCancellation(cancel)
+	}
+	return func() {}
 }
 
 // SaveDialogOptions configures a save panel.

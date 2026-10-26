@@ -20,7 +20,31 @@ type FileProgress struct {
 	Index        int
 }
 
-func SendFiles(conn net.Conn, files []SendFile, progress func(FileProgress)) error {
+// BatchResultError preserves skipped file names even if a later file fails.
+// With no Cause, the batch handshake succeeded and the shell can be restored
+// without transmitting another protocol abort.
+type BatchResultError struct {
+	Skipped []string
+	Cause   error
+}
+
+func (e *BatchResultError) Error() string {
+	message := "已跳过文件：" + strings.Join(e.Skipped, "、")
+	if e.Cause != nil {
+		message += "；" + e.Cause.Error()
+	}
+	return message
+}
+func (e *BatchResultError) Unwrap() error        { return e.Cause }
+func (e *BatchResultError) Is(target error) bool { return e.Cause == nil && target == ErrSkipped }
+
+func SendFiles(conn net.Conn, files []SendFile, progress func(FileProgress)) (result error) {
+	var skipped []string
+	defer func() {
+		if len(skipped) > 0 {
+			result = &BatchResultError{Skipped: skipped, Cause: result}
+		}
+	}()
 	if len(files) == 0 {
 		return fmt.Errorf("未选择上传文件")
 	}
@@ -44,8 +68,11 @@ func SendFiles(conn net.Conn, files []SendFile, progress func(FileProgress)) err
 				progress(FileProgress{file.Name, n, total, i})
 			}
 		}
-		if e := s.sendCurrentFile(false); e != nil && !errors.Is(e, ErrSkipped) {
-			return e
+		if e := s.sendCurrentFile(false); e != nil {
+			if !errors.Is(e, ErrSkipped) {
+				return fmt.Errorf("%s: %w", file.Name, e)
+			}
+			skipped = append(skipped, file.Name)
 		}
 	}
 	if _, e := conn.Write(BuildZhexHeader(FrameZFIN, 0)); e != nil {

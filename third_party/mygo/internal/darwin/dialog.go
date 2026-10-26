@@ -101,7 +101,9 @@ func (d dialogs) ShowOpenDialog(parent platform.Window, o *platform.OpenDialogOp
 		send(panel, "setAllowsMultipleSelection:", boolArg(o.Multiple))
 		setupSavePanel(panel, o.Title, o.Message, o.ButtonLabel, o.DefaultPath, o.Filters,
 			o.ShowHiddenFiles, o.CreateDirectories, o.TreatPackagesAsDirectories)
+		stop := o.WatchCancellation(func() { send(panel, "cancel:", 0) })
 		runPanel(panel, asWindow(parent), "beginSheetModalForWindow:completionHandler:", func(resp int) {
+			stop()
 			if resp != nsModalResponseOK {
 				cb(nil, nil)
 				return

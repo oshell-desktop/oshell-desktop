@@ -1,7 +1,9 @@
 package mygo
 
 import (
+	"context"
 	"strings"
+	"sync"
 
 	"github.com/egoist/mygo/internal/platform"
 )
@@ -116,13 +118,27 @@ func toFilters(fs []FileFilter) []platform.FileFilter {
 // Open shows a dialog to pick files or directories and returns the chosen
 // paths, or nil when canceled.
 func (DialogModule) Open(opts OpenDialogOptions) ([]string, error) {
+	return Dialog.OpenContext(context.Background(), opts)
+}
+
+// OpenContext closes the native picker when ctx is cancelled. It also returns
+// promptly if the native UI is temporarily unable to process the close request.
+func (DialogModule) OpenContext(ctx context.Context, opts OpenDialogOptions) ([]string, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	needsApp("Dialog.Open")
 	type result struct {
 		paths []string
 		err   error
 	}
 	ch := make(chan result, 1)
+	var once sync.Once
+	finish := func(paths []string, err error) { once.Do(func() { deliver(ch, result{paths, err}) }) }
+	stop := context.AfterFunc(ctx, func() { finish(nil, ctx.Err()) })
+	defer stop()
 	popts := &platform.OpenDialogOptions{
+		BindCancellation:           func(cancel func()) func() { return bindDialogCancellation(ctx, postMain, cancel) },
 		Title:                      opts.Title,
 		DefaultPath:                opts.DefaultPath,
 		ButtonLabel:                opts.ButtonLabel,
@@ -136,14 +152,35 @@ func (DialogModule) Open(opts OpenDialogOptions) ([]string, error) {
 		TreatPackagesAsDirectories: opts.TreatPackagesAsDirectories,
 	}
 	if !postMain(func() {
+		if err := ctx.Err(); err != nil {
+			finish(nil, err)
+			return
+		}
 		backend().Dialogs().ShowOpenDialog(opts.Parent.nativeOrNil(), popts, func(paths []string, err error) {
-			deliver(ch, result{paths, err})
+			finish(paths, err)
 		})
 	}) {
 		return nil, errLoopStopped
 	}
 	r := await(ch)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return r.paths, r.err
+}
+
+// active is touched only on the UI thread. An already queued close must never
+// dereference a native dialog released by a simultaneous user response.
+func bindDialogCancellation(ctx context.Context, dispatch func(func()) bool, cancel func()) func() {
+	active := true
+	stop := context.AfterFunc(ctx, func() {
+		dispatch(func() {
+			if active {
+				cancel()
+			}
+		})
+	})
+	return func() { active = false; stop() }
 }
 
 // Save shows a dialog to choose where to save a file and returns the path,

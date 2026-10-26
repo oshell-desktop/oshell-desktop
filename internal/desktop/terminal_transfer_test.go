@@ -3,9 +3,25 @@ package desktop
 import (
 	"errors"
 	"os"
+	"oshell-desktop/internal/terminal"
+	"oshell-desktop/internal/zmodem"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestTerminalSkippedBatchNotice(t *testing.T) {
+	a := &App{}
+	p := &pane{transfer: transferNoticeState{active: true, visible: true}}
+	p.owner.Store(a)
+	var opts terminal.Options
+	a.configureTerminalTransfer(p, &opts, true)
+	opts.TransferFinished(&zmodem.BatchResultError{Skipped: []string{"kept.bin"}})
+	a.drain()
+	if p.transfer.active || !strings.Contains(p.transfer.status, "kept.bin") || strings.Contains(p.transfer.status, "传输完成") || !p.transfer.dismissAt.IsZero() {
+		t.Fatalf("skipped file presented as success: %+v", p.transfer)
+	}
+}
 
 func TestTerminalDownloadCommitAbortAndCollision(t *testing.T) {
 	dir := t.TempDir()

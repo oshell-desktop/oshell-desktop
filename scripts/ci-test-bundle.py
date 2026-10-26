@@ -13,6 +13,12 @@ BUNDLE = ROOT / 'validation/windows-tests'
 CORE = 'oshell-desktop/internal/core'
 RACE = [CORE, 'oshell-desktop/internal/terminal/internal/pty', 'oshell-desktop/internal/zmodem']
 PARSERS = ['github.com/jlaffaye/ftp', 'github.com/pkg/sftp']
+MYGO = 'github.com/egoist/mygo'
+DIALOG_TESTS = {
+    MYGO: '^Test(OpenContext|DialogCancellation)',
+    MYGO + '/internal/windows': '^TestFileDialog',
+}
+TERMINAL_RACE = '^Test(TransferCancelWhilePickerBackpressures|TransferPeerCancelWhilePickerOpen|TransferSkippedBatchRestoresShellWithoutAbort|TransferMultiplexer|DisconnectCancelsTransfer)'
 # The full core suite includes real 600,000-round password derivations and
 # exceeds three minutes. Keep a finite budget shared by both normal suites;
 # race shards retain their separate, existing budget.
@@ -47,11 +53,12 @@ def compile_bundle(embedded=False):
         runtime = prepare('windows/amd64')
         shutil.copy2(runtime, BUNDLE / 'ghostty-vt.dll')
         manifest['terminalSHA256'] = digest(runtime)
-        listed = subprocess.check_output(['go', 'list', '-json', './...', *PARSERS], cwd=ROOT, env=env, text=True)
+        listed = subprocess.check_output(['go', 'list', '-json', './...', *PARSERS, *DIALOG_TESTS], cwd=ROOT, env=env, text=True)
         packages = [p for p in objects(listed) if p.get('TestGoFiles') or p.get('XTestGoFiles')]
-        specs = [(p['ImportPath'], False, 'Test(UNIXMetadata|OwnerHints|Parse)' if p['ImportPath'] in PARSERS else '.',
+        specs = [(p['ImportPath'], False, 'Test(UNIXMetadata|OwnerHints|Parse)' if p['ImportPath'] in PARSERS else DIALOG_TESTS.get(p['ImportPath'], '.'),
                   'normal-' + str(i)) for i, p in enumerate(packages)]
         specs += [(p, True, '.', 'race-' + p.rsplit('/', 1)[-1]) for p in RACE]
+        specs.append(('oshell-desktop/internal/terminal', True, TERMINAL_RACE, 'race-terminal'))
         run(['go', 'build', '-o', BUNDLE / 'test2json.exe', 'cmd/test2json'], cwd=ROOT, env=env)
         run(['go', 'build', '-o', BUNDLE / 'update-fixture.exe', './internal/core/testdata/update-fixture'], cwd=ROOT, env=env)
         run(['go', 'build', './...'], cwd=ROOT, env=env)
@@ -66,6 +73,8 @@ def compile_bundle(embedded=False):
                      else package.removeprefix('oshell-desktop/'))
         if package == 'oshell-desktop':
             directory = '.'
+        if package == MYGO or package.startswith(MYGO + '/'):
+            directory = 'third_party/mygo' + package[len(MYGO):]
         manifest['tests'].append(dict(package=package, binary=binary, race=race, pattern=pattern, directory=directory))
     manifest_path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
 
@@ -146,8 +155,10 @@ def linux(shard=None):
     os.environ['MYGO_GHOSTTY_VT'] = str(prepare('linux/amd64'))
     os.environ['OSHELL_REQUIRE_WIDTH_EXTENSION'] = '1'
     run(['go', 'test', '-race', '-count=1', '-timeout=5m', *RACE[1:]], cwd=ROOT)
+    run(['go', 'test', '-race', '-count=1', '-timeout=2m', './internal/terminal', '-run', TERMINAL_RACE], cwd=ROOT)
     run(['xvfb-run', '-a', 'dbus-run-session', '--', 'go', 'test', '-count=1', '-timeout=' + REGRESSION_TIMEOUT, './...'], cwd=ROOT)
     run(['go', 'test', '-count=1', *PARSERS, '-run', 'Test(UNIXMetadata|OwnerHints|Parse)'], cwd=ROOT)
+    run(['go', 'test', '-count=1', MYGO, '-run', DIALOG_TESTS[MYGO]], cwd=ROOT)
     for script in ['test-build.py', 'test-terminal-runtime.py', 'test-core-shards.py', 'test-configuration-contract.py', 'test-ci-bundle.py']:
         run([sys.executable, ROOT / 'scripts' / script], cwd=ROOT)
     run(['go', 'build', './...'], cwd=ROOT, env=dict(os.environ, CGO_ENABLED='0'))

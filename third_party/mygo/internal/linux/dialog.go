@@ -83,10 +83,12 @@ func (d dialogs) ShowOpenDialog(parent platform.Window, o *platform.OpenDialogOp
 	fc := gtkFileChooserNativeNew(cs(title), parentWindow(parent), action, cs(accept), cs("_Cancel"))
 	gtkFileChooserSetSelectMultiple(fc, o.Multiple)
 	setupChooser(fc, o.DefaultPath, o.Filters, o.ShowHiddenFiles, false)
+	stop := o.WatchCancellation(func() { gtkNativeDialogHide(fc) })
 	var paths []string
 	if d.b.runDialog(fc, true) == gtkResponseAccept {
 		paths = slistStrings(gtkFileChooserGetFilenames(fc))
 	}
+	stop()
 	gObjectUnref(fc)
 	cb(paths, nil)
 }
