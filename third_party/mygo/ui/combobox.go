@@ -252,13 +252,17 @@ func matching(options []string, query string) []string {
 func styleOptions(c *context, p *comboboxParts, options []string) *node {
 	t := c.theme
 	return p.Popup(func(panel *node) {
-		stylePanel(c, panel)
-		panel.MaxHeight(t.Space(70))
-		panel.flags |= flagScrollY | flagHover
+		if t.CompactLists {
+			stylePickerPanel(panel)
+		} else {
+			stylePanel(c, panel)
+			panel.MaxHeight(t.Space(70))
+			panel.flags |= flagScrollY | flagHover
+		}
 		for _, opt := range options {
-			item := p.Item(opt).Padding(t.Space(1.5), t.Space(2.5)).Radius(t.Radius)
-			if item.Highlighted() {
-				item.Background(t.Accent).TextColor(t.AccentText)
+			item := p.Item(opt)
+			stylePopupOption(item, false)
+			if !t.CompactLists && item.Highlighted() {
 				item.ScrollIntoView()
 			}
 			item.Children(func() { coreText(c, opt).SingleLine() })

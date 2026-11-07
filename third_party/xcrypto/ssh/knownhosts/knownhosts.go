@@ -444,6 +444,29 @@ func New(files ...string) (ssh.HostKeyCallback, error) {
 	return certChecker.CheckHostKey, nil
 }
 
+// KnownHostKeys reads plain host-key records matching address (host:port), using
+// the same hashed-name, wildcard, negation and port rules as New. CA records and
+// revoked keys are excluded: a CA's algorithm is not the host's algorithm.
+// This is only a negotiation hint; callers must still verify the presented key.
+func KnownHostKeys(r io.Reader, address string) ([]ssh.PublicKey, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	db := newHostKeyDB()
+	if err := db.Read(r, "known_hosts"); err != nil {
+		return nil, err
+	}
+	var keys []ssh.PublicKey
+	for _, line := range db.lines {
+		if line.cert || !line.match(addr{host, port}) || db.revoked[plainKeyBlob(line.knownKey.Key)] != nil {
+			continue
+		}
+		keys = append(keys, line.knownKey.Key)
+	}
+	return keys, nil
+}
+
 // Normalize normalizes an address into the form used in known_hosts. Supports
 // IPv4, hostnames, bracketed IPv6. Any other non-standard formats are returned
 // with minimal transformation.

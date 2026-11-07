@@ -81,7 +81,7 @@ func (a *App) sharedSyncSettings(c *ui.Context) {
 	a.loadSharedSyncSettings()
 	f := &a.features.sharedSync
 	a.syncStatusCard(c)
-	ui.Text(c, "多设备同步").Bold()
+	sectionTitle(c, "多设备同步")
 	ui.Text(c, "默认仅同步会话资料；可选择其他类别，未选择的设置保留在本机。").Wrap()
 	current := "none"
 	if f.options.Enabled {
@@ -275,6 +275,7 @@ func (a *App) startSharedSync() {
 	f.cancel = cancel
 	cfg := a.config.Clone()
 	engine := &core.SharedSyncEngine{Manual: !background, Store: a.store, Vault: a.vault, Transport: transport, Replica: core.SharedReplicaStore{Directory: a.store.Dir, Target: options.Target()}}
+	engine.FontTarget = options.FontTarget()
 	policy := options.Policy.Effective()
 	engine.Selection = &policy.Content
 	f.diagnostics = engine.Diagnostics()
@@ -380,6 +381,18 @@ func (a *App) commitSharedSync() {
 			if loadErr == nil {
 				a.applyCommittedConfig(saved)
 			}
+			if f.savedOptions.Policy.Effective().Content.FontFiles {
+				if fontErr := a.loadUserFonts(); fontErr != nil && err == nil {
+					err = fmt.Errorf("同步字体已保存，但无法加载：%w", fontErr)
+				}
+				if a.hub != nil {
+					for _, w := range a.hub.configurationWindows() {
+						if w.win != nil {
+							w.win.Invalidate()
+						}
+					}
+				}
+			}
 			if err != nil {
 				f.status = err.Error()
 			} else if loadErr != nil {
@@ -407,13 +420,13 @@ func (a *App) commitSharedSync() {
 }
 func (a *App) sharedSyncConflictDialog(c *ui.Context) {
 	f := &a.features.sharedSync
-	ui.Modal(c, &f.conflictOpen, func() {
+	desktopModal(c, &f.conflictOpen, func() {
 		if f.plan == nil {
 			return
 		}
-		width, height := c.Size()
-		ui.Column(c).Width(min(float32(1000), max(float32(520), width-48))).Gap(12).Children(func() {
-			ui.Text(c, "共享配置差异").FontSize(20).Bold()
+		_, height := c.Size()
+		dialogBody(c, 1000).Gap(12).Children(func() {
+			windowHeading(c, "共享配置差异")
 			if f.plan.InitialChoiceRequired {
 				ui.Text(c, fmt.Sprintf("共享端有 %d 个会话，本机有 %d 个。仅应用已选择的同步类别；未选类别保留原值。", len(f.plan.Remote.Profiles), len(f.plan.Local.Profiles))).Wrap()
 				for _, option := range []struct {

@@ -38,7 +38,7 @@ func presentFile(entry os.FileInfo) filePresentation {
 		return makeStyle("未知", documentFileIcon, "#7B91A6")
 	}
 	if entry.IsDir() {
-		return makeStyle("目录", folderIcon, "#428BC1")
+		return makeStyle("目录", sessionFolderIcon, "#D79B25")
 	}
 	if !mode.IsRegular() {
 		return makeStyle("特殊文件", settingsIcon, "#8A8196")

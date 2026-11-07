@@ -12,11 +12,13 @@ import (
 )
 
 func (a *App) dialogs(c *ui.Context) {
+	a.mcpDialog(c)
+	a.hostKeyCleanupDialog(c)
 	a.imagePasteDialog(c)
 	a.connectionEditor(c)
-	ui.Modal(c, &a.authOpen, func() {
-		ui.Column(c).Width(440).Gap(14).Children(func() {
-			ui.Text(c, "连接 "+a.pendingProfile.Name).FontSize(17).Bold()
+	desktopModal(c, &a.authOpen, func() {
+		dialogBody(c, 440).Gap(14).Children(func() {
+			windowHeading(c, "连接 "+a.pendingProfile.Name)
 			endpoint := a.pendingProfile.Username + "@" + a.pendingProfile.Address()
 			if identity := a.features.savedIdentity; identity != nil {
 				endpoint = identity.User + "@" + net.JoinHostPort(identity.Host, strconv.Itoa(identity.Port))

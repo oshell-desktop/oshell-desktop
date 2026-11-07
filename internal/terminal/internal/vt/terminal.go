@@ -605,9 +605,26 @@ const formatVT = 1
 // own. The OShell extension also restores current titles and their stacks;
 // replay this state into a fresh terminal to avoid appending to existing stacks.
 func (t *Terminal) VT() []byte {
+	return t.vtFrom(0)
+}
+
+// ScreenVT excludes scrollback: granting Agent access does not disclose history.
+func (t *Terminal) ScreenVT() []byte {
+	s := t.Scrollbar()
+	return t.vtFrom(max(0, int(s.Total)-int(s.Len)))
+}
+func (t *Terminal) vtFrom(first int) []byte {
 	// Replaying soft wraps as CR/LF splits logical paragraphs, changing BiDi,
 	// selection and subsequent reflow even if the initial cells look identical.
 	opts := formatterOptions{size: unsafe.Sizeof(formatterOptions{}), emit: formatVT, unwrap: true}
+	selection, found := t.SelectHistoryFrom(first)
+	if first > 0 {
+		if !found {
+			return nil
+		}
+		opts.selection = uintptr(unsafe.Pointer(&selection))
+		defer runtime.KeepAlive(&selection)
+	}
 	x := &opts.extra
 	x.size = unsafe.Sizeof(opts.extra)
 	x.modes, x.scrollingRegion, x.tabstops, x.pwd, x.keyboard = true, true, true, true, true

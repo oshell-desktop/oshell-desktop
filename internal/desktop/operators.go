@@ -301,8 +301,8 @@ func (a *App) targetChoices(c *ui.Context, selected map[string]bool) {
 }
 func (a *App) operatorDialogs(c *ui.Context) {
 	o := &a.features.operators
-	ui.Modal(c, &o.groupsOpen, func() {
-		ui.Column(c).Width(440).Gap(10).Children(func() {
+	desktopModal(c, &o.groupsOpen, func() {
+		dialogBody(c, 440).Gap(10).Children(func() {
 			ui.Text(c, "选择发送标签组").Bold()
 			for _, g := range a.groups.root.leaves() {
 				value := o.groupSelectionDraft[g.id]
@@ -323,11 +323,11 @@ func (a *App) operatorDialogs(c *ui.Context) {
 			})
 		})
 	})
-	ui.Modal(c, &o.targetsOpen, func() {
-		ui.Column(c).Width(520).Gap(12).Children(func() {
-			ui.Text(c, "选择快速发送目标").FontSize(18).Bold()
+	desktopModal(c, &o.targetsOpen, func() {
+		dialogBody(c, 520).Gap(12).Children(func() {
+			windowHeading(c, "选择快速发送目标")
 			ui.Scroll(c).Height(270).Gap(6).Children(func() { a.targetChoices(c, o.selectionDraft) })
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			dialogActions(c).Children(func() {
 				ui.Button(c, "取消").OnClick(func() { o.targetsOpen = false })
 				ui.PrimaryButton(c, "应用目标").OnClick(func() {
 					if a.changeConfig(func(cfg *core.Config) error { cfg.Settings.QuickSendScope = "selected"; return nil }) {
@@ -351,7 +351,7 @@ func (a *App) composerView(c *ui.Context) {
 	if c.Theme().Dark {
 		selection = ui.Hex("#2563EB")
 	}
-	ui.Column(c).Height(245).MinHeight(180).Padding(8).Gap(6).BorderWidth(1, 0, 0, 0).BorderColor(c.Theme().Border).Children(func() {
+	ui.Column(c).Height(245).MinHeight(180).Padding(10).Gap(8).Background(panelColor(c)).BorderWidth(1, 0, 0, 0).BorderColor(c.Theme().Border).Children(func() {
 		ui.Row(c).Gap(8).Children(func() {
 			ui.Text(c, "多行命令撰写").Bold()
 			ui.Spacer(c)

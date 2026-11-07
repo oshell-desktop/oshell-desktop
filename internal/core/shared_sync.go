@@ -15,13 +15,14 @@ import (
 var ErrSyncDeferred = errors.New("共享端已接收本次修改，本机有新变化，等待下一轮同步合并")
 
 type SharedSyncEngine struct {
-	Selection *SyncContentSelection
-	Manual    bool
-	Progress  func(SyncEvent, error)
-	Store     *Store
-	Vault     *Vault
-	Transport SyncTransport
-	Replica   SharedReplicaStore
+	FontTarget string
+	Selection  *SyncContentSelection
+	Manual     bool
+	Progress   func(SyncEvent, error)
+	Store      *Store
+	Vault      *Vault
+	Transport  SyncTransport
+	Replica    SharedReplicaStore
 }
 type SharedSyncPlan struct {
 	selection                        SyncContentSelection
@@ -251,7 +252,14 @@ func (p *SharedSyncPlan) Commit(ctx context.Context, choices map[string]SharedMe
 		if err = e.ConflictStore().Clear(); err != nil {
 			return p.configuration, fmt.Errorf("同步完成，但冲突草稿清理失败：%w", err)
 		}
-		e.recordDiagnostic(SyncUnchanged, started, nil, runID)
+		if err = e.synchronizeFonts(ctx, p.selection); err != nil {
+			return p.configuration, err
+		}
+		event := SyncUnchanged
+		if p.selection.FontFiles {
+			event = SyncCompleted
+		}
+		e.recordDiagnostic(event, started, nil, runID)
 		return p.configuration, nil
 	}
 	replacement := sessionSyncWire(document, &p.fullLocal, p.selection)
@@ -326,6 +334,9 @@ func (p *SharedSyncPlan) Commit(ctx context.Context, choices map[string]SharedMe
 	}
 	if err = e.ConflictStore().Clear(); err != nil {
 		return next, fmt.Errorf("同步完成，但冲突草稿清理失败：%w", err)
+	}
+	if err = e.synchronizeFonts(ctx, p.selection); err != nil {
+		return next, err
 	}
 	e.recordDiagnostic(SyncCompleted, started, nil, runID)
 	return next, nil

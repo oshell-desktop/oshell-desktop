@@ -21,7 +21,7 @@ func TestSessionEditorPersistenceAndSearch(t *testing.T) {
 	s := &core.Store{Dir: t.TempDir()}
 	a := newApp(s, core.DefaultConfig())
 	tt := ui.NewTester(a.view, 1280, 820)
-	if !tt.HasText("连接你的服务器，专注每一条命令。") {
+	if !tt.HasText("OShell Desktop") {
 		t.Fatal(tt.Texts())
 	}
 	if e := tt.Click("新建 SSH 会话"); e != nil {
@@ -83,7 +83,7 @@ func TestTerminalWorkspaceAndClose(t *testing.T) {
 	a.tabs = []*tab{workspace}
 	tt := ui.NewTester(a.view, 1280, 820)
 	tt.Frame()
-	splitMenu := "视图"
+	splitMenu := "分屏排列"
 	if runtime.GOOS == "darwin" {
 		splitMenu = "分屏"
 	}

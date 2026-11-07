@@ -12,26 +12,32 @@ import (
 )
 
 type Profile struct {
-	RuntimeTerminalType   string          `json:"-"`
-	ProxyID               string          `json:"proxyID,omitempty"`
-	RuntimeProxyRoute     []ProxySettings `json:"-"`
-	resolvedIdentityFiles []string
-	QuickConnect          bool              `json:"quickConnect"`
-	TitleMode             string            `json:"titleMode"`
-	ID                    string            `json:"id"`
-	Name                  string            `json:"name"`
-	Group                 string            `json:"group"`
-	Kind                  string            `json:"kind"`
-	Host                  string            `json:"host"`
-	Port                  int               `json:"port"`
-	Username              string            `json:"username"`
-	IdentityFile          string            `json:"identityFile"`
-	JumpHost              string            `json:"jumpHost"`
-	Proxy                 ProxySettings     `json:"proxy"`
-	Tunnels               []TunnelRule      `json:"tunnels"`
-	KeepAlive             KeepAliveSettings `json:"keepAlive"`
-	LegacySSH             bool              `json:"legacySSH"`
-	InitialDirectory      string            `json:"initialDirectory"`
+	RuntimeTerminalType    string          `json:"-"`
+	RuntimeBastionEndpoint string          `json:"-"`
+	ProxyID                string          `json:"proxyID,omitempty"`
+	RuntimeProxyRoute      []ProxySettings `json:"-"`
+	resolvedIdentityFiles  []string
+	QuickConnect           bool              `json:"quickConnect"`
+	TitleMode              string            `json:"titleMode"`
+	ID                     string            `json:"id"`
+	Name                   string            `json:"name"`
+	Group                  string            `json:"group"`
+	Kind                   string            `json:"kind"`
+	Host                   string            `json:"host"`
+	Port                   int               `json:"port"`
+	Username               string            `json:"username"`
+	IdentityFile           string            `json:"identityFile"`
+	JumpHost               string            `json:"jumpHost"`
+	Proxy                  ProxySettings     `json:"proxy"`
+	Tunnels                []TunnelRule      `json:"tunnels"`
+	KeepAlive              KeepAliveSettings `json:"keepAlive"`
+	LegacySSH              bool              `json:"legacySSH"`
+	InitialDirectory       string            `json:"initialDirectory"`
+
+	// Local ssh -G policy only; never serialized into shared configuration.
+	resolvedIdentityFilesSet bool
+	resolvedIdentitiesOnly   bool
+	resolvedAgentDisabled    bool
 }
 
 func NewID() string {

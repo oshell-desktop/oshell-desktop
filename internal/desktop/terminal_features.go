@@ -45,6 +45,7 @@ func (a *App) requestPaste(source *pane, text string) {
 		a.status = "粘贴内容不能包含空字符或超过 1 MiB；较大内容请使用文件上传。"
 		return
 	}
+	text = core.NormalizeInput(text)
 	local := source.term.InLocalToolsMode() && !source.term.ManagedInputAvailable()
 	targets := []pasteDestination{{source, source.term, local}}
 	if !local && a.features.syncEnabled && a.features.syncTargets[source.id] {
@@ -181,9 +182,9 @@ func (a *App) applyTerminalPreferences(p *pane) {
 }
 func (a *App) inputDialogs(c *ui.Context) {
 	f := &a.features
-	ui.Modal(c, &f.syncOpen, func() {
-		ui.Column(c).Width(480).Gap(12).Children(func() {
-			ui.Text(c, "同步键盘输入").FontSize(18).Bold()
+	desktopModal(c, &f.syncOpen, func() {
+		dialogBody(c, 480).Gap(12).Children(func() {
+			windowHeading(c, "同步键盘输入")
 			ui.Text(c, "仅在勾选的终端之间同步输入；不复制协议回复或鼠标上报。").TextColor(c.Theme().TextMuted)
 			ui.Checkbox(c, &f.syncDraftEnabled, "启用同步输入")
 			if f.syncSelectionDraft == nil {
@@ -211,13 +212,13 @@ func (a *App) inputDialogs(c *ui.Context) {
 			})
 		})
 	})
-	ui.Modal(c, &f.pasteOpen, func() {
-		ui.Column(c).Width(600).Gap(12).Children(func() {
-			ui.Text(c, "多行粘贴预览").FontSize(18).Bold()
+	desktopModal(c, &f.pasteOpen, func() {
+		dialogBody(c, 600).Gap(12).Children(func() {
+			windowHeading(c, "多行粘贴预览")
 			ui.Text(c, "请确认内容；粘贴会保留原有引号、缩进和换行。").TextColor(c.Theme().TextMuted)
 			ui.TextArea(c, &f.pasteText).Height(240).Font("monospace")
 			ui.Checkbox(c, &f.pasteNoPreview, "下次不再使用预览")
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			dialogActions(c).Children(func() {
 				ui.Button(c, "取消").OnClick(a.cancelPaste)
 				ui.PrimaryButton(c, "粘贴").OnClick(a.confirmPaste)
 			})

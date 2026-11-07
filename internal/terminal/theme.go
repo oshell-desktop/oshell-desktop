@@ -2,7 +2,6 @@ package terminal
 
 import (
 	"github.com/egoist/mygo/ui"
-	"math"
 	"oshell-desktop/internal/terminal/internal/vt"
 )
 
@@ -14,9 +13,6 @@ type Theme struct {
 	// Cursor colors the cursor: the foreground when zero. CursorText
 	// colors the text under a block cursor: the background when zero.
 	Cursor, CursorText ui.Color
-	// AutoCursor uses black or white for maximum contrast with the cursor
-	// cell's current background, overriding program-supplied cursor colors.
-	AutoCursor bool
 	// Selection highlights the selected text: the foreground, a third
 	// opaque, when zero. SelectionText colors the selected text: its own
 	// colors when zero.
@@ -96,20 +92,3 @@ func (th *Theme) apply(t *vt.Terminal) {
 func rgb(c ui.Color) vt.RGB { return vt.RGB{R: c.R, G: c.G, B: c.B} }
 
 func color(c vt.RGB) ui.Color { return ui.RGB(c.R, c.G, c.B) }
-
-// CursorContrast chooses the more legible of opaque black and white using
-// relative luminance, including on medium-tone or saturated backgrounds.
-func CursorContrast(background ui.Color) ui.Color {
-	linear := func(v uint8) float64 {
-		s := float64(v) / 255
-		if s <= 0.04045 {
-			return s / 12.92
-		}
-		return math.Pow((s+0.055)/1.055, 2.4)
-	}
-	luminance := 0.2126*linear(background.R) + 0.7152*linear(background.G) + 0.0722*linear(background.B)
-	if (luminance+0.05)/0.05 >= 1.05/(luminance+0.05) {
-		return ui.RGB(0, 0, 0)
-	}
-	return ui.RGB(255, 255, 255)
-}

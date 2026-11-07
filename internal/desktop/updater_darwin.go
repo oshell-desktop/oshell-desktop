@@ -88,7 +88,7 @@ func (a *App) validateUpdateSettings() error {
 func (a *App) updateSettingsView(c *ui.Context) {
 	state := a.updateState()
 	settings := &a.features.settingsDraft
-	ui.Text(c, "GitHub Pages 更新").FontSize(18).Bold()
+	windowHeading(c, "GitHub Pages 更新")
 	version := mygo.App.Version()
 	if version == "" {
 		version = "开发构建"

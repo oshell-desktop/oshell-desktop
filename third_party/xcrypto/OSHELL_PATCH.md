@@ -21,3 +21,12 @@ lengths and non-EtM oracle mitigation. Application tests exercise default
 rejection, opt-in negotiation, multi-packet traffic and native OpenSSH with
 SHA256/SHA512 EtM and SHA256/SHA1-96 MACs. This remains SF-C03, not a new algorithm
 set or SSH protocol feature.
+
+SF-C02 host-key negotiation uses two read-only helpers: SSH exposes a cloned
+default host-key algorithm list; knownhosts exposes matching plain host keys
+using its existing parser/matchers, excluding CA records and revoked keys.
+Desktop stably prioritizes algorithms for these keys without changing the
+allowed set, then keeps the original HostKeyCallback for actual verification.
+The helpers neither accept a new key nor write trust records. Application
+regressions cover RSA SHA-2 aliases, hashed/negated/ported names, multiple server
+keys, changed or unavailable trusted keys, and independent jump/target identity.

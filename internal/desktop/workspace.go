@@ -14,18 +14,6 @@ import (
 func (a *App) theme(c *ui.Context) { a.themeSettings(c, a.config.Settings) }
 
 func (a *App) themeSettings(c *ui.Context, settings core.Settings) {
-	t := ui.LightTheme()
-	t.Background = ui.Hex("#ffffff")
-	t.Surface = ui.Hex("#f5f5f7")
-	t.SurfaceHover = ui.Hex("#e9ebef")
-	t.SurfacePressed = ui.Hex("#e0e5ed")
-	t.Border = ui.Hex("#e2e4e8")
-	t.Text = ui.Hex("#303238")
-	t.TextMuted = ui.Hex("#878a92")
-	t.Accent = ui.Hex("#5c82c8")
-	t.AccentHover = ui.Hex("#4a72b9")
-	t.AccentPressed = ui.Hex("#3c64aa")
-	t.Selection = ui.Hex("#e8effb")
 	dark := settings.Dark
 	switch settings.InterfaceTheme {
 	case "dark":
@@ -37,26 +25,17 @@ func (a *App) themeSettings(c *ui.Context, settings core.Settings) {
 			dark = systemInterfaceDark(mygo.Theme.IsDark())
 		}
 	}
-	if dark {
-		t = ui.DarkTheme()
-		t.Background = ui.Hex("#202124")
-		t.Surface = ui.Hex("#28292d")
-		t.SurfaceHover = ui.Hex("#34363b")
-		t.SurfacePressed = ui.Hex("#3a3d44")
-		t.Border = ui.Hex("#3b3d42")
-		t.Text = ui.Hex("#dedfe3")
-		t.TextMuted = ui.Hex("#9699a2")
-		t.Accent = ui.Hex("#8da9dd")
-		t.Selection = ui.Hex("#344257")
-	}
-	t.Radius = 4
-	t.Spacing = 3
-	t.FontSize = 12
-	c.SetTheme(t)
+	c.SetTheme(professionalTheme(dark))
 }
 func (a *App) view(c *ui.Context) {
 	defer a.resumeDeferredUpdate() // Modal teardown may happen after drain during this frame.
 	a.drain()
+	if a.hub != nil && a.hub.fileWindow != nil && a.hub.fileWindow.filePresentation.owner.Load() == a {
+		a.hub.fileWindow.drain()
+	}
+	if !c.Valid() {
+		return
+	}
 	a.observeTabDetails(c)
 	c.UseSoftwareRenderer(!a.config.Settings.Metal)
 	a.theme(c)
@@ -68,6 +47,18 @@ func (a *App) view(c *ui.Context) {
 		a.pruneSyncTargets()
 	}
 	a.refreshPaneVisibility()
+	width, _ := c.Size()
+	if a.mcp.open && a.mcp.window == nil && width < 1200 && !a.mcp.detaching && a.win != nil && mygo.App.IsReady() {
+		// Defer native window creation until this layout pass has finished.
+		a.mcp.detaching = true
+		a.post(func() {
+			a.mcp.detaching = false
+			if a.mcp.open && !a.workspaceLocked() {
+				a.mcpWindow()
+			}
+		})
+	}
+	a.mcp.sidebarShown = a.mcp.open && a.mcp.window == nil && width >= 1200 && !a.focusFullscreen.chrome
 	ui.Column(c).Fill().Children(func() {
 		if !a.focusFullscreen.chrome {
 			a.toolbar(c)
@@ -80,9 +71,12 @@ func (a *App) view(c *ui.Context) {
 			if a.localUI.SidebarVisible && !a.focusFullscreen.chrome {
 				a.sidebarView(c.Key("session-sidebar"))
 			}
-			a.groupWorkspace(c, a.groups.root)
+			a.fileDockWorkspace(c)
 			if t := a.activeTab(); a.filesVisible && t != nil && t.active.term != nil {
 				a.filesView(c, t.active)
+			}
+			if a.mcp.sidebarShown {
+				ui.Column(c.Key("mcp-sidebar")).Width(480).Shrink(0).MinHeight(0).Padding(10).Gap(8).Border(1, c.Theme().Border).Children(func() { a.mcpContents(c) })
 			}
 		})
 		if !a.focusFullscreen.deep {
@@ -104,6 +98,7 @@ func (a *App) view(c *ui.Context) {
 }
 func (a *App) legacyToolbar(c *ui.Context) {
 	ui.Toolbar(c, func() {
+		ui.Button(c, "MCP").OnClick(a.showMCP)
 		toolButton(c, "会话管理", folderIcon, "会话管理").OnClick(a.openManager)
 		ui.MenuButton(c, "快捷连接", a.connectionMenu).Height(25).FontSize(12)
 		toolButton(c, "新建会话", plusIcon, "新建").OnClick(func() { a.edit(a.newProfile("ssh")) })
@@ -247,7 +242,7 @@ func (a *App) legacyToolbar(c *ui.Context) {
 		toolButton(c, "远程文件", folderIcon, "文件").Disabled(a.activePane() == nil || a.activePane().conn == nil).OnClick(a.toggleFiles)
 		toolButton(c, "设置", settingsIcon, "").OnClick(func() { a.openSettings() })
 		toolButton(c, "会话侧栏", sidebarIcon, "").OnClick(a.toggleSidebar)
-	}).Height(38).Padding(6, 8).Gap(5).Background(c.Theme().Background).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Label("主工具栏")
+	}).Height(detailBarHeight).Padding(2, 6).Gap(5).Background(c.Theme().Background).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Label("主工具栏")
 }
 func (a *App) toggleFiles() {
 	if a.hub != nil {
@@ -339,6 +334,10 @@ func (a *App) linksBar(c *ui.Context) {
 					}
 					element.Drag(a.linkDrag(item.Key()))
 					if item.Kind == "folder" {
+						if a.linkMenuOpen && a.linkMenuAnchor == item.Key() {
+							element.Background(c.Theme().Selection)
+						}
+						a.expandLinkOnHover(c, element, a.linkMenuOpen && a.linkMenuAnchor == item.Key(), func() { a.openLinkMenu(item.Key(), item.Folder) })
 						a.linkFolderPopover(c.Key(item.Key()+"-menu"), element, item.Key())
 					}
 					if drag, hover := ui.DragOver[linkRootDrag](element); hover && a.acceptsLinkDrag(drag) {
@@ -376,6 +375,10 @@ func (a *App) linksBar(c *ui.Context) {
 		}
 		a.scrollLinkDrag(c, scroll, linkDragOver)
 		all := flatButton(c, "所有快捷链接", chevronIcon, "").OnClick(func() { a.openLinkMenu("all", "") })
+		if a.linkMenuOpen && a.linkMenuAnchor == "all" {
+			all.Background(c.Theme().Selection)
+		}
+		a.expandLinkOnHover(c, all, a.linkMenuOpen && a.linkMenuAnchor == "all", func() { a.openLinkMenu("all", "") })
 		a.linkFolderPopover(c.Key("all-link-menu"), all, "all")
 	})
 }
@@ -467,13 +470,14 @@ func (a *App) groupTabBar(c *ui.Context, g *tabGroup) {
 	totalWidth := float32(0)
 	for i, t := range tabs {
 		t.name = a.displayTabTitle(t)
-		widths[i] = preferredTabWidth(fmt.Sprintf("%d  %s", i+1, t.name))
-		totalWidth += widths[i] + 1
+		// Leave room for the numbered bold title, status dot and close target.
+		widths[i] = min(280, max(144, preferredTabWidth(fmt.Sprintf("%d  %s", i+1, t.name))+12))
+		totalWidth += widths[i] + 4
 	}
 	if totalWidth > 0 {
-		totalWidth--
+		totalWidth -= 4
 	}
-	ui.Row(c).ContextMenu(backgroundMenu).Height(36).Padding(3, 6).Gap(6).Background(c.Theme().Surface).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
+	ui.Row(c).ContextMenu(backgroundMenu).Height(detailBarHeight).Padding(2, 6).Gap(6).Background(c.Theme().Surface).TextColor(c.Theme().Text).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
 		if len(a.groups.root.leaves()) > 1 || g.name != "" {
 			title := fmt.Sprintf("%s · %d", a.groupTitle(g), len(tabs))
 			color := c.Theme().Text
@@ -495,22 +499,27 @@ func (a *App) groupTabBar(c *ui.Context, g *tabGroup) {
 			})
 		}
 		g.dragOver = false
-		scroll := ui.ScrollHorizontal(c).TrackScroll(&g.scroll).Width(totalWidth).Shrink(1).MinWidth(0).Height(30).ContextMenu(backgroundMenu).Children(func() {
-			ui.Row(c).Gap(1).Children(func() {
+		scroll := ui.ScrollHorizontal(c).HideScrollbars().TrackScroll(&g.scroll).Width(totalWidth).Shrink(1).MinWidth(0).Height(30).ContextMenu(backgroundMenu).Children(func() {
+			ui.Row(c).Gap(4).Children(func() {
 				for i, t := range tabs {
-					row := ui.Row(c.Key(t.id)).Height(30).Gap(0).Padding(0, 4).Width(widths[i]).Shrink(0).Radius(5).Background(c.Theme().Background.Mix(c.Theme().Text, 0.02)).BorderColor(ui.Transparent)
+					row := ui.Row(c.Key(t.id)).Height(28).Gap(0).Padding(0, 4).Width(widths[i]).Shrink(0).Radius(2).Background(ui.Transparent).BorderColor(ui.Transparent)
+					if row.Hovered() {
+						row.Background(c.Theme().SurfaceHover)
+					}
 					if t.id == g.active {
-						row.Background(c.Theme().Surface.Mix(c.Theme().Text, 0.10)).DrawOver(func(p *ui.Painter, r ui.Rect) {
-							p.Fill(ui.Rect{X: r.X, Y: r.Y + r.H - 2, W: r.W, H: 2}, terminalFlame, 0)
+						g.revealSelectedTab(row, t.id)
+						accent := c.Theme().Accent
+						row.Background(c.Theme().Selection).DrawOver(func(p *ui.Painter, r ui.Rect) {
+							p.Fill(ui.Rect{X: r.X + 7, Y: r.Y + r.H - 2, W: r.W - 14, H: 2}, accent, 1)
 						})
 					}
 					if drag, over := ui.DragOver[tabDrag](row); over && a.acceptsTabDrag(drag, g) {
 						g.dragOver = true
 						x, _, _ := row.PointerPosition()
 						if x < row.Bounds().W/2 {
-							row.BorderColor(terminalFlame).BorderWidth(0, 0, 0, 2)
+							row.BorderColor(c.Theme().Accent).BorderWidth(0, 0, 0, 2)
 						} else {
-							row.BorderColor(terminalFlame).BorderWidth(0, 2, 0, 0)
+							row.BorderColor(c.Theme().Accent).BorderWidth(0, 2, 0, 0)
 						}
 					}
 					if drag, dropped := ui.Drop[tabDrag](row); dropped {
@@ -556,9 +565,8 @@ func (a *App) groupTabBar(c *ui.Context, g *tabGroup) {
 }
 func (a *App) welcome(c *ui.Context) {
 	ui.Column(c).Grow(1).FillHeight().Center().Gap(8).Background(c.Theme().Background).Children(func() {
-		ui.Image(c, brandImage()).Size(80, 80)
-		ui.Text(c, "OShell").FontSize(30).Bold()
-		ui.Text(c, "连接你的服务器，专注每一条命令。").FontSize(13).TextColor(c.Theme().TextMuted)
+		ui.Image(c, brandImage()).Size(48, 48).Label("OShell Desktop 图标")
+		windowHeading(c, "OShell Desktop")
 		ui.Row(c).Gap(10).Margin(3, 0).Children(func() {
 			toolButton(c, "新建 SSH 会话", plusIcon, "新建 SSH 会话").OnClick(func() { a.edit(a.newProfile("ssh")) })
 			toolButton(c, "打开本地终端", terminalIcon, "打开本地终端").OnClick(a.local)
@@ -604,19 +612,22 @@ func (a *App) nodeView(c *ui.Context, t *tab, n *node) {
 				})
 			}
 			el := terminal.View(c.Key("terminal-view"), p.term).Bind(&p.focus).Grow(1).MinHeight(0)
-			a.clockOverlay(el)
+			if paths := el.DroppedFiles(); len(paths) > 0 {
+				a.uploadTerminalDrop(p, paths)
+			}
 			if el.FocusWithin() {
 				t.active = p
 				a.setCurrentTab(t, false)
 			}
 		} else {
-			ui.Column(c).Grow(1).FillWidth().Center().Padding(24).Gap(14).Background(c.Theme().Background).Children(func() {
+			ui.Column(c).Grow(1).FillWidth().Center().Padding(12).Gap(8).Background(c.Theme().Background).Children(func() {
 				ui.Icon(c, terminalIcon).FontSize(28).TextColor(c.Theme().TextMuted)
-				ui.Text(c, p.profile.Name).FontSize(17)
+				windowHeading(c, p.profile.Name)
 				ui.Text(c, p.status).TextColor(c.Theme().TextMuted).MaxWidth(650)
 				if strings.Contains(p.status, "失败") {
 					toolButton(c, "重新连接", linkIcon, "重新连接").OnClick(func() { t.active = p; a.selectTab(t); a.reconnectActive() })
 				}
+				a.hostKeyCleanupButton(c, p)
 			})
 		}
 	})

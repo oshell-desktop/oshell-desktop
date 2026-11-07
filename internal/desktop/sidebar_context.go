@@ -152,9 +152,9 @@ func (a *App) revealSidebar(id string) {
 func (a *App) sidebarRenameDialog(c *ui.Context) {
 	state := a.sidebar.rename
 	open := state != nil
-	ui.Modal(c, &open, func() {
+	desktopModal(c, &open, func() {
 		ui.Column(c).Width(360).Gap(12).Children(func() {
-			ui.Text(c, "重命名").FontSize(18).Bold()
+			windowHeading(c, "重命名")
 			input := ui.TextInput(c, &state.name).Label("新名称").AutoFocus().FillWidth()
 			if !state.focused {
 				input.Focus().SetTextSelection(0, len([]rune(state.name)))
@@ -179,7 +179,7 @@ func (a *App) sidebarRenameDialog(c *ui.Context) {
 			if state.error != "" {
 				ui.Text(c, state.error).TextColor(c.Theme().Danger).Wrap()
 			}
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			dialogActions(c).Children(func() {
 				ui.Button(c, "取消").OnClick(func() { a.sidebar.rename = nil })
 				ui.PrimaryButton(c, "保存").OnClick(apply)
 			})

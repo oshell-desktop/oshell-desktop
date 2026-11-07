@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -280,12 +281,12 @@ func writeInstaller(c *Config, stage, work, exe string, installed []string) (str
 		}
 	}
 	icon := ""
-	if c.Icon != "" {
-		src, err := os.ReadFile(c.path(c.Icon))
+	if source := cmp.Or(c.Windows.Icon, c.Icon); source != "" {
+		src, err := os.ReadFile(c.path(source))
 		if err != nil {
 			return "", err
 		}
-		ico, err := pngToICO(src)
+		ico, err := pngToICO(src, c.Windows.IconInset)
 		if err != nil {
 			return "", err
 		}

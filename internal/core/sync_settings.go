@@ -52,12 +52,22 @@ func LoadSyncOptions(dir string, master ...[]byte) (SyncOptions, error) {
 	return options, nil
 }
 func (o SyncOptions) Target() string {
-	target := o.Backend + "\n" + strings.TrimSpace(o.Address) + "\n" + o.Username
+	target := o.FontTarget()
 	content := o.Policy.Effective().Content
+	fonts := content.FontFiles
+	content.FontFiles = false
 	if content != DefaultSyncPolicy().Content {
 		target += fmt.Sprintf("\nscope:%t:%t:%t:%t", content.Sessions, content.ClientSettings, content.QuickCommands, content.SessionDefaults)
 	}
+	if fonts {
+		target += "\nfonts:true"
+	}
 	return target
+}
+
+// Font baselines follow the destination, independently of configuration scopes.
+func (o SyncOptions) FontTarget() string {
+	return o.Backend + "\n" + strings.TrimSpace(o.Address) + "\n" + o.Username
 }
 func (o SyncOptions) CredentialProfile() Profile {
 	p := NewProfile()

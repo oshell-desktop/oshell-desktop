@@ -5,8 +5,8 @@
     "background": "#11151A",
     "foreground": "#E3E3E3",
     "cursor": "#55E5CC",
-    "selection": "#00A6B2",
-    "selectionText": "#000000",
+    "selection": "#F2F2F2",
+    "selectionText": "#202020",
     "ansi": [
       "#000000",
       "#C23621",
@@ -33,8 +33,8 @@
     "background": "#FBFBFB",
     "foreground": "#1F1F1F",
     "cursor": "#008C83",
-    "selection": "#C3DFE8",
-    "selectionText": "#17212B",
+    "selection": "#303030",
+    "selectionText": "#F2F2F2",
     "ansi": [
       "#000000",
       "#C23621",
@@ -61,8 +61,8 @@
     "background": "#171D26",
     "foreground": "#E6EAF0",
     "cursor": "#FF8550",
-    "selection": "#594536",
-    "selectionText": "#FFF3E8",
+    "selection": "#F2F2F2",
+    "selectionText": "#202020",
     "ansi": [
       "#252D39",
       "#FF6B62",
@@ -88,8 +88,8 @@
     "name": "Solarized Dark",
     "background": "#002B36",
     "foreground": "#839496",
-    "selection": "#073642",
-    "selectionText": "#93A1A1",
+    "selection": "#F2F2F2",
+    "selectionText": "#202020",
     "ansi": [
       "#073642",
       "#DC322F",
@@ -116,8 +116,8 @@
     "name": "Solarized Light",
     "background": "#FDF6E3",
     "foreground": "#657B83",
-    "selection": "#EEE8D5",
-    "selectionText": "#586E75",
+    "selection": "#303030",
+    "selectionText": "#F2F2F2",
     "ansi": [
       "#073642",
       "#DC322F",
@@ -145,7 +145,7 @@
     "background": "#1E1F29",
     "foreground": "#F8F8F2",
     "cursor": "#FF79C6",
-    "selection": "#44475A",
+    "selection": "#F2F2F2",
     "ansi": [
       "#555555",
       "#FF5555",
@@ -165,7 +165,7 @@
       "#BBBBBB"
     ],
     "cursorText": "#1E1F29",
-    "selectionText": "#F8F8F2"
+    "selectionText": "#202020"
   },
   {
     "id": "nord",
@@ -173,8 +173,8 @@
     "background": "#2E3440",
     "foreground": "#D8DEE9",
     "cursor": "#D8DEE9",
-    "selection": "#434C5E",
-    "selectionText": "#ECEFF4",
+    "selection": "#F2F2F2",
+    "selectionText": "#202020",
     "ansi": [
       "#3B4252",
       "#BF616A",
@@ -200,8 +200,8 @@
     "name": "Tango 深色",
     "background": "#2E3436",
     "foreground": "#D3D7CF",
-    "selection": "#555753",
-    "selectionText": "#FFFFFF",
+    "selection": "#F2F2F2",
+    "selectionText": "#202020",
     "ansi": [
       "#2E3436",
       "#CC0000",
@@ -229,8 +229,8 @@
     "background": "#FFFFFF",
     "foreground": "#2E3436",
     "cursor": "#3465A4",
-    "selection": "#C7D8EC",
-    "selectionText": "#20252A",
+    "selection": "#303030",
+    "selectionText": "#F2F2F2",
     "ansi": [
       "#2E3436",
       "#CC0000",

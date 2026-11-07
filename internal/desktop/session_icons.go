@@ -11,7 +11,7 @@ import (
 // Presentation only: shared session types and configuration stay unchanged.
 var (
 	sessionLocalIcon  = glyph(`<rect x="4" y="3" width="12" height="10" rx="1.5"/><path d="m4 13-2 4h16l-2-4"/>`)
-	sessionFolderIcon = glyph(`<path d="M2 17V3h6l2 2h8v12z"/>`)
+	sessionFolderIcon = glyph(`<path fill="currentColor" stroke="none" d="M1.5 4h6l2 2h9v10.5h-17z"/><path d="M2 7.5h16" stroke="#fff" stroke-opacity=".65"/>`)
 	sessionParentIcon = glyph(`<path d="M16 15V9H4m4-4L4 9l4 4"/>`)
 )
 
@@ -27,7 +27,7 @@ func sessionIconFor(kind string, shortcut, folder, parent bool) sessionIconStyle
 		return sessionIconStyle{image: sessionParentIcon, label: "上一级目录", light: "#666B75", dark: "#B3B8C2"}
 	}
 	if folder {
-		return sessionIconStyle{shortcut: shortcut, image: sessionFolderIcon, label: "目录", light: "#9C6E1F", dark: "#E8BA5C"}
+		return sessionIconStyle{shortcut: shortcut, image: sessionFolderIcon, label: "目录", light: "#D79B25", dark: "#E8BA5C"}
 	}
 	style := sessionIconStyle{badge: "SSH", label: "SSH · 远程终端", light: "#1F66BF", dark: "#80B5FF"}
 	switch kind {
@@ -45,7 +45,7 @@ func sessionIconFor(kind string, shortcut, folder, parent bool) sessionIconStyle
 	return style
 }
 
-func (s sessionIconStyle) draw(c *ui.Context, selected bool) {
+func (s sessionIconStyle) draw(c *ui.Context) {
 	color := ui.Hex(s.light)
 	if c.Theme().Dark {
 		color = ui.Hex(s.dark)
@@ -66,9 +66,6 @@ func (s sessionIconStyle) draw(c *ui.Context, selected bool) {
 		})
 		return
 	}
-	if selected {
-		color = c.Theme().AccentText
-	}
 	ui.Row(c).Size(36, 20).Shrink(0).AlignItems(ui.Center).Justify(ui.Center).Label(s.label).Children(func() {
 		ui.Icon(c, s.image).FontSize(20).Size(20, 20).Shrink(0).TextColor(color)
 		corner()
@@ -86,9 +83,9 @@ func sessionListTooltip(p core.Profile, shortcut bool) string {
 func sessionTreeItem(c *ui.Context, name string, open *bool, children func(), selected bool, style sessionIconStyle) ui.Element {
 	// Keep the toolkit's arrow, keyboard navigation and tree accessibility;
 	// append the shared icon/name presentation after its empty label.
-	return ui.TreeItem(c, "", open, children).Label(name).Selected(selected).MinWidth(0).Children(func() {
-		ui.Row(c).Grow(1).MinWidth(0).Gap(7).AlignItems(ui.Center).Children(func() {
-			style.draw(c, selected)
+	return ui.TreeItem(c, "", open, children).Label(name).Selected(selected).Height(detailRowHeight).MinWidth(0).Radius(0).Children(func() {
+		ui.Row(c).Grow(1).MinWidth(0).Gap(4).AlignItems(ui.Center).Children(func() {
+			style.draw(c)
 			ui.Text(c, name).SingleLine().Grow(1).MinWidth(0)
 		})
 	})

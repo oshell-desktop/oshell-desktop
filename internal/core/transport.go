@@ -2,7 +2,6 @@
 package core
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -277,85 +276,20 @@ func authenticate(ctx context.Context, c net.Conn, p Profile, cred Credentials, 
 		}))
 	}
 	if !passwordOnly {
-		identities := append([]string(nil), p.resolvedIdentityFiles...)
-		if os.Getenv("OSHELL_TEST_EXPLICIT_KEYS_ONLY") == "1" {
-			identities = nil
-		}
-		var signers []ssh.Signer
-		seen := map[string]bool{}
-		if p.IdentityFile != "" {
-			identities = append(identities, expandHome(p.IdentityFile))
-		} else if home, e := os.UserHomeDir(); e == nil && len(identities) == 0 && os.Getenv("OSHELL_TEST_EXPLICIT_KEYS_ONLY") != "1" {
-			for _, name := range []string{"id_ed25519", "id_ecdsa", "id_rsa"} {
-				f := filepath.Join(home, ".ssh", name)
-				if _, e := os.Stat(f); e == nil {
-					identities = append(identities, f)
-				}
-			}
-		}
-		if cred.Method != "privateKey" {
+		var agentSigners []ssh.Signer
+		if !p.resolvedAgentDisabled {
 			if a, e := dialSSHAgent(ctx); e == nil {
 				defer a.Close()
 				agentStop := context.AfterFunc(ctx, func() { a.Close() })
 				defer agentStop()
 				a.SetDeadline(time.Now().Add(15 * time.Second))
-				if agentSigners, e := agent.NewClient(a).Signers(); e == nil {
-					signers = append(signers, agentSigners...)
-					a.SetDeadline(time.Time{})
-				}
+				agentSigners, _ = agent.NewClient(a).Signers()
+				a.SetDeadline(time.Time{})
 			}
-
 		}
-		for _, f := range identities {
-			if seen[f] {
-				continue
-			}
-			seen[f] = true
-			data, e := ReadBounded(f)
-			if e != nil {
-				if f == expandHome(p.IdentityFile) {
-					return nil, e
-				}
-				continue
-			}
-			var signer ssh.Signer
-			if cred.KeyPassphrase != "" {
-				signer, e = ssh.ParsePrivateKeyWithPassphrase(data, []byte(cred.KeyPassphrase))
-			} else {
-				signer, e = ssh.ParsePrivateKey(data)
-			}
-			if e != nil && cred.Challenge != nil {
-				var missing *ssh.PassphraseMissingError
-				if errors.As(e, &missing) {
-					loaded := false
-					if missing.PublicKey != nil {
-						for _, agentSigner := range signers {
-							if bytes.Equal(agentSigner.PublicKey().Marshal(), missing.PublicKey.Marshal()) {
-								loaded = true
-								break
-							}
-						}
-					}
-					if loaded {
-						continue
-					}
-					answers, challengeError := cred.Challenge(ctx, AuthenticationPrompt{Identity: p.Identity(), Name: "解锁 SSH 私钥", Instruction: filepath.Base(f), Questions: []string{"私钥口令"}, Echo: []bool{false}})
-					if challengeError != nil {
-						return nil, challengeError
-					}
-					if len(answers) != 1 {
-						return nil, fmt.Errorf("私钥口令回答无效")
-					}
-					signer, e = ssh.ParsePrivateKeyWithPassphrase(data, []byte(answers[0]))
-				}
-			}
-			if e != nil {
-				if f == expandHome(p.IdentityFile) {
-					return nil, fmt.Errorf("私钥读取失败: %w", e)
-				}
-				continue
-			}
-			signers = append(signers, signer)
+		signers, err := loadSSHSigners(ctx, p, cred, agentSigners)
+		if err != nil {
+			return nil, err
 		}
 
 		if len(signers) > 0 {
@@ -402,6 +336,9 @@ func authenticate(ctx context.Context, c net.Conn, p Profile, cred Credentials, 
 
 	if p.LegacySSH {
 		configureLegacySSH(cfg)
+	}
+	if err := trust.PreferHostKeyAlgorithms(p.Address(), cfg); err != nil {
+		return nil, err
 	}
 	stop := context.AfterFunc(hctx, func() { c.Close() })
 	defer stop()

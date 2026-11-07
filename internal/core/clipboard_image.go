@@ -23,7 +23,7 @@ import (
 	"github.com/pkg/sftp"
 	_ "golang.org/x/image/bmp"
 	_ "golang.org/x/image/webp"
-	_ "oshell-desktop/internal/tiff"
+	"oshell-desktop/internal/imagedecode"
 )
 
 const ClipboardImageInputLimit = 160 << 20
@@ -55,7 +55,7 @@ func NormalizeClipboardImage(data []byte) ([]byte, error) {
 	if len(data) == 0 || len(data) > ClipboardImageInputLimit {
 		return nil, fmt.Errorf("图片为空或超过 160 MiB")
 	}
-	c, format, err := image.DecodeConfig(bytes.NewReader(data))
+	c, format, err := imagedecode.Config(data)
 	if err != nil {
 		return nil, fmt.Errorf("不支持或损坏的图片：%w", err)
 	}
@@ -75,7 +75,7 @@ func NormalizeClipboardImage(data []byte) ([]byte, error) {
 	} else {
 		colors, err = clipboardImageColors(data, format)
 		if err == nil {
-			im, _, err = image.Decode(bytes.NewReader(data))
+			im, _, err = imagedecode.Decode(data)
 		}
 	}
 	if err != nil {

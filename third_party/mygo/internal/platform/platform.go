@@ -506,6 +506,9 @@ const (
 // Menu is a snapshot of a menu tree.
 type Menu struct {
 	Items []*MenuItem
+	// Dark, when set by a UI view, overrides the application appearance
+	// while this popup is shown. Tray and application menus inherit it.
+	Dark *bool
 }
 
 // MenuItem is a snapshot of a menu item. ID identifies the public item the

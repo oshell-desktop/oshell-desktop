@@ -1,7 +1,6 @@
 package vt
 
 import (
-	"bytes"
 	"image"
 	"image/draw"
 	_ "image/gif"
@@ -10,7 +9,7 @@ import (
 
 	_ "golang.org/x/image/bmp"
 	_ "golang.org/x/image/webp"
-	_ "oshell-desktop/internal/tiff"
+	"oshell-desktop/internal/imagedecode"
 )
 
 // Swift's f=100 path uses ImageIO rather than requiring a PNG signature. Keep
@@ -30,7 +29,7 @@ func kittyEncodedImageConfig(data []byte) (image.Config, string, bool) {
 	if len(data) == 0 || len(data) > TerminalImageLimit {
 		return image.Config{}, "", false
 	}
-	config, format, err := image.DecodeConfig(bytes.NewReader(data))
+	config, format, err := imagedecode.Config(data)
 	if err != nil || !kittyEncodedImageSize(config.Width, config.Height) {
 		return image.Config{}, "", false
 	}
@@ -45,7 +44,7 @@ func kittyEncodedImageConfig(data []byte) (image.Config, string, bool) {
 }
 
 func decodeKittyImagePixels(data []byte, config image.Config, format string) image.Image {
-	decoded, decodedFormat, err := image.Decode(bytes.NewReader(data))
+	decoded, decodedFormat, err := imagedecode.Decode(data)
 	if err != nil || decodedFormat != format || decoded == nil {
 		return nil
 	}

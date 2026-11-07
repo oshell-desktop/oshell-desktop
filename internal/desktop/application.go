@@ -2,18 +2,24 @@
 package desktop
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"reflect"
+	"runtime"
 	"slices"
 	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"oshell-desktop/internal/core"
+	"oshell-desktop/internal/diagnostics"
 )
 
 type applicationHub struct {
+	agent                  *core.AgentCoordinator
+	mcpClients             *core.MCPClients
+	mcpServer              *core.MCPServer
 	workspaceAuthorized    bool
 	authenticationSequence uint64
 	authenticationReady    *authenticationChallenge
@@ -40,6 +46,15 @@ type applicationHub struct {
 }
 
 func runDesktop() error {
+	diagnostics.Event("desktop_start", nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	untrace := traceNativeWindows()
+	defer untrace()
+	stopSuspend := mygo.Power.OnSuspend(func() { diagnostics.Event("system_suspend", nil) })
+	defer stopSuspend()
+	stopResume := mygo.Power.OnResume(func() { diagnostics.Event("system_resume", nil) })
+	defer stopResume()
 	if e := registerFonts(); e != nil {
 		return e
 	}
@@ -53,6 +68,9 @@ func runDesktop() error {
 	}
 	activationError := core.ActivatePendingSyncDirectory(store.Dir)
 	initial := newApp(store, cfg)
+	if err := initial.loadUserFonts(); err != nil {
+		initial.status = "本机字体库未加载：" + err.Error()
+	}
 	if store.StorageWarning != "" {
 		initial.status = store.StorageWarning
 	}
@@ -62,18 +80,31 @@ func runDesktop() error {
 	if initial.vault == nil {
 		return fmt.Errorf("无法打开密码库：%s", initial.status)
 	}
-	hub := &applicationHub{store: store, config: cfg, vault: initial.vault, trust: initial.trust}
+	hub := &applicationHub{agent: initial.agent, store: store, config: cfg, vault: initial.vault, trust: initial.trust}
 	mygo.Theme.SetSource(mygo.ThemeSource(cfg.Settings.InterfaceTheme))
 	mygo.App.WhenReady(func() {
+		diagnostics.Event("application_ready", nil)
+		if runtime.GOOS == "linux" {
+			// GTK uses a process default for windows opened outside a desktop launcher.
+			if err := mygo.App.Dock.SetIcon(brandPNG); err != nil {
+				diagnostics.Event("window_icon_error", map[string]any{"error": err.Error()})
+			}
+		}
 		hub.installMenu()
 		hub.attach(initial)
 		hub.installDockMenu()
 		hub.startExternalLaunch()
 		hub.initializeUpdates()
 		hub.initializeNativeShortcutCapture()
+		hub.initializeFinderServices()
 		initial.maybeResumeLocalConflict()
+		hub.traceUI(ctx)
 	})
-	mygo.App.OnWindowAllClosed(func() {})
+	// Windows closes the process with its last window. Keep the original
+	// zero-window application lifecycle on the other platforms.
+	if runtime.GOOS != "windows" {
+		mygo.App.OnWindowAllClosed(func() {})
+	}
 	mygo.App.OnDidBecomeActive(hub.refreshOnActivation)
 	mygo.App.OnActivate(func(visible bool) {
 		if !visible && !hub.quitting {
@@ -82,22 +113,31 @@ func runDesktop() error {
 		}
 	})
 	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
+		fields := hub.diagnosticSnapshot()
+		fields["stack"] = diagnostics.Stack()
+		diagnostics.Event("quit_requested", fields)
 		if hub.updateInstallationInProgress() {
+			diagnostics.Event("quit_deferred", map[string]any{"reason": "update_installing"})
 			e.PreventDefault()
 			return
 		}
 		if hub.quitting {
+			diagnostics.Event("quit_allowed", map[string]any{"reason": "already_confirmed"})
 			return
 		}
 		count := hub.connectionCount()
 		if count == 0 {
+			diagnostics.Event("quit_allowed", map[string]any{"reason": "no_active_connections"})
 			hub.quitting = true
 			return
 		}
 		e.PreventDefault()
+		diagnostics.Event("quit_deferred", map[string]any{"reason": "confirmation_required"})
 		hub.confirmQuit(count)
 	})
 	mygo.App.OnQuit(func() {
+		diagnostics.Event("application_quit_cleanup_begin", hub.diagnosticSnapshot())
+		cancel()
 		for _, a := range hub.windows {
 			a.cancelSessionPassword()
 			a.cancelLocalConflict()
@@ -107,6 +147,10 @@ func runDesktop() error {
 			a.cancelLocalConflict()
 		}
 
+		if hub.mcpServer != nil {
+			hub.mcpServer.Close()
+		}
+		hub.agent.Close()
 		hub.stopUpdates()
 		hub.closeNativeShortcutCapture()
 		if a := hub.fileWindow; a != nil {
@@ -120,8 +164,14 @@ func runDesktop() error {
 		hub.clock.update(nil)
 		hub.store.LockConfiguration()
 		hub.vault.Lock()
+		diagnostics.Event("application_quit_cleanup_end", nil)
 	})
-	return mygo.App.Run()
+	err := mygo.App.Run()
+	diagnostics.Event("event_loop_returned", map[string]any{"error": err != nil, "quit_authorized": hub.quitting})
+	if !hub.quitting {
+		diagnostics.Event("event_loop_exit_without_quit_approval", nil)
+	}
+	return err
 }
 func (h *applicationHub) save(source *App) bool {
 	if e := h.store.Save(source.config); e != nil {
@@ -176,6 +226,9 @@ func (h *applicationHub) attach(a *App) {
 	h.attachAt(a, nil)
 }
 func (h *applicationHub) attachAt(a *App, position *tabWindowPosition) {
+	if h.agent == nil {
+		h.agent = a.agent
+	}
 	a.hub = h
 	h.workspaceAuthorized = h.workspaceAuthorized || a.workspaceAuthorized
 	if a.workspaceLocked() {
@@ -192,9 +245,11 @@ func (h *applicationHub) attachAt(a *App, position *tabWindowPosition) {
 			a.status = "新窗口定位失败：" + err.Error()
 		}
 	}
+	a.registerFocusWindow()
 	a.win.OnEnterFullScreen(func() { a.fullscreenSettled(true) })
 	a.win.OnLeaveFullScreen(func() { a.fullscreenSettled(false) })
 	a.win.OnShow(a.refreshPaneVisibility)
+	a.win.OnShow(a.registerFocusWindow)
 	a.win.OnHide(a.refreshPaneVisibility)
 	a.win.OnHide(a.dismissTabDetails)
 	a.win.OnMinimize(a.refreshPaneVisibility)
@@ -207,6 +262,23 @@ func (h *applicationHub) attachAt(a *App, position *tabWindowPosition) {
 	}
 	h.scheduleUpdates()
 	a.win.OnClosed(func() {
+		if files := h.fileWindow; files != nil && files.filePresentation.owner.Load() == a {
+			files.filePresentation.owner.Store(nil)
+			if files.win != nil {
+				if h.quitting || len(files.tabs) == 0 {
+					files.win.Close()
+				} else {
+					h.presentFileWorkspace(nil, "window")
+				}
+			}
+		}
+		if a.mcp.window != nil {
+			a.mcp.window.Close()
+		}
+		if a.mcp.replay != nil && a.mcp.replay.window != nil {
+			a.mcp.replay.window.Close()
+		}
+		a.closeMCPPanel()
 		if a.syncMonitor != nil {
 			monitor := a.syncMonitor
 			a.syncMonitor = nil
@@ -245,6 +317,12 @@ func (h *applicationHub) attachAt(a *App, position *tabWindowPosition) {
 	})
 }
 func (h *applicationHub) focused(w *mygo.Window) *App {
+	if files := h.fileWindow; files != nil {
+		parent := files.fileParent()
+		if w != nil && parent == w && (files.filePresentation.owner.Load() == nil || files.filePresentation.visible && files.filePresentation.focused) {
+			return files
+		}
+	}
 	for _, a := range h.windows {
 		if w != nil && (a.win == w || a.manager == w || a.preferencesWindow == w) {
 			return a
@@ -280,6 +358,7 @@ func (h *applicationHub) confirmQuit(count int) {
 		r, e := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageQuestion, Message: fmt.Sprintf("结束所有窗口的 %d 个活动连接并退出？", count), Detail: "正在进行的传输也会停止。", Buttons: []string{"取消", "结束并退出"}, DefaultButton: 0, CancelButton: 0})
 		a.post(func() {
 			h.quitPending = false
+			diagnostics.Event("quit_confirmation", map[string]any{"confirmed": e == nil && r.Button == 1, "dialog_error": e != nil})
 			if e == nil && r.Button == 1 {
 				h.quitting = true
 				mygo.App.Quit()
@@ -368,6 +447,12 @@ func (a *App) transferTabAt(t *tab, destination *App, groupID, target string, af
 	}
 	a.walk(t.root, func(p *pane) {
 		a.detachInputTarget(p)
+		// A focus handle belongs to its host window, not to the connection.
+		// Reusing it leaves bindings in both live windows: later Focus() calls
+		// panic, and the initial request can still target the old host. Cancel
+		// stale requests and let the destination bind a fresh, pending handle.
+		p.focus.CancelFocus()
+		p.focus = ui.Handle{}
 		if p.term != nil {
 			// Detach from the old host before the destination can gain focus.
 			p.term.SetVisible(false)

@@ -1120,7 +1120,7 @@ func (e *node) Submitted() bool {
 func (rt *engine) scrollbarPress(chain []uint64, x, y float32) bool {
 	for _, id := range chain {
 		s := rt.states[id]
-		if s == nil || s.flags&(flagScrollX|flagScrollY) == 0 {
+		if s == nil || s.hideScrollbars || s.flags&(flagScrollX|flagScrollY) == 0 {
 			continue
 		}
 		g := scrollBars(Rect{s.x, s.y, s.w, s.h}, s.barInset, float32(s.contentW), float32(s.contentH), float32(s.scrollX), float32(s.scrollY), s.flags, rt.c.theme.scrollbarWidth())

@@ -16,6 +16,7 @@ type tunnelEditor struct {
 	Port, TargetPort string
 }
 type featureState struct {
+	fontLibrary                                                                                             fontLibraryState
 	shortcutSystemNotice                                                                                    string
 	sessionClose                                                                                            *sessionCloseRequest
 	localConflict                                                                                           localConflictState
@@ -35,6 +36,7 @@ type featureState struct {
 	updates                                                                                                 updateController
 	sharedSync                                                                                              sharedSyncState
 	switcher                                                                                                switchState
+	globalProxy                                                                                             globalProxyState
 	proxyManager                                                                                            proxyManagerState
 	fontCatalog                                                                                             []core.FontEntry
 	fontLoading                                                                                             bool
@@ -45,6 +47,7 @@ type featureState struct {
 	liveOpen                                                                                                bool
 	livePane                                                                                                *pane
 	liveKeep                                                                                                core.KeepAliveSettings
+	liveSSHInterval, liveMissed                                                                             string
 	liveInterval, liveError                                                                                 string
 	reconnectTarget                                                                                         *pane
 	commandError                                                                                            string
@@ -83,6 +86,7 @@ type featureState struct {
 	fileActionState                                                 *fileState
 	fileActionDirectory, fileActionOriginal                         string
 	scpDraft                                                        *standaloneSCPDraft
+	rsyncDraft                                                      *standaloneRsyncDraft
 	uploadDraft                                                     *uploadConfirmation
 	fileAction, fileName, fileError                                 string
 	fileOpen                                                        bool
@@ -128,25 +132,32 @@ func selectValue(c *ui.Context, label string, value *string, choices [][2]string
 			name = v[1]
 		}
 	}
-	s.Trigger.Label(label).Padding(5, 8).Radius(4).Background(c.Theme().Surface).Border(1, c.Theme().Border).Children(func() { ui.Text(c, name).Grow(1); ui.Icon(c, chevronIcon).FontSize(12) })
+	s.Trigger.Label(label).MinHeight(26).Padding(3, 6).Radius(3).Background(c.Theme().Surface).Border(1, c.Theme().Border)
+	if s.Trigger.Pressed() {
+		s.Trigger.Background(c.Theme().SurfacePressed)
+	} else if s.Trigger.Hovered() {
+		s.Trigger.Background(c.Theme().SurfaceHover)
+	}
+	s.Trigger.Children(func() {
+		ui.Text(c, name).SingleLine().Grow(1).MinWidth(0)
+		ui.Icon(c, chevronIcon).FontSize(12).TextColor(c.Theme().TextMuted)
+	})
 	s.Popup(func(panel ui.Element) {
-		panel.Padding(4).Background(c.Theme().Background).Border(1, c.Theme().Border).Radius(5)
+		ui.StylePickerPanel(panel)
 		for _, v := range choices {
-			item := s.Item(v[0]).Padding(6, 10)
-			if item.Highlighted() {
-				item.Background(c.Theme().Selection)
-			}
+			item := s.Item(v[0])
+			ui.StylePopupOption(item, v[0] == *value)
 			item.Children(func() { ui.Text(c, v[1]) })
 		}
 	})
 }
 func (a *App) connectionEditor(c *ui.Context) {
 	a.syncEditorProtocol()
-	ui.Modal(c, &a.editing, func() {
-		ui.Column(c).Width(640).Gap(12).Children(func() {
+	desktopModal(c, &a.editing, func() {
+		dialogBody(c, 640).Gap(12).Children(func() {
 			ui.Row(c).Gap(8).Children(func() {
-				ui.Icon(c, settingsIcon).FontSize(20).TextColor(c.Theme().Accent)
-				ui.Text(c, "会话属性").FontSize(17).Bold()
+				ui.Icon(c, settingsIcon).FontSize(16).TextColor(c.Theme().Accent)
+				windowHeading(c, "会话属性")
 			})
 			pages, sections := editorProtocolPages(a.draft.Kind)
 			if a.features.editTab >= len(pages) {
@@ -248,7 +259,7 @@ func (a *App) connectionEditor(c *ui.Context) {
 			if a.formError != "" {
 				ui.Text(c, a.formError).TextColor(c.Theme().Danger)
 			}
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			dialogActions(c).Children(func() {
 				ui.Button(c, "取消").OnClick(func() { a.editing = false })
 				ui.Button(c, "保存").Disabled(a.features.sessionPassword.busy).OnClick(func() { a.saveDraft(false) })
 				ui.PrimaryButton(c, "保存并连接").Disabled(a.features.sessionPassword.busy).OnClick(func() { a.saveDraft(true) })

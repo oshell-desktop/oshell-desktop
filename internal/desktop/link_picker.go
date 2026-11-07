@@ -52,7 +52,7 @@ func (a *App) savePickedLink() {
 }
 func (a *App) linkPickerView(c *ui.Context) {
 	f := &a.features.linkEditor
-	ui.Text(c, "添加已有会话链接").FontSize(18).Bold()
+	windowHeading(c, "添加已有会话链接")
 	ui.Text(c, "目标：/Links/"+f.folder).Wrap()
 	if ui.TextInput(c, &f.query).Label("搜索已有会话").Placeholder("名称、主机、用户名、端口或目录").AutoFocus().Changed() {
 		f.index = -1
@@ -127,7 +127,7 @@ func (a *App) linkPickerView(c *ui.Context) {
 	if f.error != "" {
 		ui.Text(c, f.error).TextColor(c.Theme().Danger)
 	}
-	ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+	dialogActions(c).Children(func() {
 		ui.Button(c, "取消").OnClick(func() { f.open = false })
 		ui.PrimaryButton(c, "添加链接").Disabled(f.id == "").OnClick(a.savePickedLink)
 	})

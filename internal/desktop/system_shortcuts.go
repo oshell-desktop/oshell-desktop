@@ -26,6 +26,11 @@ func (a *App) checkSystemShortcut(key core.KeyboardShortcut) error {
 }
 func (a *App) checkChangedSystemShortcuts() error {
 	a.features.shortcutSystemNotice = ""
+	if !reflect.DeepEqual(a.localUI.MCPShortcut, a.localUIDraft.MCPShortcut) && a.localUIDraft.MCPShortcut != nil {
+		if err := a.checkSystemShortcut(*a.localUIDraft.MCPShortcut); err != nil {
+			return err
+		}
+	}
 	for _, action := range core.ShortcutActions {
 		original := a.config.Settings.KeyboardShortcuts.Bindings(action.ID, runtime.GOOS)
 		next := a.features.settingsDraft.KeyboardShortcuts.Bindings(action.ID, runtime.GOOS)

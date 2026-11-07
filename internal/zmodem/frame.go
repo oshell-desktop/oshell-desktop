@@ -38,6 +38,7 @@ const (
 	FrameZDATA   = 10
 	FrameZEOF    = 11
 	FrameZFERR   = 12
+	FrameZCRC    = 13
 )
 
 // Subpacket terminators (the byte after ZDLE that ends a subpacket).
@@ -252,7 +253,10 @@ func hexNybble(b byte) (byte, bool) {
 	return 0, false
 }
 
-type codec struct{ allControls bool }
+type codec struct {
+	allControls    bool
+	escapeNewlines bool
+}
 
 func (c *codec) escape(dst, src []byte) []byte {
 	for _, b := range src {
@@ -265,7 +269,7 @@ func (c *codec) escape(dst, src []byte) []byte {
 		case 0x0d, 0x10, 0x11, 0x13, 0x18, 0x8d, 0x90, 0x91, 0x93:
 			escaped = b ^ 0x40
 		default:
-			if c.allControls && (b&0x60) == 0 {
+			if c.allControls && (b&0x60) == 0 || c.escapeNewlines && b == '\n' {
 				escaped = b ^ 0x40
 			}
 		}

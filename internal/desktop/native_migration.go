@@ -127,9 +127,9 @@ func (a *App) runNativeMigration(apply bool) {
 }
 func (a *App) nativeMigrationDialog(c *ui.Context) {
 	f := &a.features.nativeMigration
-	ui.Modal(c, &f.open, func() {
-		ui.Column(c).Width(600).Gap(10).Children(func() {
-			ui.Text(c, "迁移原版配置").FontSize(18).Bold()
+	desktopModal(c, &f.open, func() {
+		dialogBody(c, 600).Gap(10).Children(func() {
+			windowHeading(c, "迁移原版配置")
 			ui.Text(c, "读取 OShell 原版数据目录。确认后替换本地会话、代理、快捷命令和偏好；现有配置先备份，原目录不变。").Wrap()
 			if f.completed {
 				ui.Text(c, "配置迁移已完成。").Bold()

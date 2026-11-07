@@ -450,7 +450,7 @@ func (b *Backend) isDark() bool {
 }
 
 func (b *Backend) applyTheme() {
-	b.applyNativeMenuTheme(b.appHwnd)
+	b.applyNativeMenuTheme(b.appHwnd, b.isDark())
 	for _, w := range b.windows {
 		b.applyWindowTheme(w)
 		w.withWebView(func() { b.applyWebViewTheme(w) })
@@ -460,7 +460,7 @@ func (b *Backend) applyTheme() {
 // applyWindowTheme matches the title bar, or the controls drawn in its
 // place, to the appearance.
 func (b *Backend) applyWindowTheme(w *window) {
-	b.applyNativeMenuTheme(w.hwnd)
+	b.applyNativeMenuTheme(w.hwnd, b.isDark())
 	dark := int32(0)
 	if b.isDark() {
 		dark = 1

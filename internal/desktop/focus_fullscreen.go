@@ -76,6 +76,9 @@ func (a *App) fullscreenSettled(entered bool) {
 		f.deep = false
 	}
 	f.transitioning = false
+	if !entered && !f.chrome {
+		f.native.apply(a.win, false)
+	}
 	a.deferFullscreenReconcile()
 }
 

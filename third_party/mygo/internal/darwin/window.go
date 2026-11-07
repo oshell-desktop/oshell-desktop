@@ -1082,6 +1082,8 @@ func registerWindowClasses() {
 			// full screen it hides with the menu bar instead of covering the
 			// top of the page.
 			method("window:willUseFullScreenPresentationOptions:", func(self id, _ objc.SEL, win id, proposed uint) uint {
+				// Keep the menu bar and Dock reachable during OShell fullscreen.
+				proposed = proposed&^uint(1<<1|1<<3) | uint(1<<0|1<<2)
 				const autoHide = presentationFullScreen | presentationAutoHideMenuBar
 				if send(win, "toolbar") != 0 && proposed&autoHide == autoHide {
 					return proposed | presentationAutoHideToolbar

@@ -3,8 +3,8 @@ package desktop
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"net"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -13,10 +13,13 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"oshell-desktop/internal/core"
+	"oshell-desktop/internal/diagnostics"
 	"oshell-desktop/internal/terminal"
 )
 
 type pane struct {
+	agent                  *core.AgentSession
+	hostKeyMismatch        *core.HostKeyMismatch
 	fileDisplayIP          string
 	search                 terminalSearchState
 	externalLaunch         bool
@@ -63,8 +66,15 @@ type tab struct {
 	active   *pane
 }
 type App struct {
+	filePresentation                                filePresentationState
+	mcp                                             mcpPanelState
+	agent                                           *core.AgentCoordinator
+	hostKeyCleanup                                  *pane
+	hostKeyCleanupOpen                              bool
+	hostKeyCleanupError                             string
 	linkMenuOpen                                    bool
 	linkMenuAnchor, linkMenuFolder                  string
+	linkMenuExpanded                                map[string]*bool
 	linkScroll                                      ui.ScrollState
 	workspaceAuthorized                             bool
 	idleMemory                                      idleMemoryReclaimer
@@ -123,6 +133,7 @@ type App struct {
 	pendingProfile                                  core.Profile
 	pendingSplit                                    int
 	settingsOpen                                    bool
+	settingsWaitingForSync                          bool
 	filesVisible                                    bool
 	features                                        featureState
 	vault                                           *core.Vault
@@ -136,6 +147,7 @@ func Run() error { return runDesktop() }
 func newApp(s *core.Store, c core.Config) *App {
 	v, err := core.OpenVault(s.Dir)
 	a := &App{store: s, config: c, trust: &core.TrustStore{Path: filepath.Join(s.Dir, "known_hosts")}, managerRow: -1, managerList: &ui.ListState{}, status: "就绪", vault: v}
+	a.agent = core.NewAgentCoordinator(s.Dir)
 	a.localUI = loadLocalPreferences(s.Dir)
 	if err != nil {
 		a.status = "密码库读取失败：" + err.Error()
@@ -153,10 +165,18 @@ func (a *App) post(fn func()) bool {
 		a.eventMu.Unlock()
 		return false
 	}
+	first := len(a.events) == 0
 	a.events = append(a.events, fn)
 	a.eventMu.Unlock()
-	if a.win != nil {
-		a.win.Invalidate()
+	if parent := a.fileParent(); first && parent != nil {
+		// Completion is UI work, not paint work. An occluded/minimized owner
+		// may not paint while its manager is in use. Update dispatches on the
+		// UI loop even then, so transaction locks do not wait for another click.
+		parent.Update(func() {
+			if !a.stopped.Load() {
+				a.drain()
+			}
+		})
 	}
 	return true
 }
@@ -172,6 +192,9 @@ func (a *App) drain() {
 	a.resumeDeferredUpdate()
 	if len(pending) > 0 && a.preferencesWindow != nil {
 		a.preferencesWindow.Invalidate()
+	}
+	if len(pending) > 0 && a.mcp.window != nil {
+		a.mcp.window.Invalidate()
 	}
 	if len(pending) > 0 && a.manager != nil {
 		a.manager.Invalidate()
@@ -241,6 +264,7 @@ func (a *App) dispose(p *pane) {
 		return
 	}
 	p.closed = true
+	diagnostics.Event("pane_dispose", map[string]any{"pane": p.id, "transfer_active": p.transfer.active, "stack": diagnostics.Stack()})
 	p.search.matches = nil
 	p.search.generation++
 	if s := a.imagePaste; s != nil && s.pane == p {
@@ -413,13 +437,13 @@ func (a *App) request(p core.Profile, split int, terminalMode ...bool) {
 			target.batchTerminalOpened = a.batchTerminalOpened
 			target.batchTerminalOwner = a.batchTerminalOwner
 			target.request(p, split, asTerminal)
-			if target.win != nil {
-				target.win.Focus()
+			if parent := target.fileParent(); parent != nil {
+				parent.Focus()
 			}
 			return
 		}
 	}
-	resolvedProfile, e := a.config.ConnectionProfile(p)
+	resolvedProfile, e := a.connectionProfile(p)
 	if e != nil {
 		a.status = "错误：" + e.Error()
 		return
@@ -516,7 +540,7 @@ func (a *App) request(p core.Profile, split int, terminalMode ...bool) {
 	a.authOpen = true
 }
 func (a *App) edit(p core.Profile) {
-	if a.passwordLocked() || a.configurationBusy() || a.features.sessionPassword.busy {
+	if a.sessionEditorBlocked() {
 		return
 	}
 	a.features.managerReturn = nil
@@ -527,10 +551,10 @@ func (a *App) edit(p core.Profile) {
 	a.port = fmt.Sprint(p.Port)
 	a.formError = ""
 	a.editing = true
-	if a.win != nil {
-		a.win.Show()
-		a.win.Focus()
-		a.win.Invalidate()
+	if parent := a.fileParent(); parent != nil {
+		parent.Show()
+		parent.Focus()
+		parent.Invalidate()
 	}
 }
 
@@ -538,8 +562,20 @@ func (a *App) open(profile core.Profile, cred core.Credentials, split int) {
 	a.openConnection(profile, cred, split, nil)
 }
 func (a *App) openConnection(profile core.Profile, cred core.Credentials, split int, source *core.Connection, ftpSources ...*core.FTPSession) {
+	a.openConnectionAt(profile, cred, split, source, "", ftpSources...)
+}
+func (a *App) openConnectionAt(profile core.Profile, cred core.Credentials, split int, source *core.Connection, localDirectory string, ftpSources ...*core.FTPSession) {
 	if a.passwordLocked() || a.stopped.Load() || a.hub != nil && a.hub.quitting {
 		return
+	}
+	// Re-read local policy after authentication; reused channels keep their transport.
+	if source == nil {
+		var err error
+		profile, err = a.connectionProfile(profile)
+		if err != nil {
+			a.status = "连接已停止：" + err.Error()
+			return
+		}
 	}
 	a.cancelIdleMemoryReclaim()
 	// Retain the source before replacing/disposal of a pane that owns its last lease.
@@ -797,6 +833,7 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, split 
 				}
 				if !p.closed {
 					p.status = "连接失败：" + err.Error()
+					errors.As(err, &p.hostKeyMismatch)
 				}
 			})
 			return
@@ -845,7 +882,11 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, split 
 			}
 			return
 		}
-		opts := terminal.Options{PreferColorEmoji: settings.PreferColorEmoji, ManagedClipboardBindings: true, AmbiguousCharactersAreWide: settings.AmbiguousCharactersAreWide, Font: terminal.Font{Family: terminalFamily(settings.FontFamily), Size: float32(settings.FontSize)}, Scrollback: settings.ScrollbackMB << 20, Theme: terminalTheme(settings.Scheme()), NoBlink: true}
+		var agentSession *core.AgentSession
+		if profile.Kind == "ssh" || profile.Kind == "local" {
+			agentSession = a.agentCoordinator().Register(p.id, profile.Name)
+		}
+		opts := terminal.Options{Dir: localDirectory, Agent: agentSession, PreferColorEmoji: settings.PreferColorEmoji, ManagedClipboardBindings: true, AmbiguousCharactersAreWide: settings.AmbiguousCharactersAreWide, Font: terminal.Font{Family: terminalFamily(settings.FontFamily), Size: float32(settings.FontSize)}, Scrollback: settings.ScrollbackMB << 20, Theme: terminalTheme(settings.Scheme()), NoBlink: true}
 
 		if conn != nil {
 			opts.Conn = conn
@@ -855,13 +896,22 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, split 
 			opts.ManagedInputAllowed = console.ManagedInputAllowed
 		}
 		a.configureTerminalTransfer(p, &opts, settings.AutoZmodem)
-		transferHandler := opts.TransferHandler
-		opts.TransferHandler = func(ctx context.Context, upload bool, stream net.Conn) error {
+		opts.TransferStarted = func() {
+			if agentSession != nil {
+				agentSession.ContextChanged("文件传输已接管终端")
+			}
+			diagnostics.Event("terminal_transfer_begin", map[string]any{"pane": p.id})
 			if conn != nil {
 				conn.SetManagedBusy(true)
-				defer conn.SetManagedBusy(false)
 			}
-			return transferHandler(ctx, upload, stream)
+		}
+		transferFinished := opts.TransferFinished
+		opts.TransferFinished = func(err error) {
+			diagnostics.Event("terminal_transfer_end", map[string]any{"pane": p.id, "error": err != nil, "error_type": fmt.Sprintf("%T", err)})
+			if conn != nil {
+				conn.SetManagedBusy(false)
+			}
+			transferFinished(err)
 		}
 		opts.CopyOnSelect = settings.Input.CopyOnSelect
 		opts.CustomWordSelection, opts.WordSeparators, opts.ShiftWhitespace = true, a.localUI.WordSeparators, a.localUI.ShiftWhitespace
@@ -922,6 +972,7 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, split 
 		opts.LocalToolsOnExit = profile.Kind == "ssh" || profile.Kind == "local" || cred.OpenTerminal
 		opts.OnProcessState = func() { post(func() {}) }
 		opts.OnSessionEnd = func() {
+			diagnostics.Event("terminal_session_ended", map[string]any{"pane": p.id})
 			post(func() {
 				if owner := p.owner.Load(); owner != nil && !p.closed {
 					owner.cancelHostProbe(p)
@@ -931,6 +982,7 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, split 
 			})
 		}
 		opts.OnExit = func(code int) {
+			diagnostics.Event("terminal_exit", map[string]any{"pane": p.id, "code": code})
 			post(func() {
 				a := p.owner.Load()
 				if a == nil {
@@ -986,6 +1038,10 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, split 
 				return
 			}
 			p.term = term
+			p.agent = agentSession
+			if agentSession != nil {
+				agentSession.Bind(term)
+			}
 			a.showHostname(p)
 			p.conn = conn
 			p.status = "已连接"

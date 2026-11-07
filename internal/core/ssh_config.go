@@ -127,6 +127,9 @@ func (b *limitedOutput) Write(p []byte) (int, error) {
 func applyResolvedSSH(result *ResolvedSSH, output string) {
 	p := &result.Profile
 	p.resolvedIdentityFiles = nil
+	p.resolvedIdentityFilesSet = false
+	p.resolvedIdentitiesOnly = false
+	p.resolvedAgentDisabled = false
 	for _, line := range strings.Split(output, "\n") {
 		key, value, ok := strings.Cut(strings.TrimSpace(line), " ")
 		if !ok {
@@ -143,18 +146,23 @@ func applyResolvedSSH(result *ResolvedSSH, output string) {
 				p.Port = port
 			}
 		case "identityfile":
+			p.resolvedIdentityFilesSet = true
 			if value != "none" {
 				candidate := expandHome(value)
 				if _, e := os.Stat(candidate); e == nil {
 					p.resolvedIdentityFiles = append(p.resolvedIdentityFiles, candidate)
 				}
 			}
+		case "identitiesonly":
+			p.resolvedIdentitiesOnly = value == "yes"
+		case "identityagent":
+			p.resolvedAgentDisabled = value == "none"
 		case "proxyjump":
-			if p.ProxyID == "" && p.JumpHost == "" && result.ProxyCommand == "" && (p.Proxy.Kind == "" || p.Proxy.Kind == "none") && value != "none" {
+			if len(p.RuntimeProxyRoute) == 0 && p.ProxyID == "" && p.JumpHost == "" && result.ProxyCommand == "" && (p.Proxy.Kind == "" || p.Proxy.Kind == "none") && value != "none" {
 				p.JumpHost = value
 			}
 		case "proxycommand":
-			if p.ProxyID == "" && p.JumpHost == "" && (p.Proxy.Kind == "" || p.Proxy.Kind == "none") && value != "none" {
+			if len(p.RuntimeProxyRoute) == 0 && p.ProxyID == "" && p.JumpHost == "" && (p.Proxy.Kind == "" || p.Proxy.Kind == "none") && value != "none" {
 				result.ProxyCommand = value
 			}
 		}

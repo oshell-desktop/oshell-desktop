@@ -69,74 +69,75 @@ const (
 
 var ct struct {
 	// Core Foundation
-	release               func(obj uintptr)
-	retain                func(obj uintptr) uintptr
-	hash                  func(obj uintptr) uint
-	equal                 func(a, b uintptr) bool
-	stringWithCharacters  func(alloc uintptr, chars *uint16, n int) uintptr
-	stringWithBytes       func(alloc uintptr, bytes *byte, n int, encoding uint32, external bool) uintptr
-	stringGetLength       func(s uintptr) int
-	stringGetCharacters   func(s uintptr, r cfRange, out *uint16)
-	dictionaryCreate      func(alloc uintptr, keys, values *uintptr, n int, keyCallbacks, valueCallbacks uintptr) uintptr
-	dictionaryGetValue    func(d, key uintptr) uintptr
-	arrayGetCount         func(a uintptr) int
-	arrayGetValueAtIndex  func(a uintptr, i int) uintptr
-	setCreate             func(alloc uintptr, values *uintptr, n int, callbacks uintptr) uintptr
-	arrayCreate           func(alloc uintptr, values *uintptr, n int, callbacks uintptr) uintptr
-	numberCreate          func(alloc uintptr, typ int, value unsafe.Pointer) uintptr
-	numberGetValue        func(n uintptr, typ int, value unsafe.Pointer) bool
-	attributedString      func(alloc, str, attrs uintptr) uintptr
-	attributedMutable     func(alloc uintptr, max int, attributed uintptr) uintptr
-	attributedSet         func(attributed uintptr, r cfRange, name, value uintptr)
-	dataCreate            func(alloc uintptr, bytes *byte, n int) uintptr
-	keyCallbacks          uintptr
-	valueCallbacks        uintptr
-	setCallbacks          uintptr
-	arrayCallbacks        uintptr
-	fontAttributeName     uintptr
-	paragraphStyleName    uintptr
-	familyNameAttribute   uintptr
-	traitsAttribute       uintptr
-	weightTrait           uintptr
-	symbolicTrait         uintptr
-	srgbName              uintptr
-	fontWithDescriptor    func(desc uintptr, size float64, matrix uintptr) uintptr
-	uiFontForLanguage     func(typ uint32, size float64, language uintptr) uintptr
-	fontWithTraits        func(font uintptr, size float64, matrix uintptr, value, mask uint32) uintptr
-	fontWithAttrs         func(font uintptr, size float64, matrix, desc uintptr) uintptr
-	descriptorWithAttrs   func(attrs uintptr) uintptr
-	descriptorMatching    func(desc, mandatory uintptr) uintptr
-	descriptorAttribute   func(desc, name uintptr) uintptr
-	descriptorsFromData   func(data uintptr) uintptr
-	fontGetAscent         func(font uintptr) float64
-	fontGetDescent        func(font uintptr) float64
-	fontGetLeading        func(font uintptr) float64
-	fontGetSize           func(font uintptr) float64
-	fontGetSymbolicTraits func(font uintptr) uint32
-	fontGetUnderlinePos   func(font uintptr) float64
-	fontGetUnderlineThick func(font uintptr) float64
-	fontGetXHeight        func(font uintptr) float64
-	fontGetUnitsPerEm     func(font uintptr) uint32
-	fontCopyTable         func(font uintptr, tag uint32, options uint32) uintptr
-	fontCreatePath        func(font uintptr, glyph uint16, matrix uintptr) uintptr
-	dataGetLength         func(data uintptr) int
-	dataGetBytePtr        func(data uintptr) *byte
-	fontGetBoundingRects  func(font uintptr, orientation uint32, glyphs *uint16, rects *cgRect, n int) cgRect
-	fontDrawGlyphs        func(font uintptr, glyphs *uint16, positions *cgPoint, n int, context uintptr)
-	paragraphStyleCreate  func(settings *ctParagraphStyleSetting, n int) uintptr
-	typesetterCreate      func(str uintptr) uintptr
-	suggestLineBreak      func(typesetter uintptr, start int, width float64) int
-	typesetterCreateLine  func(typesetter uintptr, r cfRange) uintptr
-	lineGetGlyphRuns      func(line uintptr) uintptr
-	lineGetStringRange    func(line uintptr) cfRange
-	runGetGlyphCount      func(run uintptr) int
-	runGetStringRange     func(run uintptr) cfRange
-	runGetStatus          func(run uintptr) uint32
-	runGetAttributes      func(run uintptr) uintptr
-	runGetGlyphs          func(run uintptr, r cfRange, out *uint16)
-	runGetPositions       func(run uintptr, r cfRange, out *cgPoint)
-	runGetAdvances        func(run uintptr, r cfRange, out *cgSize)
-	runGetStringIndices   func(run uintptr, r cfRange, out *int)
+	release                 func(obj uintptr)
+	retain                  func(obj uintptr) uintptr
+	hash                    func(obj uintptr) uint
+	equal                   func(a, b uintptr) bool
+	stringWithCharacters    func(alloc uintptr, chars *uint16, n int) uintptr
+	stringWithBytes         func(alloc uintptr, bytes *byte, n int, encoding uint32, external bool) uintptr
+	stringGetLength         func(s uintptr) int
+	stringGetCharacters     func(s uintptr, r cfRange, out *uint16)
+	dictionaryCreate        func(alloc uintptr, keys, values *uintptr, n int, keyCallbacks, valueCallbacks uintptr) uintptr
+	dictionaryGetValue      func(d, key uintptr) uintptr
+	arrayGetCount           func(a uintptr) int
+	arrayGetValueAtIndex    func(a uintptr, i int) uintptr
+	setCreate               func(alloc uintptr, values *uintptr, n int, callbacks uintptr) uintptr
+	arrayCreate             func(alloc uintptr, values *uintptr, n int, callbacks uintptr) uintptr
+	numberCreate            func(alloc uintptr, typ int, value unsafe.Pointer) uintptr
+	numberGetValue          func(n uintptr, typ int, value unsafe.Pointer) bool
+	attributedString        func(alloc, str, attrs uintptr) uintptr
+	attributedMutable       func(alloc uintptr, max int, attributed uintptr) uintptr
+	attributedSet           func(attributed uintptr, r cfRange, name, value uintptr)
+	dataCreate              func(alloc uintptr, bytes *byte, n int) uintptr
+	keyCallbacks            uintptr
+	valueCallbacks          uintptr
+	setCallbacks            uintptr
+	arrayCallbacks          uintptr
+	fontAttributeName       uintptr
+	paragraphStyleName      uintptr
+	familyNameAttribute     uintptr
+	postScriptNameAttribute uintptr
+	traitsAttribute         uintptr
+	weightTrait             uintptr
+	symbolicTrait           uintptr
+	srgbName                uintptr
+	fontWithDescriptor      func(desc uintptr, size float64, matrix uintptr) uintptr
+	uiFontForLanguage       func(typ uint32, size float64, language uintptr) uintptr
+	fontWithTraits          func(font uintptr, size float64, matrix uintptr, value, mask uint32) uintptr
+	fontWithAttrs           func(font uintptr, size float64, matrix, desc uintptr) uintptr
+	descriptorWithAttrs     func(attrs uintptr) uintptr
+	descriptorMatching      func(desc, mandatory uintptr) uintptr
+	descriptorAttribute     func(desc, name uintptr) uintptr
+	descriptorsFromData     func(data uintptr) uintptr
+	fontGetAscent           func(font uintptr) float64
+	fontGetDescent          func(font uintptr) float64
+	fontGetLeading          func(font uintptr) float64
+	fontGetSize             func(font uintptr) float64
+	fontGetSymbolicTraits   func(font uintptr) uint32
+	fontGetUnderlinePos     func(font uintptr) float64
+	fontGetUnderlineThick   func(font uintptr) float64
+	fontGetXHeight          func(font uintptr) float64
+	fontGetUnitsPerEm       func(font uintptr) uint32
+	fontCopyTable           func(font uintptr, tag uint32, options uint32) uintptr
+	fontCreatePath          func(font uintptr, glyph uint16, matrix uintptr) uintptr
+	dataGetLength           func(data uintptr) int
+	dataGetBytePtr          func(data uintptr) *byte
+	fontGetBoundingRects    func(font uintptr, orientation uint32, glyphs *uint16, rects *cgRect, n int) cgRect
+	fontDrawGlyphs          func(font uintptr, glyphs *uint16, positions *cgPoint, n int, context uintptr)
+	paragraphStyleCreate    func(settings *ctParagraphStyleSetting, n int) uintptr
+	typesetterCreate        func(str uintptr) uintptr
+	suggestLineBreak        func(typesetter uintptr, start int, width float64) int
+	typesetterCreateLine    func(typesetter uintptr, r cfRange) uintptr
+	lineGetGlyphRuns        func(line uintptr) uintptr
+	lineGetStringRange      func(line uintptr) cfRange
+	runGetGlyphCount        func(run uintptr) int
+	runGetStringRange       func(run uintptr) cfRange
+	runGetStatus            func(run uintptr) uint32
+	runGetAttributes        func(run uintptr) uintptr
+	runGetGlyphs            func(run uintptr, r cfRange, out *uint16)
+	runGetPositions         func(run uintptr, r cfRange, out *cgPoint)
+	runGetAdvances          func(run uintptr, r cfRange, out *cgSize)
+	runGetStringIndices     func(run uintptr, r cfRange, out *int)
 
 	// Optional: tracking (macOS 10.12) and OpenType features by tag
 	// (macOS 10.13).
@@ -233,6 +234,7 @@ func loadCoreText() error {
 	ct.fontAttributeName = value(text, "kCTFontAttributeName")
 	ct.paragraphStyleName = value(text, "kCTParagraphStyleAttributeName")
 	ct.familyNameAttribute = value(text, "kCTFontFamilyNameAttribute")
+	ct.postScriptNameAttribute = value(text, "kCTFontNameAttribute")
 	ct.traitsAttribute = value(text, "kCTFontTraitsAttribute")
 	ct.weightTrait = value(text, "kCTFontWeightTrait")
 	ct.symbolicTrait = value(text, "kCTFontSymbolicTrait")
@@ -409,7 +411,8 @@ type coreText struct {
 	runAdvances  []cgSize
 	runIndices   []int
 
-	registered map[string][]registeredFace // by lowercased family
+	registered            map[string][]registeredFace // by lowercased family
+	registeredDescriptors []uintptr                   // one retain per parsed face; aliases borrow it
 }
 
 type attrsKey struct {
@@ -1290,6 +1293,7 @@ func (e *coreText) register(data []byte, family string) error {
 	for i := range n {
 		desc := ct.arrayGetValueAtIndex(descs, i)
 		face := registeredFace{desc: ct.retain(desc)}
+		e.registeredDescriptors = append(e.registeredDescriptors, face.desc)
 		var name string
 		if s := ct.descriptorAttribute(desc, ct.familyNameAttribute); s != 0 {
 			name = goString(s)
@@ -1306,7 +1310,12 @@ func (e *coreText) register(data []byte, family string) error {
 			}
 			ct.release(traits)
 		}
-		for _, f := range []string{name, family} {
+		var postScript string
+		if s := ct.descriptorAttribute(desc, ct.postScriptNameAttribute); s != 0 {
+			postScript = goString(s)
+			ct.release(s)
+		}
+		for _, f := range []string{name, family, postScript} {
 			if f != "" {
 				key := strings.ToLower(f)
 				e.registered[key] = append(e.registered[key], face)
@@ -1327,6 +1336,17 @@ func (e *coreText) forgetPrimary() {
 		ct.release(a)
 	}
 	clear(e.attrs)
+}
+
+func (e *coreText) clearRegistered() error {
+	e.forgetFonts()
+	e.forgetPrimary()
+	for _, desc := range e.registeredDescriptors {
+		ct.release(desc)
+	}
+	e.registeredDescriptors = nil
+	clear(e.registered)
+	return nil
 }
 
 func (e *coreText) fontCount() int {

@@ -363,6 +363,14 @@ func SyncLocalFingerprint(store *Store, vault *Vault, selection ...SyncContentSe
 		}
 		body = append(body, extra...)
 	}
+	if scope.FontFiles {
+		manifest, err := NewFontLibrary(store.Dir).Manifest()
+		if err != nil {
+			return ""
+		}
+		data, _ := json.Marshal(manifest)
+		body = append(body, data...)
+	}
 	hash := sha256.Sum256(body)
 	return hex.EncodeToString(hash[:])
 }

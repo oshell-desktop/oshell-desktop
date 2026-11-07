@@ -20,10 +20,12 @@ func (a *App) toolbar(c *ui.Context) {
 		}
 	}
 	width, _ := c.Size()
-	gap := float32(5)
-	sidebarText := "侧栏"
-	if width < 1000 {
-		gap, sidebarText = 3, ""
+	compact := width < 1200
+	buttonText := func(text string) string {
+		if width < 1100 {
+			return ""
+		}
+		return text
 	}
 	ui.Toolbar(c, func() {
 		visible := a.localUI.SidebarVisible
@@ -34,7 +36,7 @@ func (a *App) toolbar(c *ui.Context) {
 		if a.localUI.SidebarShortcut.Valid() {
 			hint += "（" + a.localUI.SidebarShortcut.Display(runtime.GOOS) + "）"
 		}
-		sidebar := toolButton(c.Key("sidebar-toggle"), "会话侧栏", sidebarIcon, sidebarText).
+		sidebar := toolButton(c.Key("sidebar-toggle"), "会话侧栏", sidebarIcon, "").
 			Shrink(0).Role(ui.RoleToggleButton).Checked(visible).Tooltip(hint).
 			Disabled(a.passwordLocked() || a.modalActive()).OnClick(a.toggleSidebar)
 		if visible {
@@ -45,30 +47,58 @@ func (a *App) toolbar(c *ui.Context) {
 				sidebar.Background(c.Theme().SurfaceHover)
 			}
 		}
-		for _, title := range []string{"OShell", "会话", "快捷连接", "编辑", "视图", "窗口", "快速命令", "工具"} {
-			if title == "编辑" {
-				a.headerEditButton(c)
-				continue
-			}
-			ui.MenuButton(c, title, func(m *ui.Menu) { a.headerMenu(m, title) }).Height(25).FontSize(12)
-		}
+		toolButton(c, "会话管理", folderIcon, buttonText("会话管理")).Shrink(0).OnClick(func() { a.performAction("sessionManager") })
+		ui.MenuButton(c, "快捷连接", a.connectionMenu).Height(28).FontSize(12).Shrink(0)
+		toolButton(c, "新建会话", plusIcon, buttonText("新建")).Shrink(0).OnClick(func() { a.performAction("newSession") })
+		toolButton(c, "本地终端", terminalIcon, buttonText("本地")).Shrink(0).OnClick(func() { a.performAction("local") })
+		toolButton(c, "文件管理", folderIcon, buttonText("文件管理")).Shrink(0).OnClick(func() { a.performAction("fileManager") })
+		ui.Box(c).Width(1).Height(18).Background(c.Theme().Border).Shrink(0)
+		ui.MenuButton(c, "工具", func(m *ui.Menu) { a.headerMenu(m, "工具") }).Height(28).FontSize(12).Shrink(0)
 		label := "标签组"
 		if n := a.hiddenUnreadGroups(); n > 0 {
 			label = fmt.Sprintf("标签组 · %d", n)
 		}
-		groups := ui.MenuButton(c, label, a.groupsMenu).Label("标签组").Tooltip("新建、命名和显示/隐藏标签组").Height(25)
+		groups := ui.MenuButton(c, label, a.groupsMenu).Label("标签组").Tooltip("新建、命名和显示/隐藏标签组").Height(28).FontSize(12).Shrink(0)
 		if a.hiddenUnreadGroups() > 0 {
 			groups.TextColor(c.Theme().Accent)
 		}
-		ui.MenuButton(c, "排列", a.headerArrangementMenu).Height(25).Disabled(len(a.tabs) == 0)
+		if compact {
+			ui.MenuButton(c, "排列", func(m *ui.Menu) {
+				m.Submenu("分组排列", a.arrangementMenu)
+				m.Submenu("分屏排列", a.headerPaneMenu)
+			}).Tooltip("标签排列、创建分屏和分屏布局").Height(28).FontSize(12).Shrink(0).Disabled(len(a.tabs) == 0)
+		} else {
+			ui.MenuButton(c, "分组排列", a.arrangementMenu).Tooltip("排列当前组的标签").Height(28).FontSize(12).Shrink(0).Disabled(len(a.tabs) == 0)
+			ui.MenuButton(c, "分屏排列", a.headerPaneMenu).Tooltip("按窗口内所有标签重新排列分屏").Height(28).FontSize(12).Shrink(0).Disabled(len(a.tabs) == 0)
+		}
+		a.headerEditButton(c)
+		ui.MenuButton(c, "更多", func(m *ui.Menu) {
+			for _, title := range []string{"会话", "视图", "窗口", "快速命令", "OShell"} {
+				m.Submenu(title, func(child *ui.Menu) { a.headerMenu(child, title) })
+			}
+		}).Tooltip("会话属性、视图、窗口、快速命令和应用菜单").Height(28).FontSize(12).Shrink(0)
 		ui.Spacer(c)
-		ui.Box(c).Width(1).Height(18).Background(c.Theme().Border)
-		toolButton(c, "会话管理", terminalIcon, "").Shrink(0).OnClick(func() { a.performAction("sessionManager") })
-		toolButton(c, "文件管理", folderIcon, "").Shrink(0).OnClick(func() { a.performAction("fileManager") })
-		toolButton(c, "设置", settingsIcon, "").Shrink(0).OnClick(func() { a.performAction("settings") })
+		ui.Button(c, "MCP").Label("MCP 控制中心").Height(28).FontSize(12).Shrink(0).OnClick(a.showMCP)
 		a.syncToolbar(c)
 		a.updateToolbar(c)
-	}).Height(38).Padding(6, 8).Gap(gap).Background(c.Theme().Background).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Label("主工具栏")
+		p := a.activePane()
+		hasTerminal := p != nil && p.term != nil
+		toolButton(c, "搜索终端", searchIcon, buttonText("搜索")).Shrink(0).Disabled(!hasTerminal).OnClick(func() { a.performAction("find") })
+		logging := false
+		if hasTerminal {
+			_, logging, _ = p.term.LogState()
+		}
+		logText, logHint := "记录", "开始记录终端日志"
+		if logging {
+			logText, logHint = "停止记录", "停止记录终端日志"
+		}
+		logButton := toolButton(c, "记录终端日志", recordIcon, buttonText(logText)).Shrink(0).Role(ui.RoleToggleButton).Checked(logging).
+			Tooltip(logHint).Disabled(!hasTerminal).OnClick(func() { a.performAction("logging") })
+		if logging {
+			logButton.Background(c.Theme().Selection)
+		}
+		toolButton(c, "设置", settingsIcon, "").Shrink(0).OnClick(func() { a.performAction("settings") })
+	}).Height(detailBarHeight).Padding(2, 6).Gap(3).Background(c.Theme().Background).TextColor(c.Theme().Text).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Label("主工具栏")
 }
 
 // Build on opening so saved sessions, commands and shortcuts are current.
@@ -143,6 +173,9 @@ func (a *App) headerMenu(m *ui.Menu, title string) {
 		}
 	case "工具":
 		m.Separator()
+		if m.Item("rsync 目录传输…").Disabled(a.activePane() == nil || a.activePane().conn == nil).Chosen() {
+			a.openStandaloneRsync(a.activePane())
+		}
 		if m.Item("保存终端历史文本…").Disabled(a.activePane() == nil || a.activePane().term == nil).Chosen() {
 			a.exportScreen()
 		}
@@ -200,7 +233,7 @@ func (a *App) headerMenuItems(m *ui.Menu, items []*mygo.MenuItem) {
 // Native Edit roles route to the focused terminal or text input. Restore that
 // input after activating the toolbar button, before opening the native menu.
 func (a *App) headerEditButton(c *ui.Context) {
-	button := ui.Button(c, "编辑").Height(25).FontSize(12).Role(ui.RoleMenuButton)
+	button := ui.Button(c, "编辑").Height(28).FontSize(12).Role(ui.RoleMenuButton)
 	open := func() {
 		a.lastInputFocus.Focus()
 		if a.win == nil || !mygo.App.IsReady() {
@@ -223,15 +256,19 @@ func (a *App) headerEditButton(c *ui.Context) {
 	})
 }
 
-func (a *App) headerArrangementMenu(m *ui.Menu) {
+func (a *App) headerPaneMenu(m *ui.Menu) {
 	a.arrangementMenu(m)
 	m.Separator()
+	for _, choice := range [][2]string{{"splitVertical", "左右分屏"}, {"splitHorizontal", "上下分屏"}, {"zoomPane", "放大 / 还原当前分屏"}} {
+		if m.Item(choice[1]).Chosen() {
+			a.performAction(choice[0])
+		}
+	}
 	for _, choice := range [][2]string{{"horizontal", "均分左右"}, {"vertical", "均分上下"}, {"tile", "瓷砖平铺"}} {
 		if m.Item(choice[1]).Chosen() {
 			a.arrangeActive(choice[0])
 		}
 	}
-	m.Separator()
 	if m.Item("当前分屏移到独立标签").Chosen() {
 		a.detachActive()
 	}

@@ -81,14 +81,14 @@ func (a *App) modalActive() bool {
 	return len(a.challenges) > 0 || a.nonAuthenticationModalActive()
 }
 func (a *App) nonAuthenticationModalActive() bool {
-	if a.sidebar.rename != nil || a.imagePaste != nil {
+	if a.mcp.open && !a.mcp.sidebarShown || a.sidebar.rename != nil || a.imagePaste != nil || a.hostKeyCleanupOpen {
 		return true
 	}
 	f := &a.features
-	return f.sessionClose != nil || f.localConflict.active || f.nativeMigration.open || f.scpDraft != nil || f.uploadDraft != nil || f.sharedSync.conflictOpen || f.sharedSync.logsOpen || f.linkEditor.open || f.switcher.open || f.proxyManager.open || f.archive.open || a.editing || a.authOpen || a.confirmSend || f.vaultOpen || f.commandsOpen || f.directoryOpen || f.fileOpen || f.pasteOpen || f.syncOpen || f.highlightOpen || f.defaultsOpen || f.liveOpen || f.operators.targetsOpen || f.operators.groupsOpen || a.groups.dialog || a.groups.numberOpen
+	return f.sessionClose != nil || f.localConflict.active || f.nativeMigration.open || f.scpDraft != nil || f.rsyncDraft != nil || a.filePresentation.confirmOpen || f.uploadDraft != nil || f.sharedSync.conflictOpen || f.sharedSync.logsOpen || f.linkEditor.open || f.switcher.open || f.proxyManager.open || f.globalProxy.open || f.archive.open || a.editing || a.authOpen || a.confirmSend || f.vaultOpen || f.commandsOpen || f.directoryOpen || f.fileOpen || f.pasteOpen || f.syncOpen || f.highlightOpen || f.defaultsOpen || f.liveOpen || f.operators.targetsOpen || f.operators.groupsOpen || a.groups.dialog || a.groups.numberOpen
 }
 func (a *App) shortcuts(c *ui.Context) {
-	if a.settingsOpen || a.modalActive() {
+	if a.settingsOpen || a.modalActive() || a.hub != nil && a.hub.fileWindow != nil && a.hub.fileWindow.filePresentation.owner.Load() == a && a.hub.fileWindow.filePresentation.visible && a.hub.fileWindow.filePresentation.focus.FocusWithin(c) {
 		return
 	}
 	deepKey := a.localUI.DeepFocusShortcut
@@ -103,6 +103,15 @@ func (a *App) shortcuts(c *ui.Context) {
 	}
 	p := a.activePane()
 	terminalFocused := p != nil && p.term != nil && (p.focus.FocusWithin(c) || c.Resolve(p.focus).FocusWithin())
+	if key := a.localUI.MCPShortcut; key != nil && a.config.Settings.KeyboardShortcuts.Conflict(*key, "", runtime.GOOS) == "" && c.Shortcut(shortcutMods(*key), shortcutKey(key.KeyCode)) {
+		a.showMCP()
+		return
+	}
+	localKey := core.KeyboardShortcut{KeyCode: 30, Modifiers: 6}
+	if terminalFocused && a.config.Settings.KeyboardShortcuts.Conflict(localKey, "", runtime.GOOS) == "" && c.Shortcut(ui.Ctrl|ui.Alt, ui.KeyBracketRight) {
+		a.local()
+		return
+	}
 	for _, action := range core.ShortcutActions {
 		if core.TerminalEditingAction(action.ID) {
 			continue // Encoded by the focused terminal, never by application shortcuts.
@@ -293,6 +302,20 @@ func (a *App) shortcutsSettings(c *ui.Context) {
 		k.Overrides = map[string]core.ShortcutOverride{}
 	}
 	ui.Text(c, "键盘快捷键").Bold()
+	ui.Row(c).Gap(6).Children(func() {
+		ui.Text(c, "MCP 控制中心（仅本机）").Grow(1)
+		label := "未设置"
+		if key := a.localUIDraft.MCPShortcut; key != nil {
+			label = key.Display(runtime.GOOS)
+		}
+		ui.Button(c, label).Label("MCP 快捷键").Width(200).OnClick(func() { f.settingsCapture = "desktopMCP"; f.shortcutError = "" })
+		ui.Button(c, "清除").Label("清除 MCP 快捷键").OnClick(func() { a.localUIDraft.MCPShortcut = nil })
+		ui.Button(c, "默认").Label("默认 MCP 快捷键").OnClick(func() { a.localUIDraft.MCPShortcut = &core.KeyboardShortcut{KeyCode: 0, Modifiers: 6} })
+	})
+	ui.Text(c, "终端中 Ctrl+Alt+] 打开新的本地 Shell；原连接保留，已有绑定优先。").Wrap()
+	if conflict := k.Conflict(core.KeyboardShortcut{KeyCode: 30, Modifiers: 6}, "", runtime.GOOS); conflict != "" {
+		ui.Text(c, "Ctrl+Alt+] 当前用于“"+conflict+"”；更改或清除该绑定后可用于新建本地终端。").Wrap()
+	}
 	if f.shortcutSystemNotice != "" {
 		ui.Text(c, f.shortcutSystemNotice).Wrap().TextColor(c.Theme().TextMuted)
 	}
@@ -328,9 +351,9 @@ func (a *App) shortcutCapture(c *ui.Context) {
 		return
 	}
 	open := true
-	ui.Modal(c, &open, func() {
-		ui.Column(c).Width(440).Gap(14).Children(func() {
-			ui.Text(c, "按下新的快捷键").FontSize(18).Bold()
+	desktopModal(c, &open, func() {
+		dialogBody(c, 440).Gap(14).Children(func() {
+			windowHeading(c, "按下新的快捷键")
 			ui.Text(c, "字母或数字需搭配 Ctrl、Alt 或 Cmd；Esc 取消。")
 			if f.shortcutError != "" {
 				ui.Text(c, f.shortcutError).TextColor(c.Theme().Danger)
@@ -459,6 +482,8 @@ func (h *applicationHub) menuItems() []*mygo.MenuItem {
 	viewMenu.Submenu = append(viewMenu.Submenu, h.workspaceMenuItem("显示/隐藏会话侧栏", func(a *App) { a.toggleSidebar() }))
 	viewMenu.Submenu = append(viewMenu.Submenu, h.workspaceMenuItem("全心专注 / 退出", func(a *App) { a.toggleDeepFocus() }))
 	viewMenu.Submenu = append(viewMenu.Submenu, h.workspaceMenuItem("刷新标题识别", func(a *App) { a.refreshActiveHostFromMenu() }))
+	toolsMenu := menu("工具", "logging", "links", "quickSend", "focusQuickSend", "composer", "syncInput", "stopSync", "files", "quickCommands", "highlights", "appearance")
+	toolsMenu.Submenu = append(toolsMenu.Submenu, h.workspaceMenuItem("MCP 控制中心…", func(a *App) { a.showMCP() }), mygo.Separator(), h.workspaceMenuItem("全局代理设置…", func(a *App) { a.showGlobalProxy() }))
 	return []*mygo.MenuItem{
 		appMenu,
 		sessionMenu,
@@ -467,7 +492,7 @@ func (h *applicationHub) menuItems() []*mygo.MenuItem {
 		viewMenu,
 		menu("窗口", "newWindow", "closePane", "closeTab", "-", "hide", "minimize"),
 		h.nativeCommandMenu(),
-		menu("工具", "logging", "links", "quickSend", "focusQuickSend", "composer", "syncInput", "stopSync", "files", "quickCommands", "highlights", "appearance"),
+		toolsMenu,
 	}
 }
 
@@ -484,6 +509,18 @@ func (a *App) acceptCapturedShortcut(shortcut core.KeyboardShortcut) bool {
 		f.shortcutError = fmt.Sprintf("与“%s”冲突，请换一个组合", other)
 		return false
 	}
+	if f.settingsCapture != "desktopMCP" && a.localUIDraft.MCPShortcut != nil && shortcut.KeyCode == a.localUIDraft.MCPShortcut.KeyCode && shortcutMods(shortcut) == shortcutMods(*a.localUIDraft.MCPShortcut) {
+		f.shortcutError = "与 MCP 本机快捷键冲突"
+		return false
+	}
+	if f.settingsCapture == "desktopMCP" {
+		for _, other := range []core.KeyboardShortcut{a.localUIDraft.SidebarShortcut, a.localUIDraft.DeepFocusShortcut, {KeyCode: 30, Modifiers: 6}} {
+			if other.KeyCode == shortcut.KeyCode && shortcutMods(other) == shortcutMods(shortcut) {
+				f.shortcutError = "与本机快捷键冲突"
+				return false
+			}
+		}
+	}
 	if err := a.checkSystemShortcut(shortcut); err != nil {
 		f.shortcutError = err.Error()
 		return false
@@ -491,7 +528,11 @@ func (a *App) acceptCapturedShortcut(shortcut core.KeyboardShortcut) bool {
 	if f.settingsDraft.KeyboardShortcuts.Overrides == nil {
 		f.settingsDraft.KeyboardShortcuts.Overrides = map[string]core.ShortcutOverride{}
 	}
-	f.settingsDraft.KeyboardShortcuts.Overrides[f.settingsCapture] = core.ShortcutOverride{Shortcut: &shortcut}
+	if f.settingsCapture == "desktopMCP" {
+		a.localUIDraft.MCPShortcut = &shortcut
+	} else {
+		f.settingsDraft.KeyboardShortcuts.Overrides[f.settingsCapture] = core.ShortcutOverride{Shortcut: &shortcut}
+	}
 	f.settingsCapture = ""
 	f.shortcutError = ""
 	a.refreshMenu()

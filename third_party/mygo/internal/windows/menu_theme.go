@@ -32,13 +32,13 @@ var nativeMenuTheme = sync.OnceValue(func() menuThemeAPI {
 	return api
 })
 
-func (b *Backend) applyNativeMenuTheme(owner uintptr) {
+func (b *Backend) applyNativeMenuTheme(owner uintptr, dark bool) {
 	api := nativeMenuTheme()
 	if api.setPreferredMode == 0 {
 		return // Older systems keep their native menu rather than failing startup.
 	}
 	mode, allow := uintptr(3), uintptr(0) // ForceLight, including a light override on a dark OS.
-	if b.isDark() {
+	if dark {
 		mode, allow = 2, 1 // ForceDark, including a dark override on a light OS.
 	}
 	if (theme{b}).Preferences().HighContrast {

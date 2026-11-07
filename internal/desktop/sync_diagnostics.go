@@ -40,7 +40,7 @@ func (a *App) syncStatusCard(c *ui.Context) {
 	f := &owner.features.sharedSync
 	p := a.syncPresentation(c)
 	title := p.title
-	ui.Column(c).Padding(12).Gap(7).FillWidth().Background(c.Theme().Surface).Radius(4).Children(func() {
+	panelSurface(c).Gap(8).FillWidth().Children(func() {
 		ui.Text(c, p.mark+" "+title).FontSize(16).Bold().TextColor(p.color)
 		ui.Text(c, p.guidance).Wrap()
 		if a.syncOptionsChanged() {
@@ -86,10 +86,10 @@ func (a *App) syncStatusCard(c *ui.Context) {
 }
 func (a *App) syncDiagnosticsDialog(c *ui.Context) {
 	f := &a.features.sharedSync
-	ui.Modal(c, &f.logsOpen, func() {
-		width, height := c.Size()
-		ui.Column(c).Width(min(float32(760), width-48)).Gap(10).Children(func() {
-			ui.Text(c, "同步诊断日志").FontSize(18).Bold()
+	desktopModal(c, &f.logsOpen, func() {
+		_, height := c.Size()
+		dialogBody(c, 760).Gap(10).Children(func() {
+			windowHeading(c, "同步诊断日志")
 			ui.Text(c, "最近 7 天，最多 2000 条；不包含会话内容、地址、账号或凭据。").TextColor(c.Theme().TextMuted)
 			ui.List(c, &f.logList, len(f.logEntries), func(i int) {
 				entry := f.logEntries[len(f.logEntries)-1-i]

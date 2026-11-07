@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -17,6 +18,10 @@ func LauncherConfigurationDirectory() (string, error) {
 	return dir, err
 }
 func ParseExternalLauncher(name string, args []string) (ExternalLaunchRequest, error) {
+	if name == "OShell-Bastion" {
+		r, err := ParseBastionSSHLaunch(args)
+		return ExternalLaunchRequest{Terminal: &r}, err
+	}
 	if strings.Contains(strings.ToLower(filepath.Base(name)), "filezilla") {
 		r, err := ParseFileLaunch(args, ReadFileZillaSites)
 		return ExternalLaunchRequest{File: &r}, err
@@ -56,7 +61,11 @@ func LaunchApplicationAndSend(ctx context.Context, configuration, executable str
 		}
 		defer null.Close()
 		command := exec.Command(executable, "--external-launch-service")
-		prepareCommand(command)
+		// prepareCommand hides the first window on Windows. This child is
+		// the GUI application that should be visible on a cold launch.
+		if runtime.GOOS != "windows" {
+			prepareCommand(command)
+		}
 		command.Stdin = null
 		command.Stdout = null
 		command.Stderr = null

@@ -38,6 +38,10 @@ func (e *BatchResultError) Error() string {
 func (e *BatchResultError) Unwrap() error        { return e.Cause }
 func (e *BatchResultError) Is(target error) bool { return e.Cause == nil && target == ErrSkipped }
 
+// SendFiles answers an already-started receiver (rz). The caller must preserve
+// its initial ZRINIT in conn. Unlike SendBuffer, this entry point does not start
+// a remote receiver: sending ZRQINIT here duplicates its unsolicited ZRINIT,
+// causing duplicate ZFILE/ZRPOS replies and out-of-phase data retransmissions.
 func SendFiles(conn net.Conn, files []SendFile, progress func(FileProgress)) (result error) {
 	var skipped []string
 	defer func() {
@@ -49,10 +53,11 @@ func SendFiles(conn net.Conn, files []SendFile, progress func(FileProgress)) (re
 		return fmt.Errorf("未选择上传文件")
 	}
 	s := newSender(conn, nil, "")
+	// Uploads can pass through an interactive ssh inside the remote shell.
+	// ZDLE-encode LF as well as CR so file bytes never become line-start
+	// ssh escape commands (for example "~." or "~" followed by Ctrl-Z).
+	s.codec.escapeNewlines = true
 	defer s.reader.close()
-	if _, e := conn.Write(BuildZhexHeader(FrameZRQINIT, 0)); e != nil {
-		return e
-	}
 	if e := s.waitForZrinit(); e != nil {
 		return e
 	}

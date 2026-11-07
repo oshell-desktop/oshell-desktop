@@ -460,7 +460,8 @@ type state struct {
 	contentW         float64
 	contentH         float64
 	// barInset is the element's ScrollbarInsets.
-	barInset [4]float32
+	barInset       [4]float32
+	hideScrollbars bool
 	// track is the ScrollState of the last frame's element, which events
 	// that scroll it update (scrollTo).
 	track *ScrollState

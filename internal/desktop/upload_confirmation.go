@@ -17,6 +17,7 @@ type uploadConfirmation struct {
 	paths          []string
 	directory, err string
 	baseDirectory  string
+	protocol       string
 }
 
 func (a *App) canPrepareUpload(p *pane) bool {
@@ -26,7 +27,13 @@ func (a *App) prepareUpload(p *pane, paths []string) {
 	if !a.canPrepareUpload(p) || len(paths) == 0 {
 		return
 	}
-	a.features.uploadDraft = &uploadConfirmation{open: true, pane: p, files: p.files, paths: append([]string(nil), paths...), directory: p.files.dir, baseDirectory: p.files.dir}
+	if p.files.protocol == "" {
+		p.files.protocol = "SFTP"
+		if p.ftp != nil {
+			p.files.protocol = "FTP"
+		}
+	}
+	a.features.uploadDraft = &uploadConfirmation{open: true, pane: p, files: p.files, paths: append([]string(nil), paths...), directory: p.files.dir, baseDirectory: p.files.dir, protocol: p.files.protocol}
 }
 func (a *App) uploadDroppedOn(p *pane, paths []string, name string) {
 	if !a.canPrepareUpload(p) || len(paths) == 0 {
@@ -60,9 +67,9 @@ func (a *App) uploadConfirmationDialog(c *ui.Context) {
 		return
 	}
 	clear := func() { draft.paths = nil; a.features.uploadDraft = nil }
-	ui.Modal(c.Key("upload-confirmation"), &draft.open, func() {
-		ui.Column(c).Width(500).Gap(10).Children(func() {
-			ui.Text(c, fmt.Sprintf("上传 %d 个项目", len(draft.paths))).FontSize(17).Bold()
+	desktopModal(c.Key("upload-confirmation"), &draft.open, func() {
+		dialogBody(c, 500).Gap(10).Children(func() {
+			windowHeading(c, fmt.Sprintf("上传 %d 个项目", len(draft.paths)))
 			ui.Text(c, fmt.Sprintf("目标：%s · %s@%s:%d", draft.pane.profile.Name, draft.pane.profile.Username, draft.pane.profile.Host, draft.pane.profile.Port))
 			for _, source := range draft.paths[:min(len(draft.paths), 10)] {
 				ui.Text(c, filepath.Base(source)).SingleLine()
@@ -70,16 +77,22 @@ func (a *App) uploadConfirmationDialog(c *ui.Context) {
 			if len(draft.paths) > 10 {
 				ui.Text(c, fmt.Sprintf("另有 %d 个项目", len(draft.paths)-10))
 			}
-			ui.Text(c, "重名自动编号；文件夹将递归上传。")
+			if draft.protocol == "rsync" {
+				ui.Text(c, "rsync 按同名路径增量更新，可能覆盖同名文件；目录合并，保留目标额外文件。取消可能留下 .oshell-rsync-partial，再次运行可继续传输。").Wrap()
+			} else if draft.protocol == "SFTP" {
+				ui.Text(c, "同名目标可选择续传或保留两份。目录按文件校验并恢复。")
+			} else {
+				ui.Text(c, "重名自动编号；文件夹将递归上传。")
+			}
 			ui.Field(c, "远程目标目录", func() { ui.TextInput(c, &draft.directory).Label("远程目标目录").AutoFocus() })
 			if draft.err != "" {
 				ui.Text(c, draft.err).TextColor(c.Theme().Danger)
 			}
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			dialogActions(c).Children(func() {
 				ui.Button(c, "取消").OnClick(clear)
 				ui.PrimaryButton(c, "上传").Label("确认上传").OnClick(func() {
 					p := draft.pane
-					if p.closed || p.files != draft.files || p.files.busy || (p.conn != nil && !p.conn.Alive()) {
+					if p.closed || p.files != draft.files || p.files.protocol != draft.protocol || p.files.busy || (p.conn != nil && !p.conn.Alive()) {
 						draft.err = "连接已变化，请重新选择上传内容"
 						return
 					}

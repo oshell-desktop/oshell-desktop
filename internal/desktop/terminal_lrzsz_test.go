@@ -53,7 +53,7 @@ func (c *fragmentedZmodemConn) Write(b []byte) (int, error) {
 }
 
 func TestTerminalRealSzDownloadsToWindowsDirectory(t *testing.T) {
-	for _, mode := range []string{"default", "escape", "crc16", "window", "collision"} {
+	for _, mode := range []string{"default", "escape", "crc16", "window", "collision", "path"} {
 		t.Run(mode, func(t *testing.T) {
 			source, destination := t.TempDir(), t.TempDir()
 			payload := make([]byte, 65539)
@@ -90,7 +90,22 @@ func TestTerminalRealSzDownloadsToWindowsDirectory(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			args = append(append(args, "--"), names...)
+			wireNames := names
+			if mode == "path" {
+				// sz -f sends path components; lrz --junk-path keeps basenames.
+				if err := os.Mkdir(filepath.Join(source, "nested"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				wireNames = make([]string, len(names))
+				for i, name := range names {
+					wireNames[i] = "nested/" + name
+					if err := os.Rename(filepath.Join(source, name), filepath.Join(source, wireNames[i])); err != nil {
+						t.Fatal(err)
+					}
+				}
+				args = append(args, "-f")
+			}
+			args = append(append(args, "--"), wireNames...)
 			conn, wait := testutil.LrzszShellPeer(t, source, "sz", args...)
 			a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
 			p := &pane{}
@@ -123,7 +138,7 @@ func TestTerminalRealSzDownloadsToWindowsDirectory(t *testing.T) {
 			}()
 			waitOperator(t, a, func() bool { return p.transfer.visible && !p.transfer.active })
 			if mode == "collision" {
-				if !strings.Contains(p.transfer.status, "跳过") {
+				if !strings.Contains(p.transfer.status, "另存为 "+names[0]+".0") {
 					t.Fatal(p.transfer.status)
 				}
 			} else if p.transfer.status != "ZMODEM · 传输完成" {
@@ -144,7 +159,15 @@ func TestTerminalRealSzDownloadsToWindowsDirectory(t *testing.T) {
 				}
 			}
 			entries, err := os.ReadDir(destination)
-			if err != nil || len(entries) != len(names) {
+			wantCount := len(names)
+			if mode == "collision" {
+				wantCount++
+				got, err := os.ReadFile(filepath.Join(destination, names[0]+".0"))
+				if err != nil || !bytes.Equal(got, payload) {
+					t.Fatalf("renamed download corrupt/missing: %v", err)
+				}
+			}
+			if err != nil || len(entries) != wantCount {
 				t.Fatalf("partial downloads remain: %v %v", entries, err)
 			}
 		})
@@ -262,6 +285,10 @@ func TestTerminalCancelDownloadRemovesPartialFile(t *testing.T) {
 	payload := bytes.Repeat([]byte("payload"), 1<<19)
 	done := make(chan error, 1)
 	go func() {
+		if _, err := remote.Write(zmodem.BuildZhexHeader(zmodem.FrameZRQINIT, 0)); err != nil {
+			done <- err
+			return
+		}
 		done <- zmodem.SendFiles(remote, []zmodem.SendFile{{Name: "partial.bin", Size: int64(len(payload)), Reader: bytes.NewReader(payload)}}, nil)
 	}()
 	waitOperator(t, a, func() bool { return strings.Contains(p.transfer.status, " / ") })

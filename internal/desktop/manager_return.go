@@ -24,7 +24,7 @@ func (a *App) captureManagerReturn() *managerReturnState {
 	return state
 }
 func (a *App) editManagerProfile(p core.Profile) {
-	if a.passwordLocked() || a.configurationBusy() || a.features.sessionPassword.busy {
+	if a.sessionEditorBlocked() {
 		return
 	}
 	state := a.captureManagerReturn()
@@ -37,6 +37,18 @@ func (a *App) editManagerProfile(p core.Profile) {
 	}
 	a.edit(p)
 	a.features.managerReturn = state
+}
+
+func (a *App) sessionEditorBlocked() bool {
+	if a.passwordLocked() {
+		a.status = "错误：请先解锁再编辑会话"
+		return true
+	}
+	if a.configurationBusy() || a.features.sessionPassword.busy {
+		a.status = "错误：配置正在保存或同步，完成后可编辑会话"
+		return true
+	}
+	return false
 }
 func (a *App) editManagerLink(id string) {
 	state := a.captureManagerReturn()

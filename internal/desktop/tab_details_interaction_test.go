@@ -9,6 +9,67 @@ import (
 	"oshell-desktop/internal/core"
 )
 
+// SF-T09: a late timer frame must observe the pointer inside the card before
+// expiring the grace period. Moving between its fields must not steal focus.
+func TestTabHoverStaysOpenInsideCard(t *testing.T) {
+	a := parityApp(t)
+	p := &pane{id: "hover-pane", profile: core.Profile{Name: "hover fixture", Kind: "ssh", Host: "example.invalid"}}
+	workspace := &tab{id: "hover-tab", name: p.profile.Name, active: p, root: &node{pane: p}}
+	a.tabs = []*tab{workspace}
+	draft := "draft"
+	view := ui.NewTester(func(c *ui.Context) {
+		a.observeTabDetails(c)
+		ui.Column(c).Fill().Children(func() {
+			anchor := ui.Button(c, "Tab anchor")
+			ui.TextInput(c, &draft).Label("Terminal input").AutoFocus()
+			a.tabDetailsHover(c, anchor, workspace)
+		})
+	}, 700, 600)
+	anchor, _ := view.Find("Tab anchor")
+	view.Move(anchor.X+5, anchor.Y+5)
+	workspace.hover.since = time.Now().Add(-time.Second)
+	view.Frame()
+	card, ok := view.Find("标签连接详情")
+	if !ok {
+		t.Fatal("card did not appear")
+	}
+	view.Move(card.X+3, card.Y+3) // Card padding, outside all interactive fields.
+	for i := 0; i < 3; i++ {
+		workspace.hover.last = time.Now().Add(-time.Second) // Late timer; no pointer motion.
+		view.Frame()
+		if _, ok := view.Find("复制会话名称"); !ok {
+			t.Fatal("stationary pointer inside card was timed out")
+		}
+	}
+	copy, _ := view.Find("复制会话名称")
+	view.Move(copy.X+2, copy.Y+2)
+	workspace.hover.last = time.Now().Add(-time.Second)
+	view.Frame()
+	if err := view.Click("复制会话名称"); err != nil || view.Clipboard() != p.profile.Name {
+		t.Fatalf("copy after dwelling inside card: %v, clipboard %q", err, view.Clipboard())
+	}
+	view.Move(650, 550)
+	if _, ok := view.Find("复制会话名称"); !ok {
+		t.Fatal("card closed before leave grace period")
+	}
+	view.Move(copy.X+2, copy.Y+2)
+	workspace.hover.last = time.Now().Add(-time.Second)
+	view.Frame()
+	if _, ok := view.Find("复制会话名称"); !ok {
+		t.Fatal("re-entering card did not cancel dismissal")
+	}
+	view.Move(650, 550)
+	workspace.hover.last = time.Now().Add(-time.Second)
+	view.Frame()
+	if _, ok := view.Find("标签连接详情"); ok {
+		t.Fatal("card stayed visible after leaving and grace period elapsed")
+	}
+	view.Type("x")
+	if !strings.Contains(draft, "x") {
+		t.Fatal("copy stole terminal input focus")
+	}
+}
+
 func TestTabHoverDismissInteractions(t *testing.T) {
 	for _, action := range []string{"escape", "arrow", "text", "composition", "outside click", "outside right click", "outside scroll", "blur", "hide", "identity change"} {
 		t.Run(action, func(t *testing.T) {

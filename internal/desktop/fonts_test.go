@@ -9,6 +9,12 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv("OSHELL_NATIVE_MANAGER_COMPLETION") == "1" {
+		os.Exit(runManagerCompletionFixture())
+	}
+	if os.Getenv("OSHELL_NATIVE_DRAIN_CLOSE") != "" {
+		os.Exit(runNativeDrainClose())
+	}
 	if os.Getenv("OSHELL_P2_NATIVE_LIFECYCLE") == "1" {
 		os.Exit(runP2NativeLifecycle())
 	}

@@ -9,6 +9,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"os"
 	"oshell-desktop/internal/core"
+	"oshell-desktop/internal/diagnostics"
 	"runtime"
 	"strings"
 	"time"
@@ -80,7 +81,7 @@ func (a *App) validateUpdateSettings() error {
 func (a *App) updateSettingsView(c *ui.Context) {
 	state := a.updateState()
 	settings := &a.features.settingsDraft
-	ui.Text(c, "签名更新").FontSize(18).Bold()
+	windowHeading(c, "签名更新")
 	version := mygo.App.Version()
 	if version == "" {
 		version = "开发构建"
@@ -379,6 +380,7 @@ func (a *App) commitUpdate() {
 					a.setConfigurationBusy(false)
 					state.prepared = nil
 					state.status = "正在退出以安装更新…"
+					diagnostics.Event("update_install_quit", nil)
 					mygo.App.Quit()
 				})
 			}()

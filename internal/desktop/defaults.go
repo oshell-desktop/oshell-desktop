@@ -26,9 +26,9 @@ func (a *App) showDefaults() {
 func (a *App) defaultsDialog(c *ui.Context) {
 	f := &a.features
 	d := &f.defaults
-	ui.Modal(c, &f.defaultsOpen, func() {
-		ui.Column(c).Width(550).Gap(12).Children(func() {
-			ui.Text(c, "会话默认属性").FontSize(18).Bold()
+	desktopModal(c, &f.defaultsOpen, func() {
+		dialogBody(c, 550).Gap(12).Children(func() {
+			windowHeading(c, "会话默认属性")
 			ui.Text(c, "用于以后新建的会话，不覆盖已有配置。").TextColor(c.Theme().TextMuted)
 			ui.Tabs(c, &f.defaultsTab, "SSH / SFTP", "FTP", "保持活动")
 			field := func(label string, s *string) { ui.Field(c, label, func() { ui.TextInput(c, s) }) }
@@ -60,7 +60,7 @@ func (a *App) defaultsDialog(c *ui.Context) {
 			if f.defaultsError != "" {
 				ui.Text(c, f.defaultsError).TextColor(c.Theme().Danger)
 			}
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			dialogActions(c).Children(func() {
 				ui.Button(c, "取消").OnClick(func() { f.defaultsOpen = false })
 				ui.PrimaryButton(c, "保存默认属性").OnClick(func() {
 					var e error

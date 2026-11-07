@@ -168,13 +168,13 @@ func (a *App) authenticationChallengeDialog(c *ui.Context) {
 		return
 	}
 	finish := func(cancelled bool) { a.finishChallenge(q, cancelled) }
-	ui.Modal(c.Key(q.id), &q.open, func() {
-		ui.Column(c).Width(500).Gap(12).Children(func() {
+	desktopModal(c.Key(q.id), &q.open, func() {
+		dialogBody(c, 500).Gap(12).Children(func() {
 			title := q.request.Title
 			if title == "" {
 				title = "服务器认证"
 			}
-			ui.Text(c, title).FontSize(18).Bold()
+			windowHeading(c, title)
 			if q.pane.profile.Name != "" {
 				ui.Text(c, q.pane.profile.Name).Bold()
 			}
@@ -210,7 +210,7 @@ func (a *App) authenticationChallengeDialog(c *ui.Context) {
 					passwordProtectionField(c, &q.protection)
 				}
 			}
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			dialogActions(c).Children(func() {
 				cancel := ui.Button(c, "取消").OnClick(func() { finish(true) })
 				label := "继续认证"
 				if q.host != nil {

@@ -53,3 +53,5 @@ func (e *stubEngine) baseline(y float32) float32 { return float32(math.Round(flo
 func (e *stubEngine) register(data []byte, family string) error {
 	return errors.New("mygo: this system has no text engine to add fonts to")
 }
+
+func (e *stubEngine) clearRegistered() error { return nil }

@@ -1,7 +1,9 @@
 package text
 
 import (
+	"bytes"
 	"encoding/binary"
+	"errors"
 	"image"
 	"math"
 	"slices"
@@ -273,8 +275,10 @@ type Glyph struct {
 // System lays out text and rasterizes glyphs with the system's own text
 // engine. Use Shared.
 type System struct {
-	mu  sync.Mutex
-	eng engine
+	permanent []registeredFontData
+	userFonts [][]byte
+	mu        sync.Mutex
+	eng       engine
 	// uiFamily is the family system-ui stands for where the engine does
 	// not know it (SetUIFamily), and rendering the desktop's settings for
 	// rasterizing text, if the app gave them (SetFontRendering).
@@ -458,11 +462,61 @@ func (s *System) RegisterFont(data []byte, family string) error {
 	if err := s.engine().register(data, family); err != nil {
 		return err
 	}
+	s.permanent = append(s.permanent, registeredFontData{bytes.Clone(data), family})
 	s.gen++
 	clear(s.fonts)
 	s.clearLayouts()
 	clear(s.marks)
 	return nil
+}
+
+type registeredFontData struct {
+	data   []byte
+	family string
+}
+
+// ReplaceUserFonts replaces process-private fonts while preserving RegisterFont
+// resources. A failed replacement restores the previous active collection.
+func (s *System) ReplaceUserFonts(fonts [][]byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if slices.EqualFunc(s.userFonts, fonts, bytes.Equal) {
+		return nil
+	}
+	e := s.engine()
+	reset := func(data [][]byte) error {
+		if err := e.clearRegistered(); err != nil {
+			return err
+		}
+		for _, f := range s.permanent {
+			if err := e.register(f.data, f.family); err != nil {
+				return err
+			}
+		}
+		for _, f := range data {
+			if err := e.register(f, ""); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	err := reset(fonts)
+	if err != nil {
+		err = errors.Join(err, reset(s.userFonts))
+	} else {
+		s.userFonts = make([][]byte, len(fonts))
+		for i, f := range fonts {
+			s.userFonts[i] = bytes.Clone(f)
+		}
+	}
+	s.gen++
+	clear(s.fonts)
+	s.clearLayouts()
+	clear(s.marks)
+	clear(s.glyphs)
+	clear(s.places)
+	clear(s.runs)
+	return err
 }
 
 // Preload starts the text engine and finds the system UI font, which the

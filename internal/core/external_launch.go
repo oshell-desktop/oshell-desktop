@@ -3,6 +3,7 @@ package core
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ type TerminalLaunchRequest struct {
 	Password     *string `json:"password,omitempty"`
 	KeyFile      string  `json:"keyFile"`
 	Title        string  `json:"title"`
+	BastionSSH   bool    `json:"bastionSSH,omitempty"`
 	TerminalType string  `json:"terminalType"`
 }
 type FileLaunchRequest struct {
@@ -37,6 +39,9 @@ func validLaunchPassword(password *string) bool {
 func (r TerminalLaunchRequest) ProfileValue() (Profile, error) {
 	p := NewProfile()
 	p.Name = "SSH · " + r.Host
+	if r.BastionSSH && r.Title != "" {
+		p.Name = r.Title
+	}
 	p.Group = ""
 	p.Host = r.Host
 	p.Port = r.Port
@@ -44,6 +49,13 @@ func (r TerminalLaunchRequest) ProfileValue() (Profile, error) {
 	p.IdentityFile = r.KeyFile
 	p.QuickConnect = false
 	p.RuntimeTerminalType = r.TerminalType
+	if r.BastionSSH {
+		host := strings.ToLower(strings.Trim(r.Host, "[]"))
+		if ip := net.ParseIP(host); ip != nil {
+			host = ip.String()
+		}
+		p.RuntimeBastionEndpoint = net.JoinHostPort(host, strconv.Itoa(r.Port))
+	}
 	if r.Version != 1 || !uuidText.MatchString(r.ID) || len(r.Host) > 253 || len(r.Title) > 2048 || len(r.Username) > 1024 || len(r.KeyFile) > 4096 || strings.ContainsFunc(r.Title, unicode.IsControl) || strings.ContainsFunc(r.KeyFile, unicode.IsControl) || !validLaunchPassword(r.Password) || r.Password != nil && r.Username == "" {
 		return p, fmt.Errorf("ZOC 连接参数无效或过长")
 	}

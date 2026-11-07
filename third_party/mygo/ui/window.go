@@ -36,6 +36,12 @@ func RegisterFont(data []byte, family string) error {
 	return text.Shared().RegisterFont(data, family)
 }
 
+// ReplaceUserFonts replaces removable process-private fonts, retaining built-ins.
+func ReplaceUserFonts(fonts [][]byte) error { return text.Shared().ReplaceUserFonts(fonts) }
+
+// FontGeneration changes when cached glyphs and font metrics must be rebuilt.
+func FontGeneration() uint64 { return text.Shared().Generation() }
+
 // AttachContent connects the content to a window; package mygo calls it.
 func (v *Content) AttachContent(conn *surface.Conn) {
 	h := &windowHost{conn: conn}

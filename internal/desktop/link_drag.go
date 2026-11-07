@@ -77,67 +77,57 @@ func (a *App) applyLinkDrop(d linkRootDrag, before, folder string) {
 func (a *App) openLinkMenu(anchor, folder string) {
 	a.linkMenuAnchor = anchor
 	a.linkMenuFolder = folder
+	a.linkMenuExpanded = make(map[string]*bool)
 	a.linkMenuOpen = true
 }
+
+const linkHoverDelay = 250 * time.Millisecond
+
+type linkHoverState struct {
+	since time.Time
+	fired bool
+}
+
+// Open once per pointer visit. A click, manual collapse or Escape must not
+// immediately be undone by the pointer still resting on the same directory.
+func (a *App) expandLinkOnHover(c *ui.Context, item ui.Element, expanded bool, expand func()) {
+	state := ui.Local(item, "link-directory-hover", func() linkHoverState { return linkHoverState{} })
+	if !item.Hovered() {
+		*state = linkHoverState{}
+		return
+	}
+	if expanded || item.Pressed() || item.Dragging() || !c.WindowFocused() || a.modalActive() || a.settingsOpen || a.passwordLocked() {
+		state.fired = true
+		return
+	}
+	if state.fired {
+		return
+	}
+	if state.since.IsZero() {
+		state.since = c.Now()
+	}
+	if remaining := linkHoverDelay - c.Now().Sub(state.since); remaining > 0 {
+		c.After(remaining)
+		return
+	}
+	state.fired = true
+	expand()
+	c.After(0)
+}
+
 func (a *App) linkFolderPopover(c *ui.Context, anchor ui.Element, key string) {
 	if a.linkMenuAnchor != key {
 		return
 	}
 	ui.Popover(c, anchor, &a.linkMenuOpen, func() {
-		ui.Column(c).Width(300).Gap(4).Children(func() {
+		width, height := c.Size()
+		ui.Column(c).Width(min(float32(320), max(1, width-16))).Gap(2).Children(func() {
 			folder := a.linkMenuFolder
-			if folder != "" {
-				ui.Button(c, "返回上级").OnClick(func() {
-					parent := path.Dir(folder)
-					if parent == "." {
-						parent = ""
-					}
-					a.linkMenuFolder = parent
-				})
-			}
-			ui.Scroll(c).MaxHeight(340).FillWidth().Children(func() {
-				full := "Links"
-				if folder != "" {
-					full += "/" + folder
-				}
-				entry := func(key, name, id string) {
-					row := ui.Button(c.Key(key), name).FillWidth().Label("拖动快捷项目 " + name).OnClick(func() {
-						if p, ok := a.profileByID(id); ok {
-							a.linkMenuOpen = false
-							a.request(p, 0)
-						}
-					})
-					row.Drag(a.linkDrag(key))
-				}
-				if folder == "" {
-					for _, item := range a.config.OrderedLinkRootItems() {
-						if item.Kind == "folder" {
-							next := item.Folder
-							ui.Button(c, "▸ "+item.Name).FillWidth().OnClick(func() { a.linkMenuFolder = next })
-						} else {
-							entry(item.Key(), item.Name, item.ProfileID)
-						}
-					}
-					return
-				}
-				for _, dir := range a.config.AllDirectories() {
-					if rest, ok := strings.CutPrefix(dir, full+"/"); ok && rest != "" && !strings.Contains(rest, "/") {
-						next := strings.TrimPrefix(dir, "Links/")
-						ui.Button(c, "▸ "+rest).FillWidth().OnClick(func() { a.linkMenuFolder = next })
-					}
-				}
-				for _, l := range a.config.Links {
-					if l.Folder == folder {
-						entry("link:"+l.ID, l.Name, l.ProfileID)
-					}
-				}
-				for _, p := range a.config.Profiles {
-					if p.Group == full {
-						entry("session:"+p.ID, p.Name, p.ID)
-					}
-				}
+			ui.Scroll(c).MaxHeight(min(float32(340), max(24, height-anchor.Bounds().Y-anchor.Bounds().H-50))).FillWidth().Label("快捷目录树").Children(func() {
+				a.linkFolderTree(c, folder)
 			})
-			ui.Button(c, "管理此快捷目录…").OnClick(func() {
+			ui.Divider(c)
+			flatButton(c, "管理此快捷目录…", folderIcon, "管理此快捷目录…").FillWidth().Justify(ui.Start).OnClick(func() {
 				a.linkMenuOpen = false
 				a.managerGroup = "Links"
 				if folder != "" {
@@ -149,6 +139,72 @@ func (a *App) linkFolderPopover(c *ui.Context, anchor ui.Element, key string) {
 			})
 		})
 	})
+}
+
+// Reuse the sidebar's tree rows while keeping Links' own ordering and actions.
+// Expansion is transient UI state; it never changes the shared configuration.
+func (a *App) linkFolderTree(c *ui.Context, folder string) {
+	children := make(map[string][]core.LinkRootItem)
+	for _, dir := range a.config.AllDirectories() {
+		relative, ok := strings.CutPrefix(dir, "Links/")
+		if !ok || relative == "" {
+			continue
+		}
+		parent := path.Dir(relative)
+		if parent == "." {
+			parent = ""
+		}
+		children[parent] = append(children[parent], core.LinkRootItem{Kind: "folder", Folder: relative, Name: path.Base(relative)})
+	}
+	for _, link := range a.config.Links {
+		children[link.Folder] = append(children[link.Folder], core.LinkRootItem{Kind: "link", ID: link.ID, Name: link.Name, ProfileID: link.ProfileID, Folder: link.Folder})
+	}
+	for _, p := range a.config.Profiles {
+		if relative, ok := strings.CutPrefix(p.Group, "Links/"); ok {
+			children[relative] = append(children[relative], core.LinkRootItem{Kind: "session", ID: p.ID, Name: p.Name, ProfileID: p.ID, Folder: relative})
+		}
+	}
+	children[""] = a.config.OrderedLinkRootItems()
+	if a.linkMenuExpanded == nil {
+		a.linkMenuExpanded = make(map[string]*bool)
+	}
+	if len(children[folder]) == 0 {
+		ui.Text(c, "此目录暂无快捷项目").TextColor(c.Theme().TextMuted).Padding(8)
+		return
+	}
+	ui.Tree(c, func() {
+		var draw func(string)
+		draw = func(parent string) {
+			for _, item := range children[parent] {
+				contextMenu := func(m *ui.Menu) { a.linkContextMenu(m, &item) }
+				if item.Kind == "folder" {
+					open := a.linkMenuExpanded[item.Folder]
+					if open == nil {
+						open = new(bool)
+						a.linkMenuExpanded[item.Folder] = open
+					}
+					row := sessionTreeItem(c.Key(item.Key()), item.Name, open, func() { draw(item.Folder) }, false, sessionIconFor("", false, true, false)).
+						Label("快捷子目录 " + item.Name).Tooltip("/Links/" + item.Folder).OnClick(func() { *open = !*open }).ContextMenu(contextMenu)
+					a.expandLinkOnHover(c, row, *open, func() { *open = true })
+					continue
+				}
+				p, ok := a.profileByID(item.ProfileID)
+				if !ok {
+					continue
+				}
+				shortcut := item.Kind == "link"
+				row := sessionTreeItem(c.Key(item.Key()), item.Name, nil, nil, false, sessionIconFor(p.Kind, shortcut, false, false)).
+					Label("拖动快捷项目 " + item.Name).Tooltip(sessionListTooltip(p, shortcut)).OnClick(func() {
+					if latest, exists := a.profileByID(item.ProfileID); exists {
+						a.linkMenuOpen = false
+						a.request(latest, 0)
+					}
+				})
+				row.Drag(a.linkDrag(item.Key())).ContextMenu(contextMenu)
+			}
+		}
+		draw(folder)
+	}).FillWidth()
 }
 func (a *App) scrollLinkDrag(c *ui.Context, scroll ui.Element, childOver bool) {
 	if d, over := ui.DragOver[linkRootDrag](scroll); childOver || over && a.acceptsLinkDrag(d) {

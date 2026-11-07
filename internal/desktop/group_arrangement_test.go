@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestArrangementsPreserveNamedHiddenAndEmptyGroups(t *testing.T) {
+func TestArrangementsSplitEveryTabAndRetainActiveGroupMetadata(t *testing.T) {
 	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
 	for _, name := range []string{"one", "two", "three"} {
 		operatorPane(t, a, name)
@@ -16,30 +16,31 @@ func TestArrangementsPreserveNamedHiddenAndEmptyGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.moveToGroup(a.tabs[1], named)
+	a.moveToGroup(a.tabs[2], named)
+	named.active = a.tabs[1].id
 	a.hideGroup(named, true)
 	empty, err := a.createGroup("empty")
 	if err != nil {
 		t.Fatal(err)
 	}
-	a.hideGroup(empty, true)
-	owners := map[*tab]string{}
-	for _, tab := range a.tabs {
-		owners[tab] = tab.group
-	}
 	for _, mode := range []string{"horizontal", "vertical", "tile"} {
 		a.arrangeTabs(mode)
-		if a.groupByID(named.id) != named || !named.hidden || a.groupByID(empty.id) != empty || !empty.hidden {
-			t.Fatal("lost named/hidden/empty group", mode)
+		if len(a.groups.root.leaves()) != len(a.tabs) || a.groupByID(empty.id) != nil {
+			t.Fatal("arrangement kept empty/grouped layout")
 		}
-		for tab, group := range owners {
-			if tab.group != group || tab.active.closed || !tab.active.term.Available() {
-				t.Fatal("changed membership or connection", mode)
+		if a.groupByID(a.tabs[1].group) != named || named.hidden {
+			t.Fatal("active group metadata lost or hidden")
+		}
+		for _, tab := range a.tabs {
+			g := a.groupByID(tab.group)
+			if g == nil || len(a.groupTabs(g)) != 1 || tab.active.closed || !tab.active.term.Available() {
+				t.Fatal("arrangement lost tab/connection")
 			}
 		}
 	}
 	a.arrangeTabs("tabs")
 	if len(a.groups.root.leaves()) != 1 || a.groups.root.group.name != "" {
-		t.Fatal("explicit merge retained groups")
+		t.Fatal("merge did not clear custom layout")
 	}
 }
 func TestContextSplitMovesExistingTabWithoutReconnect(t *testing.T) {

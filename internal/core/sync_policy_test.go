@@ -119,7 +119,7 @@ func TestSyncSelectedCategoriesPreserveBothSides15(t *testing.T) {
 func testSyncSelectedCategoriesPreserveBothSides(t *testing.T, mask int) {
 	t.Helper()
 	t.Run(fmt.Sprint(mask), func(t *testing.T) {
-		selection := SyncContentSelection{mask&1 != 0, mask&2 != 0, mask&4 != 0, mask&8 != 0}
+		selection := SyncContentSelection{Sessions: mask&1 != 0, ClientSettings: mask&2 != 0, QuickCommands: mask&4 != 0, SessionDefaults: mask&8 != 0}
 		e, cfg, master := syncEngineFixture(t, t.TempDir())
 		e.Selection = &selection
 		cfg.Settings.FontSize = 19

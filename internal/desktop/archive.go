@@ -7,11 +7,15 @@ import (
 	"fmt"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"os"
 	"oshell-desktop/internal/core"
+	"path/filepath"
 	"reflect"
 )
 
 type archiveState struct {
+	includeFonts, hasFonts               bool
+	sourcePath                           string
 	exportConfig                         *core.Config
 	vendor                               *core.ThirdPartyReport
 	fillMissing                          bool
@@ -73,7 +77,10 @@ func (a *App) importProfiles() {
 			a.report(e)
 			return
 		}
-		a.post(func() { a.features.archive = archiveState{open: true, archive: archive, directory: destination} })
+		_, fontErr := os.Stat(filepath.Join(paths[0]+".assets", "fonts", "library.json"))
+		a.post(func() {
+			a.features.archive = archiveState{open: true, archive: archive, directory: destination, sourcePath: paths[0], hasFonts: fontErr == nil}
+		})
 	}()
 }
 func (a *App) exportProfiles() {
@@ -121,6 +128,7 @@ func (a *App) runArchive() {
 	f.password = ""
 	f.again = ""
 	include, export, directory, archive := f.includePasswords, f.export, f.directory, f.archive
+	includeFonts, sourcePath := f.includeFonts, f.sourcePath
 	if !export {
 		a.setConfigurationBusy(true)
 	}
@@ -129,6 +137,7 @@ func (a *App) runArchive() {
 		defer cancel()
 		importedSessions, importedPasswords := len(archive.Profiles), 0
 		var result core.Config
+		var fontDraft *core.FontLibraryDraft
 		var retry func(*App)
 		var e error
 		if export {
@@ -147,7 +156,7 @@ func (a *App) runArchive() {
 						e = ctx.Err()
 					}
 					if e == nil {
-						e = core.AtomicWrite(path, data)
+						e = core.ExportSessionArchive(ctx, path, data, core.NewFontLibrary(a.store.Dir), includeFonts)
 					}
 				}
 			}
@@ -161,6 +170,13 @@ func (a *App) runArchive() {
 				result, credentials, e = archive.Merge(ctx, snapshot, directory, include, master)
 			}
 			importedPasswords = len(credentials)
+			if e == nil && includeFonts && vendor == nil {
+				var draft core.FontLibraryDraft
+				draft, e = core.NewFontLibrary(a.store.Dir).PrepareArchiveRestore(ctx, sourcePath)
+				if e == nil {
+					fontDraft = &draft
+				}
+			}
 			if e == nil {
 				e = a.store.CommitCredentials(ctx, result, a.vault, credentials, revision)
 			}
@@ -193,8 +209,18 @@ func (a *App) runArchive() {
 				}
 				a.applyCommittedConfig(result)
 				a.status = fmt.Sprintf("已导入 %d 个会话及 %d 个密码", importedSessions, importedPasswords)
+				if fontDraft != nil {
+					if err := a.commitUserFonts(*fontDraft); err != nil {
+						a.status += "；字体未能恢复：" + err.Error()
+					} else {
+						a.status += "；字体备份已合并恢复"
+					}
+				}
 			} else {
 				a.status = "会话已导出"
+				if includeFonts {
+					a.status += "；字体位于同名 .assets/fonts 明文附件目录"
+				}
 			}
 			f.open = false
 		})
@@ -202,13 +228,13 @@ func (a *App) runArchive() {
 }
 func (a *App) archiveDialog(c *ui.Context) {
 	f := &a.features.archive
-	ui.Modal(c, &f.open, func() {
-		ui.Column(c).Width(520).Gap(12).Children(func() {
+	desktopModal(c, &f.open, func() {
+		dialogBody(c, 520).Gap(12).Children(func() {
 			title := "导入会话"
 			if f.export {
 				title = "导出会话"
 			}
-			ui.Text(c, title).FontSize(18).Bold()
+			windowHeading(c, title)
 			if f.export {
 				if selected := f.exportConfig; selected != nil {
 					ui.Text(c, fmt.Sprintf("导出所选范围：%d 个会话 · %d 个引用 · %d 个目录", len(selected.Profiles), len(selected.Links), len(selected.Directories)))
@@ -221,6 +247,13 @@ func (a *App) archiveDialog(c *ui.Context) {
 				ui.TextInput(c, &f.directory).Label("导入目标目录").Disabled(f.busy)
 			}
 			ui.Checkbox(c, &f.includePasswords, "包含保存的密码（登录与代理）").Disabled(f.busy || !f.export && f.passwordCount() == 0)
+			if f.vendor == nil {
+				label := "包含字体文件（明文附件，默认不包含）"
+				if !f.export {
+					label = "恢复同名 .assets/fonts 字体附件（默认不恢复）"
+				}
+				ui.Checkbox(c, &f.includeFonts, label).Disabled(f.busy || !f.export && !f.hasFonts)
+			}
 			if f.vendor != nil && f.vendor.Format == "Xshell" && f.includePasswords {
 				ui.Checkbox(c, &f.fillMissing, "仅补全已存在会话中缺失的密码").Disabled(f.busy)
 			}
@@ -260,7 +293,7 @@ func (a *App) archiveDialog(c *ui.Context) {
 					}
 				})
 			} else {
-				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+				dialogActions(c).Children(func() {
 					ui.Button(c, "取消").OnClick(func() { f.open = false; f.password = ""; f.again = "" })
 					ui.PrimaryButton(c, title).OnClick(a.runArchive)
 				})

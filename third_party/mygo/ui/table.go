@@ -176,9 +176,15 @@ func table(c *context, s *ListState, columns []TableColumn, n int, cell func(row
 	// cells builds a row's cells, with fill building the content of each.
 	cells := func(role Role, fill func(col int)) []*node {
 		boxes := make([]*node, 0, len(order))
-		for _, j := range order {
+		for pos, j := range order {
 			col := &columns[j]
 			box := coreRow(c).Padding(t.Space(1.5), t.Space(2.5)).AlignItems(Center).Shrink(0).Clip().Role(role)
+			if t.CompactLists {
+				box.Padding(1, 6)
+				if pos+1 < len(order) {
+					box.BorderWidth(0, 1, 0, 0).BorderColor(t.Border)
+				}
+			}
 			if w, ok := layout.width(col); ok {
 				box.Width(w)
 			} else {
@@ -202,6 +208,9 @@ func table(c *context, s *ListState, columns []TableColumn, n int, cell func(row
 	table.Children(func() {
 		// The header, which scrolls sideways with the rows.
 		head := coreRow(c).Height(tableRow).Shrink(0).AlignItems(Stretch).Role(RoleRow).Clip()
+		if t.CompactLists {
+			head.Background(t.Surface)
+		}
 		head.Children(func() {
 			heads := cells(RoleColumnHeader, func(j int) {
 				col := &columns[j]
@@ -461,6 +470,9 @@ func (e *node) Selected(on bool) *node {
 	}
 	t := e.c.theme
 	e.checked = 2
+	if t.CompactLists && (e.listRow || e.role == RoleTreeItem) {
+		return e.Background(t.Selection).TextColor(t.Text)
+	}
 	e.Background(t.Accent).TextColor(t.AccentText)
 	return e
 }

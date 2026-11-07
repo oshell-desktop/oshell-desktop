@@ -58,7 +58,7 @@ func (a *App) directoryTree(c *ui.Context, value *string, state *directoryPicker
 					for _, child := range children[directory] {
 						row(child)
 					}
-				}).Selected(selected == directory).Label("会话目录 /" + directory)
+				}).Height(detailRowHeight).Selected(selected == directory).Label("会话目录 /" + directory)
 				if item.Clicked() {
 					*value = directory
 					chosen = true

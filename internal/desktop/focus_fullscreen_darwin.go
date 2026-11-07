@@ -16,27 +16,19 @@ type nativeFocusChrome struct {
 }
 
 func (s *nativeFocusChrome) apply(w *mygo.Window, enabled bool) {
+	if w == nil {
+		return
+	}
+	if enabled {
+		s.prepare(w, true)
+		return
+	}
 	window := objc.ID(w.NativeHandle())
 	if window == 0 {
 		return
 	}
 	sel := objc.RegisterName
-	if enabled {
-		if s.saved {
-			return
-		}
-		s.saved = true
-		s.title = objc.Send[int64](window, sel("titleVisibility"))
-		mask := objc.Send[uint64](window, sel("styleMask"))
-		s.fullSize = mask&(1<<15) != 0
-		for i := range s.hidden {
-			button := window.Send(sel("standardWindowButton:"), uint64(i))
-			s.hidden[i] = objc.Send[bool](button, sel("isHidden"))
-			button.Send(sel("setHidden:"), true)
-		}
-		window.Send(sel("setTitleVisibility:"), int64(1))
-		window.Send(sel("setStyleMask:"), mask|1<<15)
-	} else if s.saved {
+	if s.saved && !w.IsFullScreen() {
 		window.Send(sel("setTitleVisibility:"), s.title)
 		mask := objc.Send[uint64](window, sel("styleMask"))
 		if !s.fullSize {
@@ -47,6 +39,29 @@ func (s *nativeFocusChrome) apply(w *mygo.Window, enabled bool) {
 		}
 		s.saved = false
 	}
+}
+
+func (s *nativeFocusChrome) prepare(w *mygo.Window, hideButtons bool) {
+	window := objc.ID(w.NativeHandle())
+	if window == 0 {
+		return
+	}
+	sel := objc.RegisterName
+	mask := objc.Send[uint64](window, sel("styleMask"))
+	if !s.saved {
+		s.saved = true
+		s.title = objc.Send[int64](window, sel("titleVisibility"))
+		s.fullSize = mask&(1<<15) != 0
+		for i := range s.hidden {
+			s.hidden[i] = objc.Send[bool](window.Send(sel("standardWindowButton:"), uint64(i)), sel("isHidden"))
+		}
+	}
+	// Ordinary green-button fullscreen retains the system buttons on reveal.
+	for i, hidden := range s.hidden {
+		window.Send(sel("standardWindowButton:"), uint64(i)).Send(sel("setHidden:"), hideButtons || hidden)
+	}
+	window.Send(sel("setTitleVisibility:"), int64(1))
+	window.Send(sel("setStyleMask:"), mask|1<<15)
 }
 
 // These selectors are absent from the pinned mygo delegate. Add only missing
@@ -69,6 +84,24 @@ func (a *App) registerFocusWindow() {
 		return
 	}
 	focusDelegateClasses[class] = true
+	class.AddMethod(objc.RegisterName("windowWillEnterFullScreen:"), objc.NewIMP(func(_ objc.ID, _ objc.SEL, n objc.ID) {
+		window := n.Send(objc.RegisterName("object"))
+		if owner := focusWindows[window]; owner != nil {
+			owner.focusFullscreen.transitioning = true
+			owner.focusFullscreen.target = true
+			owner.focusFullscreen.native.prepare(owner.win, owner.focusFullscreen.chrome)
+		}
+	}), "v@:@")
+	class.AddMethod(objc.RegisterName("windowWillExitFullScreen:"), objc.NewIMP(func(_ objc.ID, _ objc.SEL, n objc.ID) {
+		window := n.Send(objc.RegisterName("object"))
+		if owner := focusWindows[window]; owner != nil {
+			owner.focusFullscreen.transitioning = true
+			owner.focusFullscreen.target = false
+			if owner.focusFullscreen.chrome {
+				owner.focusFullscreen.requested = false
+			}
+		}
+	}), "v@:@")
 	for _, entering := range []bool{true, false} {
 		name := "windowDidFailToExitFullScreen:"
 		if entering {
@@ -78,6 +111,9 @@ func (a *App) registerFocusWindow() {
 			if owner := focusWindows[w]; owner != nil {
 				owner.focusFullscreen.transitioning = false
 				owner.focusFullscreen.requested = !entering
+				if entering {
+					owner.focusFullscreen.native.apply(owner.win, false)
+				}
 				owner.deferFullscreenReconcile()
 			}
 		}), "v@:@")

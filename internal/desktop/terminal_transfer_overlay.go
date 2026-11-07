@@ -106,7 +106,7 @@ func (a *App) terminalTransferCard(c *ui.Context, p *pane, now time.Time) {
 }
 
 func transferNoticeCard(c *ui.Context, s *transferNoticeState, direction, session string, now time.Time, actions func()) {
-	ui.Column(c).Padding(12).Gap(7).Radius(8).Background(c.Theme().Background).Border(1, c.Theme().Border).Children(func() {
+	panelSurface(c).Gap(8).Shadow(0, 4, 16, 0, ui.RGBA(0, 0, 0, .16)).Children(func() {
 		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, direction).FontSize(13).FontWeight(600).TextColor(c.Theme().Accent).Shrink(0)
 			ui.Text(c, session).SingleLine().Grow(1).MinWidth(0).TextColor(c.Theme().TextMuted).Tooltip(session)

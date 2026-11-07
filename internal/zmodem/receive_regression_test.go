@@ -36,15 +36,15 @@ func TestReceiveAdvertisesStandardZRINIT(t *testing.T) {
 }
 
 func TestSenderDoesNotReuseConsumedZRINIT(t *testing.T) {
-	s := &sender{}
-	matches := 0
-	for _, b := range append(BuildZhexHeader(FrameZRINIT, 0x23000000), []byte("unrelated")...) {
-		if _, ok := s.matchNextHexFrame(b); ok {
-			matches++
-		}
+	wire := append(BuildZhexHeader(FrameZRINIT, 0x23000000), []byte("unrelated")...)
+	c := &wireFixture{Reader: bytes.NewReader(wire)}
+	s := newSender(c, nil, "")
+	defer s.reader.close()
+	if err := s.waitForZrinit(); err != nil {
+		t.Fatal(err)
 	}
-	if matches != 1 {
-		t.Fatalf("consumed ZRINIT matched %d times", matches)
+	if err := s.waitForZrinit(); !errors.Is(err, io.EOF) {
+		t.Fatalf("consumed ZRINIT matched again: %v", err)
 	}
 }
 
@@ -158,7 +158,8 @@ func TestSenderRetriesWhenReceiverRejectsEOF(t *testing.T) {
 			t.Fatalf("header want=%d got=%d: %v", want, kind, err)
 		}
 	}
-	header(FrameZRQINIT)
+	// An already-running rz initiates the upload. The first sender response
+	// must be ZFILE, not another initialization request.
 	remote.Write(BuildZhexHeader(FrameZRINIT, 0x23000000))
 	header(FrameZFILE)
 	if _, _, err := r.readSubpacket(); err != nil {

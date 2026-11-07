@@ -67,7 +67,7 @@ func (a *App) standaloneSCPDialog(c *ui.Context) {
 			client := &recordedFileSystem{RemoteFileSystem: &standaloneSCPFileSystem{connection: connection}, log: records, task: task, protocol: "SCP"}
 			defer client.finish()
 			if upload {
-				paths, err := chooseUploadItems(a.win, false)
+				paths, err := chooseUploadItems(a.fileParent(), false)
 				if err != nil {
 					return err
 				}
@@ -79,7 +79,7 @@ func (a *App) standaloneSCPDialog(c *ui.Context) {
 				}
 				return client.Upload(ctx, paths[0], remote, a.transferProgress(p, ctx))
 			}
-			directories, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: "选择 SCP 下载保存目录", Directory: true})
+			directories, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.fileParent(), Title: "选择 SCP 下载保存目录", Directory: true})
 			if err != nil {
 				return err
 			}
@@ -93,15 +93,15 @@ func (a *App) standaloneSCPDialog(c *ui.Context) {
 			return client.Download(ctx, remote, target, false, a.transferProgress(p, ctx))
 		})
 	}
-	ui.Modal(c.Key("standalone-scp"), &draft.open, func() {
-		ui.Column(c).Width(530).Gap(10).Children(func() {
-			ui.Text(c, "SCP 文件传输").Bold().FontSize(18)
+	desktopModal(c.Key("standalone-scp"), &draft.open, func() {
+		dialogBody(c, 530).Gap(10).Children(func() {
+			windowHeading(c, "SCP 文件传输")
 			ui.Text(c, "可用于没有 SFTP 子系统的 SSH 服务器。填写完整远程路径；上传可能覆盖该路径，下载重名自动编号。")
 			ui.TextInput(c, &draft.remote).Label("SCP 远程路径").AutoFocus()
 			if draft.err != "" {
 				ui.Text(c, draft.err).TextColor(c.Theme().Danger)
 			}
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			dialogActions(c).Children(func() {
 				ui.Button(c, "取消").OnClick(func() { a.features.scpDraft = nil })
 				ui.Button(c, "上传…").OnClick(func() { run(true) })
 				ui.Button(c, "下载…").OnClick(func() { run(false) })

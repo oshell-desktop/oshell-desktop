@@ -6,6 +6,8 @@ import (
 	"oshell-desktop/internal/core"
 	"path/filepath"
 	"testing"
+
+	"github.com/egoist/mygo/ui"
 )
 
 func TestEncryptedStartupUnlockLoadsConfigurationAndRelocks(t *testing.T) {
@@ -39,19 +41,43 @@ func TestEncryptedStartupUnlockLoadsConfigurationAndRelocks(t *testing.T) {
 	a := newApp(reopened, initial)
 	a.features.startupUnlock = true
 	a.features.vaultAction = "unlock"
-	a.features.master = "wrong"
-	a.runVaultAction()
+	a.features.vaultOpen = true
+	tt := ui.NewTester(a.view, 1000, 600)
+	if err := tt.Click("主密码"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Compose("合成", 2)
+	tt.Key(0, ui.KeyEnter)
+	if a.features.vaultBusy {
+		t.Fatal("IME confirmation submitted the password")
+	}
+	tt.Compose("", 0)
+	tt.Type("wrong")
+	tt.Key(0, ui.KeyEnter)
+	if !a.features.vaultBusy {
+		t.Fatal("Enter in the master password field did not start unlocking")
+	}
 	waitOperator(t, a, func() bool { return !a.features.vaultBusy })
+	tt.Frame()
 	if !a.passwordLocked() || a.features.vaultError == "" || len(a.config.Profiles) != 0 {
 		t.Fatal("wrong password exposed configuration")
+	}
+	if !tt.HasText(a.features.vaultError) {
+		t.Fatal("wrong password error was not displayed")
 	}
 	after, _ := os.ReadFile(filepath.Join(dir, "config.json"))
 	if !bytes.Equal(after, protected) {
 		t.Fatal("failed unlock wrote config")
 	}
-	a.features.master = master
-	a.runVaultAction()
+	if err := tt.Click("主密码"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type(master)
+	tt.Key(0, ui.KeyEnter)
+	// Repeated Enter while busy must not submit a cleared password again.
+	tt.Key(0, ui.KeyEnter)
 	waitOperator(t, a, func() bool { return !a.features.vaultBusy })
+	tt.Frame()
 	if a.passwordLocked() || len(a.config.Profiles) != 1 || a.config.Profiles[0].Host != p.Host || a.features.startupUnlock {
 		t.Fatal("configuration not loaded after unlock", a.features.vaultError)
 	}
@@ -84,7 +110,11 @@ func TestLegacyMasterUnlockProtectsExistingPlainConfig(t *testing.T) {
 	a := newApp(store, cfg)
 	a.features.vaultAction = "unlock"
 	a.features.master = "legacy-master-password"
-	a.runVaultAction()
+	a.features.vaultOpen = true
+	tt := ui.NewTester(a.vaultDialog, 700, 400)
+	if err := tt.Click("解锁"); err != nil {
+		t.Fatal(err)
+	}
 	waitOperator(t, a, func() bool { return !a.features.vaultBusy })
 	if a.features.vaultError != "" {
 		t.Fatal(a.features.vaultError)

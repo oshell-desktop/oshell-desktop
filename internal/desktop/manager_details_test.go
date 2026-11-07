@@ -155,6 +155,54 @@ func TestManagerSearchKeyboardAndCompactLayout(t *testing.T) {
 	}
 }
 
+func TestManagerDetailsDensity(t *testing.T) {
+	for _, mode := range []string{"light", "dark"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := core.DefaultConfig()
+			cfg.Settings.InterfaceTheme = mode
+			cfg.Directories = []string{"01 生产环境", "02 测试环境", "03 数据中心", "04 网络设备", "05 运维工具"}
+			for i, name := range []string{"bj-gateway", "bj-jumpserver", "files-backup", "开发环境 · 本地终端"} {
+				p := core.NewProfile()
+				p.Name, p.Group = name, ""
+				p.Host, p.Username = fmt.Sprintf("192.0.2.%d", i+10), "deploy"
+				if i == 2 {
+					p.Kind = "sftp"
+				} else if i == 3 {
+					p.Kind = "local"
+				}
+				cfg.Profiles = append(cfg.Profiles, p)
+			}
+			for _, size := range [][2]int{{900, 580}, {740, 440}} {
+				a := newApp(&core.Store{Dir: t.TempDir()}, cfg)
+				view := ui.NewTester(a.managerView, size[0], size[1])
+				first, ok := view.Find(cfg.Directories[0])
+				second, found := view.Find(cfg.Directories[1])
+				if !ok || !found || second.Y-first.Y < 22 || second.Y-first.Y > 26 {
+					t.Fatalf("unexpected directory row spacing: %+v, %+v", first, second)
+				}
+				var right float32
+				for _, label := range []string{"名称", "主机", "用户名", "协议", "端口", "操作"} {
+					header, ok := view.Find(label)
+					if !ok || header.X < right || header.X+header.W > float32(size[0]) {
+						t.Fatalf("%dx%d column %s: %+v", size[0], size[1], label, header)
+					}
+					right = header.X + header.W
+				}
+				if err := view.Click("bj-jumpserver"); err != nil {
+					t.Fatal(err)
+				}
+				view.Frame()
+				if !a.managerSelection.Has(cfg.Profiles[1].ID) {
+					t.Fatal("compact session row did not select the clicked profile")
+				}
+				if size[0] == 900 {
+					snapshot(t, view, "manager-details-"+mode+".png")
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkManagerRows(b *testing.B) {
 	cfg := core.DefaultConfig()
 	for i := 0; i < 1000; i++ {

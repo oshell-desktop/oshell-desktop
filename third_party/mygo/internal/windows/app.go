@@ -177,8 +177,15 @@ func (b *Backend) Run() error {
 	postMessage(b.appHwnd, wmAppReady, 0, 0)
 	var m msg
 	for {
-		r, _, _ := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
+		r, _, callErr := procGetMessageW.Call(uintptr(unsafe.Pointer(&m)), 0, 0, 0)
 		if int32(r) <= 0 {
+			errno := uintptr(0)
+			if int32(r) < 0 {
+				if code, ok := callErr.(syscall.Errno); ok {
+					errno = uintptr(code)
+				}
+			}
+			log.Printf("OSHELL_NATIVE_LOOP result=%d code=%d error=%d", int32(r), m.WParam, errno)
 			break
 		}
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))
@@ -342,11 +349,14 @@ func (b *Backend) appMessage(m uint32, wp, lp uintptr) (uintptr, bool) {
 			return 0, true
 		}
 	case wmAppDeviceRemoved:
+		log.Printf("OSHELL_NATIVE_EVENT kind=device_removed value=%d flags=0", wp)
 		b.deviceRemoved(wp)
 		return 0, true
 	case wmQueryEndSession:
+		log.Printf("OSHELL_NATIVE_EVENT kind=session_query value=%d flags=%d", wp, lp)
 		return 1, true
 	case wmEndSession:
+		log.Printf("OSHELL_NATIVE_EVENT kind=session_end value=%d flags=%d", wp, lp)
 		if wp != 0 {
 			b.h.Terminating()
 		}

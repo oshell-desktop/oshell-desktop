@@ -44,13 +44,52 @@ type TransferProgress struct {
 	Files int
 }
 type transferState struct {
-	ctx     context.Context
-	client  *sftp.Client
-	report  func(TransferProgress)
-	bytes   int64
-	files   int
-	visited int
-	last    time.Time
+	ctx        context.Context
+	client     *sftp.Client
+	report     func(TransferProgress)
+	bytes      int64
+	files      int
+	visited    int
+	last       time.Time
+	checkpoint *SFTPCheckpoint
+}
+
+func (s *transferState) resumeLeaf(source, target string) error {
+	root := s.checkpoint
+	cp := SFTPCheckpoint{Source: source, Target: target, Upload: root.Upload, StateDir: root.StateDir, Identity: root.Identity, ResumeExisting: true}
+	start := s.bytes
+	err := cp.Run(s.ctx, s.client, func(p TransferProgress) {
+		s.bytes = start + p.Bytes
+		if s.report != nil {
+			p.Bytes = s.bytes
+			p.Files = s.files
+			s.report(p)
+		}
+	})
+	if err == nil {
+		s.files++
+	}
+	return err
+}
+
+func (s *transferState) makeDirectory(target string, depth int, mkdir func(string) error) error {
+	err := mkdir(target)
+	if s.checkpoint == nil {
+		return err
+	}
+	if err != nil {
+		if depth == 0 && !s.checkpoint.ResumeExisting && !s.checkpoint.initialized {
+			return err
+		}
+		info, e := s.checkpoint.statTarget(s.client, target)
+		if e != nil || !RemoteFileTypeKnown(info) || !info.IsDir() {
+			return err
+		}
+	}
+	if depth == 0 {
+		s.checkpoint.initialized = true
+	}
+	return nil
 }
 
 func (s *transferState) copy(dst io.Writer, src io.Reader, name string) error {
@@ -113,7 +152,7 @@ func (s *transferState) upload(local, remote string, depth int) error {
 		return fmt.Errorf("不跟随符号链接：%s", local)
 	}
 	if info.IsDir() {
-		if e = s.client.Mkdir(remote); e != nil {
+		if e = s.makeDirectory(remote, depth, s.client.Mkdir); e != nil {
 			return e
 		}
 		entries, e := os.ReadDir(local)
@@ -132,6 +171,9 @@ func (s *transferState) upload(local, remote string, depth int) error {
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("不支持的文件类型：%s", local)
+	}
+	if s.checkpoint != nil {
+		return s.resumeLeaf(local, remote)
 	}
 	src, e := os.Open(local)
 	if e != nil {
@@ -196,17 +238,20 @@ func (s *transferState) download(remote, local string, depth int) error {
 		return e
 	}
 	info, e := s.client.Lstat(remote)
-	if depth == 0 {
+	if depth == 0 && s.checkpoint == nil {
 		info, e = s.client.Stat(remote)
 	}
 	if e != nil {
 		return e
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
+		if depth == 0 {
+			return fmt.Errorf("不跟随远程符号链接")
+		}
 		return nil // Identified recursive child links are skipped.
 	}
 	if info.IsDir() {
-		if e = os.Mkdir(local, 0700); e != nil {
+		if e = s.makeDirectory(local, depth, func(name string) error { return os.Mkdir(name, 0700) }); e != nil {
 			return e
 		}
 		entries, e := s.client.ReadDir(remote)
@@ -225,6 +270,9 @@ func (s *transferState) download(remote, local string, depth int) error {
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("不支持的远程文件类型")
+	}
+	if s.checkpoint != nil {
+		return s.resumeLeaf(remote, local)
 	}
 	src, e := s.client.Open(remote)
 	if e != nil {

@@ -28,11 +28,16 @@ func (a *App) openManager() {
 	a.managerParentClick = false
 	w := mygo.NewWindow(mygo.WindowOptions{Parent: a.win, Title: "会话管理", Width: 900, Height: 580, MinWidth: 740, MinHeight: 440, Content: ui.View(a.managerView)})
 	a.manager = w
-	w.OnClosed(func() {
-		if a.manager == w {
-			a.manager = nil
-		}
-	})
+	w.OnClosed(func() { a.managerClosed(w) })
+}
+func (a *App) managerClosed(w *mygo.Window) {
+	if a.manager == w {
+		a.manager = nil
+		a.managerRename = nil
+	}
+	// Closing for an editor must not start sync in the gap before edit()
+	// sets its modal flag. Native close is deferred until that action ends.
+	a.resumeDeferredSyncAfterSettings()
 }
 func (a *App) closeManager() {
 	a.managerRename = nil
@@ -156,6 +161,9 @@ func (a *App) enterRow(row sessionRow) {
 func (a *App) managerView(c *ui.Context) {
 	defer a.resumeDeferredUpdate() // Modal teardown may happen after drain during this frame.
 	a.drain()
+	if !c.Valid() {
+		return
+	}
 	if a.managerRename != nil && c.Shortcut(0, ui.KeyEscape) {
 		a.managerRename = nil
 		return
@@ -172,47 +180,23 @@ func (a *App) managerView(c *ui.Context) {
 		return
 	}
 	focusResults := false
-	query := core.NewSessionQuery(a.query)
-	ui.Column(c).Fill().Padding(12).Gap(9).Children(func() {
-		ui.Toolbar(c, func() {
-			toolButton(c, "所有会话", folderIcon, "所有会话").OnClick(func() {
-				a.navigateManager("")
-			})
-			parentDrop := toolButton(c, "上一级", arrowUpIcon, "上一级").Disabled(a.managerGroup == "" && !a.managerAll).OnClick(func() {
-				a.navigateManager(managerParent(a.managerGroup))
-			})
-			parentDestination := managerParent(a.managerGroup)
-			if a.managerAll {
-				parentDestination = ""
-			}
-			a.managerDrop(parentDrop, parentDestination)
-			location := "/" + a.managerGroup
-			if a.managerAll {
-				location = "所有会话"
-			}
-			locationDrop := ui.Text(c, location).FontSize(12).TextColor(c.Theme().TextMuted).Grow(1)
-			currentDestination := a.managerGroup
-			if a.managerAll {
-				currentDestination = ""
-			}
-			a.managerDrop(locationDrop, currentDestination)
-			toolButton(c, "新建目录", folderIcon, "新目录").OnClick(func() { a.openDirectory("新建目录", a.managerGroup) })
-			toolButton(c, "新建会话", plusIcon, "新建").OnClick(func() {
-				kind := a.managerProtocol
-				if kind != "ssh" && kind != "sftp" && kind != "ftp" {
-					kind = "ssh"
-				}
-				p := a.newProfile(kind)
-				if a.managerGroup != "" {
-					p.Group = a.managerGroup
-				}
-				a.editManagerProfile(p)
-			})
-		}).Height(29).Padding(0)
-		ui.Row(c).Gap(8).Children(func() {
-			selectValue(c, "协议分类", &a.managerProtocol, [][2]string{{"", "全部协议"}, {"ssh", "SSH"}, {"sftp", "SFTP"}, {"ftp", "FTP"}, {"local", "本地"}})
-			ui.Icon(c, searchIcon).FontSize(15).TextColor(c.Theme().TextMuted)
-			search := ui.TextInput(c, &a.query).Label("会话搜索").Placeholder("名称、IP、用户名、端口；空格分隔关键词").Grow(1).Height(28)
+	ui.Column(c).Fill().Padding(6).Gap(4).Children(func() {
+		ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
+			ui.Toolbar(c, func() {
+				toolButton(c, "新建会话", plusIcon, "新建").Disabled(a.configurationBusy()).OnClick(func() {
+					kind := a.managerProtocol
+					if kind != "ssh" && kind != "sftp" && kind != "ftp" {
+						kind = "ssh"
+					}
+					p := a.newProfile(kind)
+					if a.managerGroup != "" {
+						p.Group = a.managerGroup
+					}
+					a.editManagerProfile(p)
+				})
+				toolButton(c, "新建目录", folderIcon, "新建目录").Disabled(a.configurationBusy()).OnClick(func() { a.openDirectory("新建目录", a.managerGroup) })
+			}).Shrink(0).Padding(0)
+			search := ui.TextInput(c, &a.query).Label("会话搜索").Placeholder("搜索名称、主机、用户名或端口").Grow(1).MinWidth(0).Height(28)
 			for _, key := range a.config.Settings.KeyboardShortcuts.Bindings("find", runtime.GOOS) {
 				if c.Shortcut(shortcutMods(key), shortcutKey(key.KeyCode)) {
 					search.Focus()
@@ -221,6 +205,7 @@ func (a *App) managerView(c *ui.Context) {
 			if search.Changed() {
 				a.refreshManagerSearchSelection()
 			}
+			selectValue(c, "协议分类", &a.managerProtocol, [][2]string{{"", "全部协议"}, {"ssh", "SSH"}, {"sftp", "SFTP"}, {"ftp", "FTP"}, {"local", "本地"}})
 			scope := a.managerSearchScope
 			ui.Row(c).Disabled(len(core.NewSessionQuery(a.query).Terms) == 0).Children(func() {
 				selectValue(c, "会话搜索范围", &a.managerSearchScope, [][2]string{{"", "当前目录及子目录"}, {"all", "全部目录"}})
@@ -246,7 +231,27 @@ func (a *App) managerView(c *ui.Context) {
 				a.connectManagerSelection()
 			}
 		})
-		query = core.NewSessionQuery(a.query)
+		ui.Row(c).Height(26).AlignItems(ui.Center).Padding(0, 3).Gap(4).
+			Background(panelColor(c)).Border(1, c.Theme().Border).Children(func() {
+			root := flatButton(c, "所有会话", folderIcon, "所有会话").OnClick(func() { a.navigateManager("") })
+			a.managerDrop(root, "")
+			location, destination := "", a.managerGroup
+			if a.managerAll {
+				location = "/ 全部目录"
+				destination = ""
+			} else if a.managerGroup != "" {
+				location = "/ " + a.managerGroup
+			}
+			current := ui.Row(c).Grow(1).MinWidth(0).Height(24).AlignItems(ui.Center).Children(func() {
+				ui.Text(c, location).MinWidth(0).SingleLine().Tooltip(location)
+			})
+			a.managerDrop(current, destination)
+			parent := managerParent(destination)
+			up := flatButton(c, "上一级", arrowUpIcon, "").Disabled(destination == "" && !a.managerAll).
+				OnClick(func() { a.navigateManager(parent) })
+			a.managerDrop(up, parent)
+		})
+		query := core.NewSessionQuery(a.query)
 		rows := a.managerRows()
 		var chosen []sessionRow
 		for _, r := range rows {
@@ -262,19 +267,17 @@ func (a *App) managerView(c *ui.Context) {
 		a.managerList.Key = func(i int) any { return rows[i].id }
 		a.managerList.Label = func(i int) string { return rows[i].name }
 
-		columns := []ui.TableColumn{{Title: "名称", Width: 210, MinWidth: 160}, {Title: "协议", Width: 64, MinWidth: 56}, {Title: "主机", Width: 190, MinWidth: 140}, {Title: "用户名", Width: 100, MinWidth: 80}, {Title: "端口", Width: 60, MinWidth: 56}, {ID: "actions", Width: 48, MinWidth: 48, Align: ui.Center, Fixed: true}}
+		columns := []ui.TableColumn{
+			{Title: "名称", MinWidth: 170}, {Title: "主机", Width: 200, MinWidth: 140},
+			{Title: "用户名", Width: 112, MinWidth: 80}, {Title: "协议", Width: 70, MinWidth: 56},
+			{Title: "端口", Width: 64, MinWidth: 56}, {Title: "操作", ID: "actions", Width: 44, Align: ui.Center, Fixed: true},
+		}
 		table := ui.Table(c, a.managerList, columns, len(rows), func(row, col int) {
 			r := rows[row]
 			p := r.profile
-			textColor, iconColor := c.Theme().Text, c.Theme().Accent
-			selected := a.managerSelection.Has(r.id) || a.managerSelection.Len() == 0 && a.managerRow == row
-			if selected {
-				textColor = c.Theme().AccentText
-				iconColor = textColor
-			}
 			if col == 5 {
 				if !r.parent && !(r.folder && r.group == "Links") {
-					rowIconButton(c, "编辑 "+r.name, editIcon, iconColor).OnClick(func() {
+					rowIconButton(c, "编辑 "+r.name, editIcon, c.Theme().TextMuted).Size(24, 20).Disabled(a.configurationBusy()).OnClick(func() {
 						if r.folder {
 							a.openDirectory("移动 / 重命名目录", r.group)
 						} else if r.linkID != "" {
@@ -295,10 +298,9 @@ func (a *App) managerView(c *ui.Context) {
 				if r.folder {
 					tip = style.label + "\n/" + r.group
 				}
-				cell := ui.Row(c).FillWidth().Height(32).Gap(7).Children(func() {
-					style.draw(c, selected)
-					ui.RichText(c, managerSearchSpans(r.name, query)...).SingleLine().Tooltip(tip).TextColor(textColor).Grow(1).MinWidth(0)
-
+				cell := ui.Row(c).FillWidth().Height(22).AlignItems(ui.Center).Gap(4).Children(func() {
+					style.draw(c)
+					ui.RichText(c, managerSearchSpans(r.name, query)...).SingleLine().Tooltip(tip).TextColor(c.Theme().Text).Grow(1).MinWidth(0)
 				})
 				cell.HandleInput(func(ev ui.InputEvent) bool { return a.managerCellInput(r, ev) })
 				cell.ContextMenu(func(m *ui.Menu) { a.managerContextMenu(c, m, r.id) })
@@ -317,36 +319,33 @@ func (a *App) managerView(c *ui.Context) {
 				}
 				return
 			}
-			if r.folder {
-				ui.Row(c).FillWidth().Height(32).HandleInput(func(ev ui.InputEvent) bool { return a.managerCellInput(r, ev) }).ContextMenu(func(m *ui.Menu) { a.managerContextMenu(c, m, r.id) }).Children(func() {
-
+			field := ui.Row(c).FillWidth().Height(22).AlignItems(ui.Center).HandleInput(func(ev ui.InputEvent) bool { return a.managerCellInput(r, ev) }).ContextMenu(func(m *ui.Menu) { a.managerContextMenu(c, m, r.id) })
+			if !r.folder {
+				field.Children(func() {
+					var value string
+					switch col {
+					case 1:
+						value = p.Host
+						if p.Kind == "local" {
+							value = "本地终端"
+						}
+					case 2:
+						value = p.Username
+					case 3:
+						value = strings.ToUpper(p.Kind)
+						if p.Kind == "local" {
+							value = "本地"
+						}
+					case 4:
+						value = fmt.Sprint(p.Port)
+						if p.Kind == "local" {
+							value = "—"
+						}
+					}
+					ui.RichText(c, managerSearchSpans(value, query)...).SingleLine().Tooltip(value).TextColor(c.Theme().Text).MinWidth(0)
 				})
-				return
 			}
-			s := ""
-			switch col {
-			case 1:
-				s = strings.ToUpper(p.Kind)
-				if p.Kind == "local" {
-					s = "本地"
-				}
-			case 2:
-				s = p.Host
-				if p.Kind == "local" {
-					s = "本地终端"
-				}
-			case 3:
-				s = p.Username
-			case 4:
-				s = fmt.Sprint(p.Port)
-				if p.Kind == "local" {
-					s = "—"
-				}
-			}
-			ui.Row(c).FillWidth().Height(32).HandleInput(func(ev ui.InputEvent) bool { return a.managerCellInput(r, ev) }).ContextMenu(func(m *ui.Menu) { a.managerContextMenu(c, m, r.id) }).Children(func() {
-				ui.RichText(c, managerSearchSpans(s, query)...).SingleLine().Tooltip(s).TextColor(textColor)
-			})
-		}).Grow(1).MinHeight(0).BorderWidth(1).BorderColor(c.Theme().Border).Radius(4).Label("会话列表")
+		}).Grow(1).MinHeight(0).Background(panelColor(c)).Border(1, c.Theme().Border).Label("会话列表")
 		a.managerClipboardShortcuts(c, table)
 		if a.managerRename == nil && table.Shortcut(0, ui.KeyF2) && len(chosen) == 1 {
 			a.beginManagerRename(chosen[0])
@@ -446,7 +445,9 @@ func (a *App) managerView(c *ui.Context) {
 			}
 			ui.PrimaryButton(c, label).Disabled(count == 0 && label != "打开").OnClick(a.connectManagerSelection)
 		})
-		if strings.HasPrefix(a.status, "错误") || strings.Contains(a.status, "失败") || strings.HasPrefix(a.status, "已复制") || strings.HasPrefix(a.status, "已粘贴") {
+		if a.configurationBusy() {
+			ui.Text(c, "配置正在保存或同步，完成后可继续编辑、复制和粘贴。").TextColor(c.Theme().TextMuted).FontSize(11)
+		} else if strings.HasPrefix(a.status, "错误") || strings.Contains(a.status, "失败") || strings.HasPrefix(a.status, "已复制") || strings.HasPrefix(a.status, "已粘贴") {
 			color := c.Theme().TextMuted
 			if strings.HasPrefix(a.status, "错误") || strings.Contains(a.status, "失败") {
 				color = c.Theme().Danger

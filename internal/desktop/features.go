@@ -198,6 +198,8 @@ func (a *App) featureDialogs(c *ui.Context) {
 	f := &a.features
 	a.vaultDialog(c)
 	a.standaloneSCPDialog(c)
+	a.standaloneRsyncDialog(c)
+	a.terminalFileCommandDialog(c)
 	a.uploadConfirmationDialog(c)
 	a.fileActionDialog(c)
 	a.inputDialogs(c)
@@ -208,12 +210,13 @@ func (a *App) featureDialogs(c *ui.Context) {
 	a.archiveDialog(c)
 	a.nativeMigrationDialog(c)
 	a.proxyManagerDialog(c)
+	a.globalProxyDialog(c)
 	a.quickSwitchDialog(c)
 	a.quickCommandDialog(c)
 	a.sidebarRenameDialog(c)
-	ui.Modal(c, &f.directoryOpen, func() {
-		ui.Column(c).Width(470).Gap(12).Children(func() {
-			ui.Text(c, f.directoryAction).FontSize(18).Bold()
+	desktopModal(c, &f.directoryOpen, func() {
+		dialogBody(c, 470).Gap(12).Children(func() {
+			windowHeading(c, f.directoryAction)
 			if f.directoryAction == "移动所选会话" || f.directoryAction == "移动实际会话" {
 				ui.Text(c, "目标目录：/"+strings.Trim(f.directoryName, "/"))
 				a.directoryTree(c, &f.directoryName, &f.directoryPicker)
@@ -229,7 +232,7 @@ func (a *App) featureDialogs(c *ui.Context) {
 			if f.directoryError != "" {
 				ui.Text(c, f.directoryError).TextColor(c.Theme().Danger)
 			}
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			dialogActions(c).Children(func() {
 				ui.Button(c, "取消").OnClick(func() { f.directoryOpen = false })
 				ui.PrimaryButton(c, "应用").OnClick(a.applyDirectory)
 			})
@@ -466,11 +469,25 @@ func (a *App) exportScreen() {
 		}
 	}()
 }
+func (a *App) vaultPasswordInput(c *ui.Context, value *string) ui.Element {
+	input := passwordInput(c, value)
+	// Enter can commit the IME preview before this frame is built. Keep the
+	// previous frame's state so candidate confirmation does not submit too.
+	previous := ui.Local(input, "vault-composing", func() bool { return false })
+	composing := *previous || input.Composing()
+	*previous = input.Composing()
+	return input.OnSubmit(func() {
+		if !composing {
+			a.runVaultAction()
+		}
+	})
+}
+
 func (a *App) vaultDialog(c *ui.Context) {
 	f := &a.features
-	ui.Modal(c, &f.vaultOpen, func() {
-		ui.Column(c).Width(460).Gap(12).Children(func() {
-			ui.Text(c, "密码保护").FontSize(18).Bold()
+	desktopModal(c, &f.vaultOpen, func() {
+		dialogBody(c, 460).Gap(12).Children(func() {
+			windowHeading(c, "密码保护")
 			if a.vault == nil {
 				ui.Text(c, "密码库不可用")
 				return
@@ -483,18 +500,18 @@ func (a *App) vaultDialog(c *ui.Context) {
 			master, locked := a.vault.State()
 			if f.vaultAction == "unlock" {
 				ui.Text(c, "输入主密码以读取保存的会话密码。")
-				passwordInput(c, &f.master).Label("主密码").AutoFocus()
+				a.vaultPasswordInput(c, &f.master).Label("主密码").AutoFocus()
 				ui.PrimaryButton(c, "解锁").Disabled(f.vaultBusy).OnClick(a.runVaultAction)
 
 			} else if f.vaultAction == "set" {
 				if master {
-					ui.Field(c, "当前主密码", func() { passwordInput(c, &f.masterCurrent).Label("当前主密码") })
+					ui.Field(c, "当前主密码", func() { a.vaultPasswordInput(c, &f.masterCurrent).Label("当前主密码") })
 				}
-				ui.Field(c, "新主密码", func() { passwordInput(c, &f.master).AutoFocus() })
-				ui.Field(c, "再次输入", func() { passwordInput(c, &f.masterAgain) })
+				ui.Field(c, "新主密码", func() { a.vaultPasswordInput(c, &f.master).AutoFocus() })
+				ui.Field(c, "再次输入", func() { a.vaultPasswordInput(c, &f.masterAgain) })
 				ui.PrimaryButton(c, "设置主密码").Disabled(f.vaultBusy).OnClick(a.runVaultAction)
 			} else if f.vaultAction == "remove" {
-				ui.Field(c, "当前主密码", func() { passwordInput(c, &f.masterCurrent).Label("当前主密码").AutoFocus() })
+				ui.Field(c, "当前主密码", func() { a.vaultPasswordInput(c, &f.masterCurrent).Label("当前主密码").AutoFocus() })
 				ui.Text(c, "移除主密码后，保存的密码将改由本机密钥加密。\n能读取应用数据目录的用户也可能取得该密钥。")
 				ui.PrimaryButton(c, "确认改用本机加密").Disabled(f.vaultBusy).OnClick(a.runVaultAction)
 			} else {

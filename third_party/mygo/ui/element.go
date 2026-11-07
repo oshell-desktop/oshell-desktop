@@ -320,7 +320,8 @@ type node struct {
 	contentW, contentH float64
 	// barInset moves a scroll container's scroll bars in from its edges
 	// (ScrollbarInsets): top, right, bottom, left.
-	barInset [4]float32
+	barInset       [4]float32
+	hideScrollbars bool
 	// scrollBase is the offset of a List's content that its rows were
 	// placed at: placing moves them by how far the offset moved since.
 	scrollBase float64
@@ -591,6 +592,10 @@ func (e *node) MarginY(v float32) *node { e.margin[0], e.margin[2] = v, v; retur
 //
 //	ui.Scroll(c).Fill().Padding(64, 16, 16).ScrollbarInsets(64, 0, 0)
 func (e *node) ScrollbarInsets(v ...float32) *node { e.barInset = edges(v); return e }
+
+// HideScrollbars hides scroll thumbs and their pointer hit areas while keeping
+// wheel, keyboard, reveal and programmatic scrolling available.
+func (e *node) HideScrollbars() *node { e.hideScrollbars = true; return e }
 
 // Width sets the width in DIPs.
 func (e *node) Width(v float32) *node { e.width = px(v); return e }

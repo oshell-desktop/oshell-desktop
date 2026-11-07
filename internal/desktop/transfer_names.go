@@ -18,16 +18,36 @@ func uniqueTransferName(name string, existing map[string]bool) string {
 	existing[next] = true
 	return next
 }
-func uploadUnique(ctx context.Context, client core.RemoteFileSystem, paths []string, directory string, progress func(core.TransferProgress)) error {
-	entries, err := client.ReadDir(directory)
-	if err != nil {
-		return err
+func resumeConflict(client core.RemoteFileSystem, target string) (bool, error) {
+	rec, ok := client.(*recordedFileSystem)
+	if !ok || rec.chooseConflict == nil {
+		return false, nil
 	}
+	resume, err := rec.chooseConflict(target)
+	if err != nil {
+		return false, err
+	}
+	if resume {
+		if rec.resumeTargets == nil {
+			rec.resumeTargets = map[string]bool{}
+		}
+		rec.resumeTargets[target] = true
+	}
+	return resume, nil
+}
+func uploadUnique(ctx context.Context, client core.RemoteFileSystem, paths []string, directory string, progress func(core.TransferProgress)) error {
 	names := map[string]bool{}
-	for _, entry := range entries {
-		names[entry.Name()] = true
+	if !incrementalTransfer(client) {
+		entries, err := client.ReadDir(directory)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			names[entry.Name()] = true
+		}
 	}
 	var plans []transferPlan
+	reserved := map[string]bool{}
 	for _, source := range paths {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -36,7 +56,25 @@ func uploadUnique(ctx context.Context, client core.RemoteFileSystem, paths []str
 		if !core.SafeTransferName(name) {
 			return fmt.Errorf("文件名包含不支持的字符")
 		}
-		target := path.Join(directory, uniqueTransferName(name, names))
+		if !incrementalTransfer(client) {
+			resume := false
+			if names[name] && !reserved[name] {
+				var err error
+				resume, err = resumeConflict(client, path.Join(directory, name))
+				if err != nil {
+					return err
+				}
+			}
+			if !resume {
+				name = uniqueTransferName(name, names)
+			}
+			reserved[name] = true
+		} else if names[name] {
+			return fmt.Errorf("多个上传源具有相同名称：%s", name)
+		} else {
+			names[name] = true
+		}
+		target := path.Join(directory, name)
 		plans = append(plans, transferPlan{source, target, true})
 	}
 	if recorder, ok := client.(*recordedFileSystem); ok {
@@ -61,13 +99,31 @@ func downloadBatch(ctx context.Context, client core.RemoteFileSystem, names []st
 			if i > 0 {
 				candidate = fmt.Sprintf("%s.%d", name, i)
 			}
-			target, err := uniqueLocalTransferPath(localDirectory, candidate)
-			if err != nil {
-				return err
+			target := filepath.Join(localDirectory, candidate)
+			if !incrementalTransfer(client) {
+				if _, e := os.Lstat(target); e == nil && !reserved[strings.ToLower(target)] {
+					resume, e := resumeConflict(client, target)
+					if e != nil {
+						return e
+					}
+					if resume {
+						reserved[strings.ToLower(target)] = true
+						plans = append(plans, transferPlan{path.Join(remoteDirectory, name), target, false})
+						break
+					}
+				}
+				var err error
+				target, err = uniqueLocalTransferPath(localDirectory, candidate)
+				if err != nil {
+					return err
+				}
 			}
 			// Reserve case-insensitively to keep a batch portable across filesystems.
 			key := strings.ToLower(target)
 			if reserved[key] {
+				if incrementalTransfer(client) {
+					return fmt.Errorf("下载名称在本机冲突：%s", name)
+				}
 				continue
 			}
 			reserved[key] = true
@@ -118,4 +174,9 @@ func uniqueLocalTransferPath(directory, name string) (string, error) {
 			return "", err
 		}
 	}
+}
+
+func incrementalTransfer(client core.RemoteFileSystem) bool {
+	recorder, ok := client.(*recordedFileSystem)
+	return ok && recorder.protocol == "rsync"
 }

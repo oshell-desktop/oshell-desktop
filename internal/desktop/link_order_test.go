@@ -37,7 +37,7 @@ func TestLinkBarAndMenuFollowPersistedRootOrder(t *testing.T) {
 		t.Fatal(e)
 	}
 	menu := tt.Texts()
-	if slices.Index(menu, "拖动快捷项目 Root session") < 0 || slices.Index(menu, "拖动快捷项目 Root session") >= slices.Index(menu, "▸ Folder") {
+	if slices.Index(menu, "拖动快捷项目 Root session") < 0 || slices.Index(menu, "拖动快捷项目 Root session") >= slices.Index(menu, "快捷子目录 Folder") {
 		t.Fatal("overflow menu ignored order", menu)
 	}
 	saved, e := a.store.Load()

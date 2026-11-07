@@ -152,6 +152,7 @@ const (
 	layoutSetFontFamilyName    = 31
 	layoutSetFontWeight        = 32
 	layoutSetFontStyle         = 33
+	layoutSetFontStretch       = 34
 	layoutSetFontSize          = 35
 	layoutSetInlineObject      = 39
 	layoutSetTypography        = 40
@@ -347,7 +348,8 @@ type dwrite struct {
 	system   uintptr // the system font collection
 	locale   []uint16
 
-	exists  map[string]bool // whether the system has a family
+	exists  map[string]bool     // whether the system has a family
+	legacy  map[faceKey]faceKey // GDI family names, including weight/style aliases
 	formats map[formatKey]uintptr
 	// fallbacks are the font fallbacks of family lists, 0 for a list of
 	// one family.
@@ -371,28 +373,27 @@ type dwrite struct {
 
 	// The fonts the app registers: their files, a collection of them,
 	// and the family name of each name they are registered under.
-	loader  uintptr
-	files   []uintptr
-	custom  uintptr
-	aliases map[string]string
+	loader     uintptr
+	files      []uintptr
+	custom     uintptr
+	aliases    map[string]string
+	namedFaces map[string]namedFace
 
 	scratch []byte
 }
 
 type formatKey struct {
-	list   string // the family list, whose others the fallback tries
-	family string
-	custom bool
-	weight int
-	italic bool
-	size   float32
+	list string // the family list, whose others the fallback tries
+	faceKey
+	size float32
 }
 
 type faceKey struct {
-	family string
-	custom bool
-	weight int
-	italic bool
+	family  string
+	custom  bool
+	weight  int
+	italic  bool
+	stretch uintptr
 }
 
 type fontKey struct {
@@ -406,6 +407,7 @@ func newDWrite() (*dwrite, error) {
 	}
 	e := &dwrite{
 		exists:    map[string]bool{},
+		legacy:    map[faceKey]faceKey{},
 		formats:   map[formatKey]uintptr{},
 		fallbacks: map[string]uintptr{},
 		faces:     map[faceKey]uintptr{},
@@ -452,31 +454,47 @@ func (e *dwrite) hasSystem(family string) bool {
 	return ok
 }
 
-// family returns the first family of a list the app or the system has,
-// and whether it is the app's.
-func (e *dwrite) family(list string) (string, bool) {
-	for _, f := range familyList(list) {
+// family resolves the first installed family, including the face attributes
+// encoded in GDI family names, and whether it belongs to the app's collection.
+func (e *dwrite) family(style Style) faceKey {
+	match := faceKey{weight: style.weight(), italic: style.Italic, stretch: fontStretchNormal}
+	for _, f := range familyList(style.Family) {
 		if g := generic(f); g != "" {
 			for _, name := range dwGeneric[g] {
 				if e.hasSystem(name) {
-					return name, false
+					match.family = name
+					return match
 				}
 			}
 			continue
 		}
+		if face, ok := e.namedFaces[strings.ToLower(f)]; ok {
+			weight := face.weight
+			if style.weight() != 400 {
+				weight = max(weight, style.weight())
+			}
+			return faceKey{family: face.family, custom: true, weight: weight, italic: face.italic || style.Italic, stretch: uintptr(face.stretch + 1)}
+		}
 		if name, ok := e.aliases[strings.ToLower(f)]; ok {
-			return name, true
+			match.family, match.custom = name, true
+			return match
 		}
 		if e.hasSystem(f) {
-			return f, false
+			match.family = f
+			return match
+		}
+		if legacy := e.legacyFamily(f, style.weight(), style.Italic); legacy.family != "" {
+			return legacy
 		}
 	}
 	for _, name := range dwGeneric["system-ui"] {
 		if e.hasSystem(name) {
-			return name, false
+			match.family = name
+			return match
 		}
 	}
-	return "Segoe UI", false
+	match.family = "Segoe UI"
+	return match
 }
 
 func (e *dwrite) collection(custom bool) uintptr {
@@ -494,8 +512,7 @@ func dwStyle(italic bool) uintptr {
 }
 
 func (e *dwrite) format(style Style) uintptr {
-	family, custom := e.family(style.Family)
-	key := formatKey{style.Family, family, custom, style.weight(), style.Italic, style.FontSize()}
+	key := formatKey{style.Family, e.family(style), style.FontSize()}
 	if f, ok := e.formats[key]; ok {
 		return f
 	}
@@ -505,10 +522,10 @@ func (e *dwrite) format(style Style) uintptr {
 		}
 		clear(e.formats)
 	}
-	name := utf16z(family)
+	name := utf16z(key.family)
 	var format uintptr
 	hr := method[func(this uintptr, family *uint16, coll uintptr, weight, style, stretch uintptr, size float32, locale *uint16, out *uintptr) uintptr](e.factory, factoryCreateTextFormat)(
-		e.factory, &name[0], e.collection(custom), uintptr(key.weight), dwStyle(key.italic), fontStretchNormal, key.size, &e.locale[0], &format)
+		e.factory, &name[0], e.collection(key.custom), uintptr(key.weight), dwStyle(key.italic), key.stretch, key.size, &e.locale[0], &format)
 	if failed(hr) {
 		return 0
 	}
@@ -549,6 +566,8 @@ func (e *dwrite) fallback(list string) uintptr {
 			fam = family{name, true}
 		} else if e.hasSystem(f) {
 			fam = family{f, false}
+		} else if legacy := e.legacyFamily(f, 400, false); legacy.family != "" {
+			fam = family{legacy.family, false}
 		} else {
 			continue
 		}
@@ -587,11 +606,10 @@ func (e *dwrite) fallback(list string) uintptr {
 }
 
 func (e *dwrite) font(style Style) *Font {
-	family, custom := e.family(style.Family)
-	key := faceKey{family, custom, style.weight(), style.Italic}
+	key := e.family(style)
 	face, ok := e.faces[key]
 	if !ok {
-		face = e.matchFace(e.collection(custom), family, key.weight, key.italic)
+		face = e.matchFace(e.collection(key.custom), key.family, key.weight, key.italic, key.stretch)
 		e.faces[key] = face
 	}
 	if face == 0 {
@@ -602,7 +620,7 @@ func (e *dwrite) font(style Style) *Font {
 
 // matchFace returns the face of a family that best matches a weight and
 // style.
-func (e *dwrite) matchFace(coll uintptr, family string, weight int, italic bool) uintptr {
+func (e *dwrite) matchFace(coll uintptr, family string, weight int, italic bool, stretch uintptr) uintptr {
 	name := utf16z(family)
 	var index uint32
 	var exists int32
@@ -614,7 +632,7 @@ func (e *dwrite) matchFace(coll uintptr, family string, weight int, italic bool)
 		return 0
 	}
 	defer release(fam)
-	if failed(call(fam, familyGetFirstMatchingFont, uintptr(weight), fontStretchNormal, dwStyle(italic), uintptr(unsafe.Pointer(&font)))) {
+	if failed(call(fam, familyGetFirstMatchingFont, uintptr(weight), stretch, dwStyle(italic), uintptr(unsafe.Pointer(&font)))) {
 		return 0
 	}
 	defer release(font)
@@ -874,13 +892,15 @@ func (e *dwrite) typeset(layout uintptr, style Style, spans []Span, text []rune)
 			continue
 		}
 		if sp.Family != "" {
-			family, custom := e.family(sp.Family)
-			name := utf16z(family)
-			call(layout, layoutSetFontCollection, e.collection(custom), r)
+			family := e.family(sp.style(style))
+			name := utf16z(family.family)
+			call(layout, layoutSetFontCollection, e.collection(family.custom), r)
 			call(layout, layoutSetFontFamilyName, uintptr(unsafe.Pointer(&name[0])), r)
+			call(layout, layoutSetFontWeight, uintptr(family.weight), r)
+			call(layout, layoutSetFontStyle, dwStyle(family.italic), r)
+			call(layout, layoutSetFontStretch, family.stretch, r)
 			runtime.KeepAlive(name)
-		}
-		if sp.Weight > 0 {
+		} else if sp.Weight > 0 {
 			call(layout, layoutSetFontWeight, uintptr(min(sp.Weight, 999)), r)
 		}
 		if sp.Italic {
@@ -1389,6 +1409,12 @@ func (e *dwrite) register(data []byte, family string) error {
 	e.files = append(e.files, file)
 	release(e.custom)
 	e.custom = coll
+	if e.namedFaces == nil {
+		e.namedFaces = map[string]namedFace{}
+	}
+	for _, face := range fontNames(data) {
+		e.namedFaces[strings.ToLower(face.name)] = face
+	}
 	for _, name := range names {
 		e.aliases[strings.ToLower(name)] = name
 	}
@@ -1401,11 +1427,39 @@ func (e *dwrite) register(data []byte, family string) error {
 			delete(e.formats, k)
 		}
 	}
-	for k := range e.faces {
+	for k, face := range e.faces {
 		if k.custom {
+			release(face)
 			delete(e.faces, k)
 		}
 	}
+	return nil
+}
+
+func (e *dwrite) clearRegistered() error {
+	e.forgetFonts()
+	for _, f := range e.formats {
+		release(f)
+	}
+	clear(e.formats)
+	for _, f := range e.faces {
+		release(f)
+	}
+	clear(e.faces)
+	for _, f := range e.fallbacks {
+		release(f)
+	}
+	clear(e.fallbacks)
+	release(e.custom)
+	e.custom = 0
+	for _, f := range e.files {
+		release(f)
+	}
+	e.files = nil
+	clear(e.aliases)
+	clear(e.namedFaces)
+	clear(e.color)
+	clear(e.thin)
 	return nil
 }
 

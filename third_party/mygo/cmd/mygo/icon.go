@@ -9,6 +9,8 @@ import (
 	"image/color"
 	"image/png"
 	"sync"
+
+	"github.com/egoist/mygo/internal/svg"
 )
 
 // pngToICNS renders the sizes macOS expects into an .icns file with PNG
@@ -50,20 +52,44 @@ var windowsIconSizes = []int{16, 24, 32, 48, 64, 128, 256}
 var renderedIcon struct {
 	sync.Mutex
 	sum    [32]byte
+	inset  int
 	images [][]byte
 }
 
 // iconImages renders src at each of the windowsIconSizes as PNG.
-func iconImages(src []byte) ([][]byte, error) {
+func iconImages(src []byte, inset int) ([][]byte, error) {
 	sum := sha256.Sum256(src)
 	renderedIcon.Lock()
 	defer renderedIcon.Unlock()
-	if renderedIcon.images != nil && renderedIcon.sum == sum {
+	if renderedIcon.images != nil && renderedIcon.sum == sum && renderedIcon.inset == inset {
 		return renderedIcon.images, nil
 	}
-	img, err := png.Decode(bytes.NewReader(src))
-	if err != nil {
-		return nil, err
+	var img image.Image
+	if bytes.HasPrefix(bytes.TrimSpace(src), []byte("<")) {
+		doc, err := svg.Parse(src)
+		if err != nil {
+			return nil, err
+		}
+		// Match the pixel coordinate space of a 1024 px icon master before
+		// cropping and downsampling it for each Windows image list.
+		raster := image.NewRGBA(image.Rect(0, 0, 1024, 1024))
+		doc.Draw(raster, color.NRGBA{A: 255}, false)
+		img = raster
+	} else {
+		var err error
+		img, err = png.Decode(bytes.NewReader(src))
+		if err != nil {
+			return nil, err
+		}
+	}
+	if inset != 0 {
+		b := img.Bounds()
+		if inset < 0 || inset > (min(b.Dx(), b.Dy())-1)/2 {
+			return nil, fmt.Errorf("windows.iconInset %d is invalid for a %dx%d icon", inset, b.Dx(), b.Dy())
+		}
+		img = img.(interface {
+			SubImage(image.Rectangle) image.Image
+		}).SubImage(b.Inset(inset))
 	}
 	images := make([][]byte, len(windowsIconSizes))
 	for i, s := range windowsIconSizes {
@@ -73,13 +99,13 @@ func iconImages(src []byte) ([][]byte, error) {
 		}
 		images[i] = p.Bytes()
 	}
-	renderedIcon.sum, renderedIcon.images = sum, images
+	renderedIcon.sum, renderedIcon.inset, renderedIcon.images = sum, inset, images
 	return images, nil
 }
 
 // pngToICO renders a Windows .ico with PNG payloads.
-func pngToICO(src []byte) ([]byte, error) {
-	images, err := iconImages(src)
+func pngToICO(src []byte, inset int) ([]byte, error) {
+	images, err := iconImages(src, inset)
 	if err != nil {
 		return nil, err
 	}

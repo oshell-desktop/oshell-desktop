@@ -48,6 +48,8 @@ import (
 
 // Options configure a terminal.
 type Options struct {
+	Replay               bool
+	Agent                *core.AgentSession
 	BeforeClipboardPaste func() bool
 	CustomWordSelection  bool
 	// Default enables OSC 133 clicks with no modifiers, as SwiftTerm does.
@@ -66,6 +68,7 @@ type Options struct {
 	ManagedInputAllowed        func() bool
 	AutomaticTransfers         bool
 	TransferHandler            func(context.Context, bool, net.Conn) error
+	TransferStarted            func()
 	TransferFinished           func(error)
 
 	// Input callbacks run on the UI thread; output callbacks on the reader.
@@ -233,6 +236,7 @@ func New(opts Options) (*Terminal, error) {
 	opts.Font.Features = append([]string(nil), opts.Font.Features...)
 	opts.KeyAliases = append([]KeyAlias(nil), opts.KeyAliases...)
 	t := &Terminal{opts: opts, done: make(chan struct{})}
+	t.in.agent = opts.Agent
 	if opts.TransferHandler != nil {
 		t.transfers = newTransferController(t)
 		t.transferEnabled.Store(opts.AutomaticTransfers)
@@ -240,7 +244,11 @@ func New(opts Options) (*Terminal, error) {
 	t.size = gridSize{80, 24, 8, 16}
 	var err error
 	t.term, err = vt.NewTerminal(80, 24, vt.Effects{
-		WritePTY:     func(p []byte) { t.in.push(append([]byte(nil), p...)) },
+		WritePTY: func(p []byte) {
+			if !opts.Replay {
+				t.in.push(append([]byte(nil), p...))
+			}
+		},
 		Bell:         func() { t.events.bells++ },
 		Progress:     t.setProgress,
 		TitleChanged: func() { t.events.title = true },
@@ -338,6 +346,9 @@ func (t *Terminal) run() {
 	t.mu.Lock()
 	if t.opts.LocalToolsOnExit {
 		f := &sessionFallback{current: t.src, cols: t.size.cols, rows: t.size.rows, before: func() {
+			if t.opts.Agent != nil {
+				t.opts.Agent.Disconnect()
+			}
 			if t.transfers != nil {
 				t.transfers.endSession()
 			}
@@ -484,6 +495,9 @@ func (t *Terminal) read() {
 
 // write processes output, then runs the callbacks of what it did.
 func (t *Terminal) write(p []byte) {
+	if t.opts.Agent != nil {
+		t.opts.Agent.Observe(p)
+	}
 	t.mu.Lock()
 	var ev events
 	if t.probeEcho != nil {
@@ -513,6 +527,14 @@ func (t *Terminal) write(p []byte) {
 	}
 	if ev.directory && t.opts.OnDirectory != nil {
 		t.opts.OnDirectory(directory)
+	}
+	if t.opts.Agent != nil && t.opts.Agent.Busy() {
+		t.mu.Lock()
+		blocked := t.term != nil && (t.term.AltScreen() || core.IsAuthenticationPrompt(t.term.CursorLine()))
+		t.mu.Unlock()
+		if blocked {
+			t.opts.Agent.ContextChanged("终端进入交互界面或密码提示，请人工接管")
+		}
 	}
 	t.fire(ev, title)
 	t.redraw()
@@ -569,6 +591,9 @@ func (t *Terminal) ended() {
 // finish closes Done and calls OnExit, once.
 func (t *Terminal) finish() {
 	t.doneOnce.Do(func() {
+		if t.opts.Agent != nil {
+			t.opts.Agent.Disconnect()
+		}
 		close(t.done)
 		t.in.close()
 		if t.opts.OnExit != nil {
@@ -680,6 +705,9 @@ func (t *Terminal) Send(data []byte) {
 // sendInputLocked serializes the submission scanner with PTY output parsing.
 // Register accepted input before the writer can deliver it to the program.
 func (t *Terminal) sendInputLocked(data []byte) bool {
+	if t.opts.Replay {
+		return false
+	}
 	if len(data) == 0 {
 		return false
 	}
@@ -704,7 +732,9 @@ func (t *Terminal) paste(text string) bool {
 		return false
 	}
 	bracketed := t.term.Mode(vt.ModeBracketedPaste)
-	data := vt.EncodePaste(text, bracketed)
+	// The encoder converts LF to CR in plain mode but retains existing CRs.
+	// Collapse clipboard CRLF first so one line break never becomes two Enters.
+	data := vt.EncodePaste(core.NormalizeInput(text), bracketed)
 	t.term.ScrollToBottom()
 	t.mu.Unlock()
 	t.Send(data)
@@ -827,6 +857,9 @@ func (t *Terminal) resize(s gridSize) {
 		return
 	}
 	t.size = s
+	if t.opts.Agent != nil {
+		t.opts.Agent.NoteResize(s.cols, s.rows)
+	}
 	t.term.Resize(s.cols, s.rows, s.cellW, s.cellH)
 	t.revision++
 	switch src := t.src.(type) {
@@ -905,6 +938,7 @@ func unhex(c byte) (byte, bool) {
 // goroutine of its own: a program that does not read its input must not
 // block the reader, which answers its queries.
 type inputPacket struct {
+	ticket     string
 	generation uint64
 	data       []byte
 	result     chan error
@@ -912,6 +946,7 @@ type inputPacket struct {
 	ctx        context.Context
 }
 type inputQueue struct {
+	agent          *core.AgentSession
 	generation     func() uint64
 	mu             sync.Mutex
 	cond           *sync.Cond
@@ -980,6 +1015,9 @@ func (q *inputQueue) pauseWithCancel(paused bool, cancel context.CancelFunc) {
 	q.mu.Unlock()
 }
 func (q *inputQueue) raw(ctx context.Context, p []byte) (int, error) {
+	return q.rawTicket(ctx, p, "")
+}
+func (q *inputQueue) rawTicket(ctx context.Context, p []byte, ticket string) (int, error) {
 	result := make(chan error, 1)
 	q.mu.Lock()
 	q.init()
@@ -991,7 +1029,7 @@ func (q *inputQueue) raw(ctx context.Context, p []byte) (int, error) {
 	if q.generation != nil {
 		epoch = q.generation()
 	}
-	q.queue = append(q.queue, inputPacket{data: append([]byte(nil), p...), result: result, raw: true, ctx: ctx, generation: epoch})
+	q.queue = append(q.queue, inputPacket{data: append([]byte(nil), p...), result: result, raw: true, ctx: ctx, generation: epoch, ticket: ticket})
 	q.cond.Signal()
 	q.mu.Unlock()
 	select {
@@ -1040,7 +1078,9 @@ func (q *inputQueue) run(w io.Writer) {
 		if packet.ctx != nil {
 			err = packet.ctx.Err()
 		}
-		if err == nil {
+		attempted := false
+		write := func() error {
+			attempted = true
 			var n int
 			if writer, ok := w.(interface {
 				WriteGeneration([]byte, uint64) (int, error)
@@ -1052,11 +1092,19 @@ func (q *inputQueue) run(w io.Writer) {
 			if err == nil && n != len(packet.data) {
 				err = io.ErrShortWrite
 			}
+			return err
+		}
+		if err == nil {
+			if q.agent != nil {
+				err = q.agent.Gate(packet.ticket, packet.data, write)
+			} else {
+				err = write()
+			}
 		}
 		if packet.result != nil {
 			packet.result <- err
 		}
-		if err != nil && packet.ctx == nil {
+		if err != nil && packet.ctx == nil && attempted {
 			q.close()
 			return
 		}

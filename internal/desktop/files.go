@@ -268,9 +268,12 @@ func postFileReadResult(p *pane, apply, discard func()) {
 }
 func (a *App) filesView(c *ui.Context, p *pane) { a.fileBrowser(c, p, false) }
 func (a *App) fileBrowser(c *ui.Context, p *pane, full bool) {
-	root := ui.Column(c).Padding(12).Gap(8).Background(c.Theme().Surface)
+	compact := a.filePresentation.owner.Load() != nil && a.filePresentation.placement == "bottom"
+	root := ui.Column(c).Padding(6).Gap(4).Background(c.Theme().Background)
 	if full {
 		root.Fill()
+	} else if a.filePresentation.owner.Load() != nil {
+		root.Fill().MinWidth(0).MinHeight(0)
 	} else {
 		root.Width(340)
 	}
@@ -280,25 +283,29 @@ func (a *App) fileBrowser(c *ui.Context, p *pane, full bool) {
 		}
 	}
 	root.Children(func() {
-		ui.Row(c).Gap(6).Children(func() {
-			protocol := "SFTP"
-			if p != nil && p.profile.Kind == "ftp" {
-				protocol = "FTP"
-			}
-			ui.Text(c, "远程文件 · "+protocol).Bold().Grow(1)
-			if p != nil && p.files != nil {
-				fileRateButton(c, p.files)
-			}
-			ui.Button(c, "×").Label("关闭文件面板").OnClick(func() {
-				if full {
-					if t := a.activeTab(); t != nil {
-						a.requestSessionClose(t, p)
-					}
-				} else {
-					a.filesVisible = false
+		if !compact {
+			ui.Row(c).Gap(6).Wrap().Children(func() {
+				protocol := "SFTP"
+				if p != nil && p.profile.Kind == "ftp" {
+					protocol = "FTP"
 				}
+				ui.Text(c, "远程文件 · "+protocol).Bold().Grow(1)
+				if p != nil && p.files != nil {
+					fileRateButton(c, p.files)
+				}
+				rowIconButton(c, "关闭文件面板", closeIcon, c.Theme().TextMuted).OnClick(func() {
+					if a.filePresentation.owner.Load() != nil {
+						a.hideFileDock()
+					} else if full {
+						if t := a.activeTab(); t != nil {
+							a.requestSessionClose(t, p)
+						}
+					} else {
+						a.filesVisible = false
+					}
+				})
 			})
-		})
+		}
 		if p == nil || (p.conn == nil && p.ftp == nil) {
 			ui.Text(c, "请先连接 SSH 会话").TextColor(c.Theme().TextMuted)
 			return
@@ -311,19 +318,19 @@ func (a *App) fileBrowser(c *ui.Context, p *pane, full bool) {
 		if p.conn != nil && f.protocol == "" {
 			f.protocol = "SFTP"
 		}
-		if p.conn != nil && !full {
+		if p.conn != nil && !full && !compact {
 			if f.protocol == "" {
 				f.protocol = "SFTP"
 			}
-			ui.Select(c, &f.protocol, []string{"SFTP", "SCP"}).Label("传输协议").Disabled(f.busy)
+			ui.Select(c, &f.protocol, []string{"SFTP", "SCP", "rsync"}).Label("传输协议").Disabled(f.busy)
 		}
-		ui.Row(c).Gap(6).Children(func() {
+		ui.Row(c).Gap(6).Wrap().Children(func() {
 			if ui.TextInput(c, &f.input).Label("远程目录").Tooltip(f.dir).Grow(1).Disabled(f.busy).Submitted() {
 				a.loadFiles(p, f.input)
 			}
 			ui.Button(c, "转到").Disabled(f.busy || f.input == "").OnClick(func() { a.loadFiles(p, f.input) })
 		})
-		ui.Row(c).Gap(6).Children(func() {
+		ui.Row(c).Gap(6).Wrap().Children(func() {
 			ui.Button(c, "上级").Disabled(f.busy || f.dir == "/").OnClick(func() { a.loadFiles(p, path.Dir(f.dir)) })
 			ui.Button(c, "刷新").Disabled(f.busy).OnClick(func() { a.loadFiles(p, f.dir) })
 			if supportsMixedUploadSelection {
@@ -339,10 +346,31 @@ func (a *App) fileBrowser(c *ui.Context, p *pane, full bool) {
 				}).Disabled(f.busy || f.client == nil || p.conn != nil && !p.conn.Alive())
 			}
 			if p.conn != nil {
-				ui.Button(c, "SCP…").Disabled(f.busy || !p.conn.Alive()).OnClick(func() { a.openStandaloneSCP(p) })
+				if f.protocol == "SFTP" {
+					ui.MenuButton(c, "旧片段续传…", func(m *ui.Menu) {
+						if m.Item("上传到选中的远程片段…").Chosen() {
+							a.resumeOldFragment(p, true)
+						}
+						if m.Item("下载到本地片段…").Chosen() {
+							a.resumeOldFragment(p, false)
+						}
+					}).Disabled(f.busy || len(f.selectedNames()) != 1 || !p.conn.Alive())
+				}
+				ui.MenuButton(c, "独立传输…", func(m *ui.Menu) {
+					if m.Item("SCP…").Chosen() {
+						a.openStandaloneSCP(p)
+					}
+					if m.Item("rsync 目录…").Chosen() {
+						a.openStandaloneRsync(p)
+					}
+				}).Disabled(f.busy || !p.conn.Alive())
 			}
-			if full && p.conn != nil {
-				ui.Select(c, &f.protocol, []string{"SFTP", "SCP"}).Label("传输协议").Width(125).Disabled(f.busy).Tooltip("目录浏览使用 SFTP；SCP 选项用于兼容传输")
+			if (full || compact) && p.conn != nil {
+				ui.Select(c, &f.protocol, []string{"SFTP", "SCP", "rsync"}).Label("传输协议").Width(125).Disabled(f.busy).Tooltip("目录浏览使用 SFTP；rsync 同名增量更新，保留目标额外文件")
+			}
+			if compact {
+				fileRateButton(c, f)
+				ui.Button(c, "隐藏").Label("隐藏停靠文件管理").OnClick(a.hideFileDock)
 			}
 			if directoryFilter(c.Key("directory-filter"), &f.filter) {
 				f.typeQuery = ""
@@ -353,8 +381,11 @@ func (a *App) fileBrowser(c *ui.Context, p *pane, full bool) {
 				f.list.ScrollTo(0, ui.Start)
 			}
 		})
+		fileRow := func(row ui.Element) ui.Element {
+			return row.Height(detailRowHeight).Padding(0, 6).Gap(8).AlignItems(ui.Center).Dividers(1, c.Theme().Border)
+		}
 		if full {
-			ui.Row(c).Padding(6).Gap(6).Children(func() {
+			fileRow(ui.Row(c)).Background(c.Theme().Surface).TextColor(c.Theme().TextMuted).FontWeight(600).Border(1, c.Theme().Border).Children(func() {
 				ui.Text(c, "名称").Grow(1)
 				ui.Text(c, "类型").Width(55)
 				ui.Text(c, "大小").Width(75)
@@ -372,7 +403,7 @@ func (a *App) fileBrowser(c *ui.Context, p *pane, full bool) {
 			name := entry.Name()
 			presentation := presentFile(entry)
 			detail := fileAttributeHint(entry, presentation.kind)
-			row := ui.Row(c.Key(name)).Padding(6).Gap(6).Radius(4).Focusable().Label(name)
+			row := fileRow(ui.Row(c.Key(name))).Focusable().Label(name)
 			if height := row.Bounds().H; height > 0 {
 				f.rowHeight = height
 			}
@@ -427,12 +458,16 @@ func (a *App) fileBrowser(c *ui.Context, p *pane, full bool) {
 			}
 			if f.isSelected(name) {
 				row.Background(c.Theme().Selection)
+			} else if row.Hovered() {
+				row.Background(c.Theme().SurfaceHover)
 			}
 			row.Children(func() {
-				ui.Icon(c, presentation.icon).FontSize(17).Width(20).Shrink(0).TextColor(presentation.color).Label(presentation.kind).Tooltip(detail)
-				ui.Text(c, name).SingleLine().Grow(1).MinWidth(0).Tooltip(detail)
+				ui.Row(c).Grow(1).MinWidth(0).Gap(4).AlignItems(ui.Center).Children(func() {
+					ui.Icon(c, presentation.icon).FontSize(16).Width(18).Shrink(0).TextColor(presentation.color).Label(presentation.kind).Tooltip(detail)
+					ui.Text(c, name).SingleLine().Grow(1).MinWidth(0).Tooltip(detail)
+				})
 				if full {
-					ui.Text(c, presentation.kind).Width(55).FontSize(11).Tooltip(detail)
+					ui.Text(c, presentation.kind).Width(55).SingleLine().Tooltip(detail)
 				}
 				size := "—"
 				if !entry.IsDir() && core.RemoteFileTypeKnown(entry) {
@@ -445,17 +480,17 @@ func (a *App) fileBrowser(c *ui.Context, p *pane, full bool) {
 				if entry.IsDir() {
 					sizeHint = "目录大小未统计"
 				}
-				ui.Text(c, size).Tooltip(sizeHint).Width(75).FontSize(11)
+				ui.Text(c, size).Tooltip(sizeHint).Width(75).SingleLine()
 				if full {
 					attributes := core.RemoteFileAttributes(entry)
-					ui.Text(c, attributes.Permissions).Font("monospace").Width(104).FontSize(11).SingleLine().Tooltip("权限：" + attributes.Permissions + " · " + attributes.Octal)
-					ui.Text(c, attributes.User).Width(70).FontSize(11).SingleLine().Tooltip("所属用户 UID：" + attributes.User)
-					ui.Text(c, attributes.Group).Width(70).FontSize(11).SingleLine().Tooltip("所属组 GID：" + attributes.Group)
+					ui.Text(c, attributes.Permissions).Font("monospace").Width(104).SingleLine().Tooltip("权限：" + attributes.Permissions + " · " + attributes.Octal)
+					ui.Text(c, attributes.User).Width(70).SingleLine().Tooltip("所属用户 UID：" + attributes.User)
+					ui.Text(c, attributes.Group).Width(70).SingleLine().Tooltip("所属组 GID：" + attributes.Group)
 					modified := "—"
 					if !entry.ModTime().IsZero() {
 						modified = entry.ModTime().Format("2006-01-02 15:04")
 					}
-					ui.Text(c, modified).Tooltip(fileModifiedDetail(entry)).Width(140).FontSize(11)
+					ui.Text(c, modified).Tooltip(fileModifiedDetail(entry)).Width(140).SingleLine()
 				}
 			})
 			if row.Clicked() {
@@ -472,9 +507,9 @@ func (a *App) fileBrowser(c *ui.Context, p *pane, full bool) {
 					a.download(p)
 				}
 			}
-		}).Grow(1).MinHeight(0).Gap(3).Label("远程文件列表")
+		}).Grow(1).MinHeight(0).Background(panelColor(c)).Border(1, c.Theme().Border).Label("远程文件列表")
 		if height := filesList.Bounds().H; height > 0 && f.rowHeight > 0 {
-			f.pageRows = max(1, int(height/(f.rowHeight+3))-1)
+			f.pageRows = max(1, int(height/f.rowHeight)-1)
 		}
 		if len(visible) == 0 {
 			filesList.Focusable().HandleInput(func(event ui.InputEvent) bool { return a.fileNavigationInput(p, -1, event) })
@@ -495,7 +530,7 @@ func (a *App) fileBrowser(c *ui.Context, p *pane, full bool) {
 			ui.Text(c, message).FontSize(12).TextColor(c.Theme().TextMuted)
 		}
 		selected := f.selectedNames()
-		ui.Row(c).Gap(6).Children(func() {
+		ui.Row(c).Gap(6).Wrap().Children(func() {
 			ui.Button(c, "下载所选").Disabled(f.busy || len(selected) == 0).OnClick(func() { a.download(p) })
 			ui.MenuButton(c, "操作", func(m *ui.Menu) {
 				if m.Item("新建目录…").Chosen() {
@@ -527,7 +562,13 @@ func (a *App) fileBrowser(c *ui.Context, p *pane, full bool) {
 				ui.Button(c, "取消传输").OnClick(func() { f.cancel() })
 			}
 		})
-		ui.Text(c, "拖入文件或文件夹上传；拖到目录时上传至该目录。重名传输默认自动编号。").FontSize(11).TextColor(c.Theme().TextMuted)
+		if !compact {
+			hint := "拖入文件或文件夹上传；拖到目录时上传至该目录。重名传输默认自动编号。"
+			if f.protocol == "rsync" {
+				hint = "rsync 同名增量更新，保留目标额外文件；取消留下的片段可在下次传输继续。"
+			}
+			ui.Text(c, hint).FontSize(11).TextColor(c.Theme().TextMuted).Wrap()
+		}
 		a.transferRecordsView(c, p)
 		status := f.status
 		if f.notice != nil && f.notice.active {
@@ -539,7 +580,7 @@ func (a *App) fileBrowser(c *ui.Context, p *pane, full bool) {
 		if len(selected) > 0 {
 			status += fmt.Sprintf(" · 已选 %d 项", len(selected))
 		}
-		ui.Row(c).Gap(6).Children(func() {
+		ui.Row(c).Gap(6).Wrap().Children(func() {
 			if f.busy {
 				ui.Spinner(c).Width(14).Height(14)
 			}
@@ -608,12 +649,32 @@ func (a *App) withTransfer(p *pane, operation func(context.Context, core.RemoteF
 		defer lease()
 		if protocol == "SCP" && connection != nil {
 			client = &core.SCPFileSystem{RemoteFileSystem: client, Connection: connection}
+		} else if protocol == "rsync" && connection != nil {
+			client = &core.RsyncFileSystem{RemoteFileSystem: client, Connection: connection}
 		}
 		defer client.Close()
 		stop := context.AfterFunc(ctx, func() { client.Close() })
 		defer stop()
 		task, _ := ctx.Value(fileTransferContextKey{}).(*fileTransfer)
 		wrapped := &recordedFileSystem{RemoteFileSystem: client, log: records, task: task, protocol: protocol}
+		if protocol == "SFTP" {
+			wrapped.stateDir = a.store.Dir
+			wrapped.identity = connection.Identity
+			wrapped.chooseConflict = func(target string) (bool, error) {
+				result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.fileParent(), Title: "SFTP 目标已存在", Message: target, Detail: "续传会校验已有内容，完整一致的文件会跳过。保留两份会为新目标自动编号。", Buttons: []string{"取消", "续传", "保留两份"}, DefaultButton: 1, CancelButton: 0})
+				if err != nil {
+					return false, err
+				}
+				switch result.Button {
+				case 1:
+					return true, nil
+				case 2:
+					return false, nil
+				default:
+					return false, context.Canceled
+				}
+			}
+		}
 		defer wrapped.finish()
 		return operation(ctx, wrapped)
 	}, refreshDirectory...)
@@ -731,7 +792,7 @@ func (a *App) uploadPath(p *pane, directory bool) {
 	files := p.files
 	files.busy = true
 	go func() {
-		paths, err := chooseUploadItems(a.win, directory)
+		paths, err := chooseUploadItems(a.fileParent(), directory)
 		postPane(p, func(owner *App) {
 			if p.files != files {
 				return
@@ -758,13 +819,26 @@ func (a *App) download(p *pane) {
 			return
 		}
 	}
+	title := "选择下载保存位置"
+	if p.files.protocol == "rsync" {
+		title = "选择 rsync 下载保存位置（同名增量更新）"
+	}
 	a.withTransfer(p, func(ctx context.Context, client core.RemoteFileSystem) error {
-		directories, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.win, Title: "选择下载保存位置（重名自动编号）", Directory: true})
+		directories, err := mygo.Dialog.Open(mygo.OpenDialogOptions{Parent: a.fileParent(), Title: title, Directory: true})
 		if err != nil {
 			return err
 		}
 		if len(directories) == 0 {
 			return context.Canceled
+		}
+		if incrementalTransfer(client) {
+			result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.fileParent(), Title: "rsync 下载", Message: "按同名路径增量更新？", Detail: directories[0] + "\n同名文件可能覆盖；目录合并，保留目标额外文件，不自动编号。取消可能留下 .oshell-rsync-partial，可再次运行继续传输。", Buttons: []string{"取消", "增量下载"}, DefaultButton: 0, CancelButton: 0})
+			if err != nil {
+				return err
+			}
+			if result.Button != 1 {
+				return context.Canceled
+			}
 		}
 		return downloadBatch(ctx, client, names, directory, directories[0], a.transferProgress(p, ctx))
 	})

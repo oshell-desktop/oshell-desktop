@@ -32,7 +32,7 @@ func (a *App) reloadLocalSharedData(interactive bool) {
 		}
 	}
 	for _, window := range windows {
-		if window.settingsOpen || window.modalActive() || tabMoveDialogOpen(window.win) {
+		if window.manager != nil || window.managerRename != nil || window.settingsOpen || window.modalActive() || tabMoveDialogOpen(window.win) {
 			if interactive {
 				a.status = "请先完成或取消正在编辑的内容，再刷新数据"
 			}

@@ -71,7 +71,7 @@ func (a *App) sharedConflictComparison(c *ui.Context, height float32) {
 	f.conflictList.Key = func(i int) any { return conflicts[i].Key }
 	ui.Row(c).FillWidth().Height(height).Gap(12).Children(func() {
 		ui.List(c.Key("conflict-list"), &f.conflictList, len(conflicts), func(i int) {
-			ui.Row(c).Height(30).Padding(4, 6).Children(func() { ui.Text(c, label(i)).SingleLine() })
+			ui.Row(c).Height(detailRowHeight).AlignItems(ui.Center).Padding(1, 6).Children(func() { ui.Text(c, label(i)).SingleLine() })
 		}).Width(200).FillHeight().Border(1, c.Theme().Border).Label("需要确认的项目")
 		conflict := conflicts[f.conflictIndex]
 		reset := f.conflictDetailKey != conflict.Key

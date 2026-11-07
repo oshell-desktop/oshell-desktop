@@ -20,13 +20,27 @@ func TestNativeLaunchFixture(t *testing.T) {
 	if e := os.MkdirAll(dir, 0700); e != nil {
 		t.Fatal(e)
 	}
-	server := startSSH(t, "fixture-only-password")
+	password := "fixture-only-password"
+	if os.Getenv("OSHELL_NATIVE_SSO_TOOL") == "1" {
+		password = "fixture-中文-é"
+	}
+	server := startSSH(t, password)
 	line := knownhosts.Normalize(server.address) + " " + string(ssh.MarshalAuthorizedKey(server.hostKey))
 	if e := os.WriteFile(filepath.Join(dir, "known_hosts"), []byte(line), 0600); e != nil {
 		t.Fatal(e)
 	}
 	store := &Store{Dir: dir}
-	if e := store.Save(DefaultConfig()); e != nil {
+	cfg := DefaultConfig()
+	checkKeepAlive := os.Getenv("OSHELL_NATIVE_LAUNCH_KEEPALIVE") == "1"
+	if checkKeepAlive {
+		cfg.SessionDefaults.KeepAlive.Enabled = false
+		pref := DefaultKeepAlive()
+		pref.Interval = 1
+		if e := SaveBastionKeepAlive(dir, server.address, pref); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e := store.Save(cfg); e != nil {
 		t.Fatal(e)
 	}
 	if os.Getenv("OSHELL_NATIVE_LAUNCH_LOCKED") == "1" {
@@ -56,6 +70,12 @@ func TestNativeLaunchFixture(t *testing.T) {
 				t.Fatal(e)
 			}
 		case <-timer.C:
+			if checkKeepAlive && server.keepAliveRequests.Load() > 0 {
+				if e := AtomicWrite(filepath.Join(dir, "fixture-keepalive.json"), []byte(`{"received":true}`)); e != nil {
+					t.Fatal(e)
+				}
+				checkKeepAlive = false
+			}
 			if _, e := os.Stat(filepath.Join(dir, "STOP")); e == nil {
 				return
 			}

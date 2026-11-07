@@ -17,13 +17,13 @@ func fileRateButton(c *ui.Context, f *fileState) {
 		f.rateOpen = !f.rateOpen
 	})
 	ui.Popover(c, button, &f.rateOpen, func() {
-		ui.Column(c).Width(300).Padding(8).Gap(10).Children(func() {
-			ui.Row(c).Gap(8).Children(func() {
-				ui.Text(c, "传输限速").Bold().Grow(1)
-				ui.Button(c, "×").Label("关闭限速设置").OnClick(func() { f.rateOpen = false })
+		ui.Column(c).Width(300).Padding(6).Gap(6).Children(func() {
+			ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
+				windowHeading(c, "传输限速").Grow(1)
+				flatButton(c, "关闭限速设置", closeIcon, "").OnClick(func() { f.rateOpen = false })
 			})
 			fileRateControls(c, f)
-			ui.Text(c, "仅影响当前文件标签。SFTP / FTP 传输中即时生效，SCP 下次传输生效。").FontSize(11).TextColor(c.Theme().TextMuted).Wrap()
+			ui.Text(c, "仅影响当前文件标签。SFTP / FTP 传输中即时生效，SCP / rsync 下次传输生效。").FontSize(11).TextColor(c.Theme().TextMuted).Wrap()
 		})
 	})
 }

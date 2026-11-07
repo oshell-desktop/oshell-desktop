@@ -1,9 +1,68 @@
 package desktop
 
 import (
+	"context"
+	"github.com/egoist/mygo/ui"
 	"oshell-desktop/internal/core"
 	"testing"
 )
+
+func TestSettingsOpenDuringSyncCommit(t *testing.T) {
+	for _, separate := range []bool{false, true} {
+		store := &core.Store{Dir: t.TempDir()}
+		owner := newApp(store, core.DefaultConfig())
+		editor := owner
+		hub := &applicationHub{store: store, windows: []*App{owner}, syncOwner: owner}
+		owner.hub = hub
+		if separate {
+			editor = newApp(store, owner.config)
+			editor.hub = hub
+			hub.windows = append(hub.windows, editor)
+		}
+		f := &owner.features.sharedSync
+		ctx, cancel := context.WithCancel(context.Background())
+		f.busy, f.plan, f.cancel = true, &core.SharedSyncPlan{}, cancel
+		owner.setConfigurationBusy(true)
+		editor.showPreferenceSection(3)
+		if !editor.settingsOpen || !editor.settingsWaitingForSync {
+			t.Fatal("settings did not open during commit")
+		}
+		tt := ui.NewTester(editor.settingsView, 1000, 700)
+		if err := tt.Click("常规"); err != nil {
+			t.Fatal(err)
+		}
+		original := editor.config.Settings.FontSize
+		_ = tt.Click("增大终端字号")
+		_ = tt.Click("应用")
+		if !editor.settingsOpen || editor.features.settingsDraft.FontSize != original || editor.config.Settings.FontSize != original {
+			t.Fatal("modified a read-only snapshot")
+		}
+		if separate {
+			if err := tt.Click("取消本次同步"); err != nil || ctx.Err() != context.Canceled || !editor.settingsOpen {
+				t.Fatalf("cancel while browsing: %v", err)
+			}
+		} else {
+			cancel()
+		}
+		f.busy, f.cancel, f.plan = false, nil, nil
+		owner.setConfigurationBusy(false)
+		next := owner.config.Clone()
+		next.Settings.FontSize = original + 2
+		owner.applyCommittedConfig(next)
+		tt.Frame()
+		if editor.settingsWaitingForSync || editor.features.settingsDraft.FontSize != next.Settings.FontSize {
+			t.Fatal("stale settings after commit")
+		}
+		if err := tt.Click("增大终端字号"); err != nil {
+			t.Fatal(err)
+		}
+		editor.openSettings()
+		if editor.features.settingsDraft.FontSize != next.Settings.FontSize+1 {
+			t.Fatal("editing did not resume or reopening lost draft")
+		}
+		editor.closeSettings()
+	}
+}
 
 func TestSyncReadResultDefersAcrossWindows(t *testing.T) {
 	store := &core.Store{Dir: t.TempDir()}

@@ -16,7 +16,7 @@ import (
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/math/f64"
 	_ "golang.org/x/image/webp"
-	_ "oshell-desktop/internal/tiff"
+	"oshell-desktop/internal/imagedecode"
 )
 
 // Matches the private ABI 4 request prefix. The image is decoded synchronously so a
@@ -127,7 +127,7 @@ func decodeInlineImage(payload []byte, r inlineImageRequest) *image.NRGBA {
 	if err != nil {
 		return nil
 	}
-	config, format, err := image.DecodeConfig(bytes.NewReader(data))
+	config, format, err := imagedecode.Config(data)
 	if err != nil || !inlineImageSize(config.Width, config.Height) {
 		return nil
 	}
@@ -138,7 +138,7 @@ func decodeInlineImage(payload []byte, r inlineImageRequest) *image.NRGBA {
 	default:
 		return nil
 	}
-	im, _, err := image.Decode(bytes.NewReader(data))
+	im, _, err := imagedecode.Decode(data)
 	if err != nil || !inlineImageSize(im.Bounds().Dx(), im.Bounds().Dy()) {
 		return nil
 	}

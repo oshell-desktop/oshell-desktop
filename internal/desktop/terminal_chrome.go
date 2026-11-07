@@ -29,7 +29,10 @@ func (a *App) showPaneFocusStripe(t *tab, p *pane) bool {
 
 func tabTitleButton(c *ui.Context, label, title string, selected, unread bool) ui.Element {
 	return ui.Button(c, "").Label(label).Tooltip(label).Height(25).Padding(3, 7).Gap(5).Radius(4).Background(ui.Transparent).BorderWidth(0).Children(func() {
-		text := ui.Text(c, title).FontSize(12).SingleLine()
+		text := ui.Text(c, title).FontSize(12).SingleLine().TextColor(c.Theme().TextMuted)
+		if selected {
+			text.TextColor(c.Theme().Text)
+		}
 		if unread {
 			text.TextColor(tabUnreadColor(c))
 		}
@@ -58,7 +61,13 @@ func tabUnreadColor(c *ui.Context) ui.Color {
 }
 
 func tabBarButton(c *ui.Context, label string, icon *ui.SVG) ui.Element {
-	return ui.Button(c, "").Label(label).Tooltip(label).Width(25).Height(28).Padding(4).Background(ui.Transparent).BorderWidth(0).Children(func() {
+	button := ui.Button(c, "").Label(label).Tooltip(label).Width(25).Height(28).Padding(4).Radius(4).Background(ui.Transparent).BorderWidth(0)
+	if button.Pressed() {
+		button.Background(c.Theme().SurfacePressed)
+	} else if button.Hovered() {
+		button.Background(c.Theme().SurfaceHover)
+	}
+	return button.Children(func() {
 		ui.Icon(c, icon).FontSize(15).TextColor(c.Theme().TextMuted)
 	})
 }

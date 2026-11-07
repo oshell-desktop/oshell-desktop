@@ -9,6 +9,10 @@ func glyph(body string) *ui.SVG {
 }
 
 var (
+	paletteIcon         = glyph(`<path d="M17.5 10a7.5 7.5 0 1 0-7.5 7.5h1.2a1.8 1.8 0 0 0 1.3-3l-.5-.5a1 1 0 0 1 .7-1.7h1.8a3 3 0 0 0 3-2.3z"/><circle cx="5.5" cy="9" r=".6"/><circle cx="8" cy="5.5" r=".6"/><circle cx="12" cy="5.5" r=".6"/><circle cx="15" cy="8.5" r=".6"/>`)
+	keyboardIcon        = glyph(`<rect x="2" y="4" width="16" height="12" rx="2"/><path d="M5 7h1m2 0h1m2 0h1m2 0h1M5 10h1m2 0h1m2 0h1m2 0h1M6 13h8"/>`)
+	clockIcon           = glyph(`<circle cx="10" cy="10" r="7.5"/><path d="M10 5v5H6"/>`)
+	infoIcon            = glyph(`<circle cx="10" cy="10" r="7.5"/><path d="M10 9v5m0-8v.1"/>`)
 	folderIcon          = glyph(`<path d="M2.5 5h5l1.5 2h8.5v9h-15z"/><path d="M2.5 5V3.5h5l1.5 2h7v1.5"/>`)
 	sidebarIcon         = glyph(`<rect x="2" y="3" width="16" height="14" rx="2"/><path d="M7 3v14M4 6h1m-1 3h1m-1 3h1"/>`)
 	collapseSidebarIcon = glyph(`<rect x="2" y="3" width="16" height="14" rx="2"/><path d="M7 3v14m6-10-3 3 3 3"/>`)
@@ -22,13 +26,14 @@ var (
 	chevronIcon         = glyph(`<path d="m6 8 4 4 4-4"/>`)
 	arrowUpIcon         = glyph(`<path d="m5 10 5-5 5 5m-5-5v11"/>`)
 	searchIcon          = glyph(`<circle cx="8.5" cy="8.5" r="5"/><path d="m12 12 5 5"/>`)
+	recordIcon          = glyph(`<circle cx="10" cy="10" r="7"/><circle cx="10" cy="10" r="2.5"/>`)
 	editIcon            = glyph(`<path d="m12.5 3.5 4 4M3.5 16.5l1-4 9-9a2.1 2.1 0 0 1 3 3l-9 9z"/>`)
 )
 
 func toolButton(c *ui.Context, label string, icon *ui.SVG, text string) ui.Element {
-	return ui.Button(c, "").Label(label).Tooltip(label).Height(25).Padding(3, 7).Gap(5).Radius(4).Children(func() {
+	return ui.Button(c, "").Label(label).Tooltip(label).Height(26).Padding(2, 6).Gap(4).Radius(3).Children(func() {
 		if icon != nil {
-			ui.Icon(c, icon).FontSize(15).TextColor(c.Theme().Accent)
+			ui.Icon(c, icon).FontSize(16).TextColor(c.Theme().TextMuted)
 		}
 		if text != "" {
 			ui.Text(c, text).FontSize(12).SingleLine()
@@ -36,7 +41,16 @@ func toolButton(c *ui.Context, label string, icon *ui.SVG, text string) ui.Eleme
 	})
 }
 func flatButton(c *ui.Context, label string, icon *ui.SVG, text string) ui.Element {
-	return toolButton(c, label, icon, text).Background(ui.Transparent).BorderWidth(0)
+	b := toolButton(c, label, icon, text).Height(detailRowHeight).BorderWidth(0)
+	switch {
+	case b.Pressed():
+		b.Background(c.Theme().SurfacePressed)
+	case b.Hovered() || b.FocusVisible():
+		b.Background(c.Theme().SurfaceHover)
+	default:
+		b.Background(ui.Transparent)
+	}
+	return b
 }
 
 func rowIconButton(c *ui.Context, label string, icon *ui.SVG, foreground ui.Color) ui.Element {

@@ -72,6 +72,89 @@ func TestManagerClipboardShortcutsPasteAndRebind(t *testing.T) {
 	}
 }
 
+func TestManagerPastedSessionImmediateEditAndRecopy(t *testing.T) {
+	a, manager := managerClipboardFixture(t)
+	main := ui.NewTester(a.view, 1280, 820)
+	manager.Key(ui.Ctrl, ui.KeyC)
+	a.navigateManager("target")
+	manager.Frame()
+	for iteration := 0; iteration < 3; iteration++ {
+		if err := manager.Click("会话列表"); err != nil {
+			t.Fatal(err)
+		}
+		manager.Key(ui.Ctrl, ui.KeyV)
+		waitOperator(t, a, func() bool { return !a.configurationBusy() })
+		manager.Frame()
+		if len(a.config.Profiles) != iteration+2 {
+			t.Fatal("paste failed", a.status)
+		}
+		p := a.config.Profiles[len(a.config.Profiles)-1]
+		if !a.managerSelection.Has(p.ID) {
+			t.Fatal("paste selected a stale row")
+		}
+		if err := manager.RightClick(p.Name); err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.ChooseMenuItem("属性…"); err != nil {
+			t.Fatal(err)
+		}
+		main.Frame()
+		if !a.editing || a.draft.ID != p.ID || !main.HasText("会话属性") {
+			t.Fatal("pasted session editor did not open immediately")
+		}
+		if iteration == 0 {
+			a.draft.Name = "edited-pasted-session"
+			if err := main.Click("保存"); err != nil {
+				t.Fatal(err)
+			}
+			waitOperator(t, a, func() bool { return !a.features.sessionPassword.busy })
+		} else {
+			if err := main.Click("取消"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		manager.Frame()
+		p, _ = a.profileByID(p.ID)
+		if a.editing || !a.managerSelection.Has(p.ID) {
+			t.Fatal("editor return lost the pasted session")
+		}
+		if secret, err := a.vault.GetFor(p, p.Identity()); err != nil || secret != "fixture-secret" {
+			t.Fatal("copied credential lost binding", err)
+		}
+		if err := manager.RightClick(p.Name); err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.ChooseMenuItem("复制会话配置"); err != nil {
+			t.Fatal(err)
+		}
+		if a.managerClipboard == nil || len(a.managerClipboard.profiles) != 1 || a.managerClipboard.profiles[0].ID != p.ID {
+			t.Fatal("immediate recopy failed", a.status)
+		}
+	}
+	disk, err := a.store.Load()
+	if err != nil || len(disk.Profiles) != 4 || disk.Profiles[1].Name != "edited-pasted-session" {
+		t.Fatal("paste/edit was not persisted", err)
+	}
+}
+
+func TestManagerBusyEditorExplainsRefusal(t *testing.T) {
+	a, manager := managerClipboardFixture(t)
+	a.setConfigurationBusy(true)
+	a.editManagerProfile(a.config.Profiles[0])
+	if a.editing || !strings.HasPrefix(a.status, "错误：配置正在") {
+		t.Fatal("busy edit silently ignored", a.status)
+	}
+	manager.Frame()
+	if !manager.HasText("配置正在保存或同步，完成后可继续编辑、复制和粘贴。") {
+		t.Fatal("manager hides busy state")
+	}
+	a.setConfigurationBusy(false)
+	a.editManagerProfile(a.config.Profiles[0])
+	if !a.editing {
+		t.Fatal("released transaction still blocks editing")
+	}
+}
+
 func TestManagerClipboardLeavesTextEditingAlone(t *testing.T) {
 	a, tt := managerClipboardFixture(t)
 	tt.SetClipboard("search text")

@@ -6,12 +6,17 @@ import (
 	"context"
 	"os"
 	"oshell-desktop/internal/core"
+	"oshell-desktop/internal/diagnostics"
+	"runtime"
 	"time"
 )
 
 func forwardExternalLaunchIfRequested() error {
 	args := os.Args[1:]
 	helper := core.CompatibilityLauncher(args)
+	if runtime.GOOS == "windows" && core.IsBastionSSHLaunch(args) {
+		helper = "OShell-Bastion"
+	}
 	if helper == "" {
 		return nil
 	}
@@ -32,6 +37,7 @@ func forwardExternalLaunchIfRequested() error {
 	if err = core.LaunchApplicationAndSend(ctx, configuration, executable, r); err != nil {
 		return err
 	}
+	diagnostics.Exit("external_launch_forwarded", 0)
 	os.Exit(0)
 	return nil
 }

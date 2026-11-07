@@ -44,9 +44,13 @@ func (a *App) showSyncStatus() {
 }
 func (a *App) syncStatusView(c *ui.Context) {
 	a.drain()
+	if !c.Valid() {
+		return
+	}
 	a.theme(c)
 	defer a.syncStatusOwner().syncDiagnosticsDialog(c)
-	ui.Column(c).Fill().Padding(16).Gap(12).Children(func() {
+	ui.Column(c).Fill().Padding(8).Gap(6).Children(func() {
+		pageHeading(c, "同步状态", "查看配置同步进度与结果。", syncIcon)
 		ui.Scroll(c).Grow(1).MinHeight(0).Children(func() { a.syncStatusCard(c) })
 		owner := a.syncStatusOwner()
 		f := &owner.features.sharedSync

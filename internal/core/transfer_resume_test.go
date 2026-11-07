@@ -82,7 +82,11 @@ func TestSFTPResumeRejectsMissingFileType(t *testing.T) {
 func resumeTestClient(t *testing.T) *sftp.Client {
 	t.Helper()
 	server := startSSH(t, "resume-test")
-	p := testProfile(server.address)
+	return resumeClientAt(t, server.address)
+}
+func resumeClientAt(t *testing.T, address string) *sftp.Client {
+	t.Helper()
+	p := testProfile(address)
 	p.Kind = "sftp"
 	conn, err := Dial(context.Background(), p, Credentials{Password: "resume-test"}, testTrust(t), acceptHost)
 	if err != nil {

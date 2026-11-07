@@ -1,6 +1,7 @@
 package desktop
 
 import (
+	"oshell-desktop/internal/diagnostics"
 	"runtime/debug"
 	"time"
 )
@@ -69,10 +70,12 @@ func (a *App) reclaimIdleMemory(generation uint64) {
 	}
 	r.cancel() // Consume this pass, including a timer callback already queued.
 	r.running = true
+	diagnostics.Event("idle_memory_reclaim_begin", nil)
 	go func() {
 		// The native emulator is freed by Terminal.Close. This pass returns
 		// unreachable Go search, shaping and transfer buffers to the OS.
 		debug.FreeOSMemory()
+		diagnostics.Event("idle_memory_reclaim_end", nil)
 		a.post(func() { r.running = false; r.completed++ })
 	}()
 }

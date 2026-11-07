@@ -295,6 +295,13 @@ func hashFunc(format string) (crypto.Hash, error) {
 	}
 }
 
+// DefaultHostKeyAlgorithms returns a copy of the host-key preference used when
+// ClientConfig.HostKeyAlgorithms is nil. Callers may reorder it for known hosts
+// without duplicating the library defaults or changing the allowed set.
+func DefaultHostKeyAlgorithms() []string {
+	return slices.Clone(defaultHostKeyAlgos)
+}
+
 // SupportedAlgorithms returns algorithms currently implemented by this package,
 // excluding those with security issues, which are returned by
 // InsecureAlgorithms. The algorithms listed here are in preference order.

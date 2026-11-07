@@ -247,6 +247,9 @@ var allMod = func() Modifiers {
 // the accent's text on the item chosen.
 func arrowColor(t *Theme, item *node) Color {
 	if item != nil && item.checked == 2 {
+		if t.CompactLists {
+			return t.Text
+		}
 		return t.AccentText
 	}
 	return t.TextMuted

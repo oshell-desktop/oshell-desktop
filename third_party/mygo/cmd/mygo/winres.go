@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"encoding/binary"
 	"fmt"
 	"os"
@@ -39,12 +40,12 @@ func winresSyso(c *Config, goarch string) ([]byte, error) {
 		rtVersion:  {1: versionInfo(c)},
 		rtManifest: {1: []byte(windowsManifest(c))},
 	}
-	if c.Icon != "" {
-		src, err := os.ReadFile(c.path(c.Icon))
+	if icon := cmp.Or(c.Windows.Icon, c.Icon); icon != "" {
+		src, err := os.ReadFile(c.path(icon))
 		if err != nil {
 			return nil, err
 		}
-		images, err := iconImages(src)
+		images, err := iconImages(src, c.Windows.IconInset)
 		if err != nil {
 			return nil, fmt.Errorf("icon: %w", err)
 		}
@@ -217,18 +218,27 @@ func versionInfo(c *Config) []byte {
 	le.PutUint32(fixed[4:], 0x00010000)                    // dwStrucVersion
 	le.PutUint32(fixed[8:], uint32(v[0])<<16|uint32(v[1])) // dwFileVersionMS
 	le.PutUint32(fixed[12:], uint32(v[2])<<16|uint32(v[3]))
-	copy(fixed[16:24], fixed[8:16])      // dwProductVersion
+	copy(fixed[16:24], fixed[8:16]) // dwProductVersion
+	fileVersion := c.Version
+	if major := c.Windows.FileVersionMajor; major != 0 {
+		le.PutUint32(fixed[8:], uint32(major)<<16|uint32(v[1]))
+		fileVersion = fmt.Sprintf("%d.%d.%d.%d", major, v[1], v[2], v[3])
+	}
 	le.PutUint32(fixed[24:], 0x3F)       // dwFileFlagsMask
 	le.PutUint32(fixed[32:], 0x00040004) // dwFileOS: VOS_NT_WINDOWS32
 	le.PutUint32(fixed[36:], 1)          // dwFileType: VFT_APP
 
 	exe := c.executableName() + ".exe"
+	original := c.Windows.OriginalFilename
+	if original == "" {
+		original = exe
+	}
 	strs := [][2]string{
 		{"FileDescription", c.Name},
-		{"FileVersion", c.Version},
+		{"FileVersion", fileVersion},
 		{"InternalName", exe},
 		{"LegalCopyright", c.Copyright},
-		{"OriginalFilename", exe},
+		{"OriginalFilename", original},
 		{"ProductName", c.Name},
 		{"ProductVersion", c.Version},
 		{"MyGoIdentifier", c.Identifier},

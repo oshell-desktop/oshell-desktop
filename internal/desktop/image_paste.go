@@ -255,9 +255,9 @@ func (a *App) imagePasteDialog(c *ui.Context) {
 	if s == nil {
 		return
 	}
-	ui.Modal(c, &s.open, func() {
-		ui.Column(c).Width(460).Gap(12).Children(func() {
-			ui.Text(c, "粘贴图片").FontSize(18).Bold()
+	desktopModal(c, &s.open, func() {
+		dialogBody(c, 460).Gap(12).Children(func() {
+			windowHeading(c, "粘贴图片")
 			if s.remote {
 				ui.Text(c, "上传到当前 SSH 连接后插入文件路径").Wrap()
 				ui.TextInput(c, &s.directory).Label("远端图片目录").FillWidth().Disabled(s.busy)

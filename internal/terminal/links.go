@@ -41,6 +41,9 @@ func (m terminalLink) clickURL() string {
 }
 
 func (v *view) linkMatchAt(col, row int) terminalLink {
+	if v.t.opts.Replay {
+		return terminalLink{}
+	}
 	if ref, ok := v.t.term.CellAt(col, row); ok {
 		start, end, found := v.t.term.HyperlinkRange(col, row)
 		if link := v.t.term.Hyperlink(ref); link != "" || found {

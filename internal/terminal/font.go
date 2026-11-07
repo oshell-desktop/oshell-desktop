@@ -37,6 +37,7 @@ type Font struct {
 
 // fontKey is a Font at a scale, with the defaults, comparable.
 type fontKey struct {
+	generation uint64
 	family     string
 	size       float32
 	weight     int
@@ -48,6 +49,7 @@ type fontKey struct {
 
 func (f *Font) key(scale float32) fontKey {
 	k := fontKey{family: f.Family, size: f.Size, weight: f.Weight, features: featureList(f.Features), lineHeight: f.LineHeight, thicken: f.Thicken, scale: scale}
+	k.generation = ui.FontGeneration()
 	if strings.TrimSpace(k.family) == "" {
 		k.family = "monospace"
 	}

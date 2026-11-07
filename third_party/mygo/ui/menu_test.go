@@ -7,6 +7,34 @@ import (
 	"github.com/egoist/mygo/internal/platform"
 )
 
+func TestNativePopupUsesViewAppearance(t *testing.T) {
+	for _, theme := range []*Theme{LightTheme(), DarkTheme()} {
+		tt := coreNewTester(func(c *context) {
+			c.SetTheme(theme)
+			menu := func(m *Menu) { m.Item("Open") }
+			coreColumn(c).Children(func() {
+				coreMenuButton(c, "Menu", menu)
+				coreText(c, "Row").ContextMenu(menu)
+				var value string
+				coreTextInput(c, &value).Label("Input")
+			})
+		}, 400, 300)
+		for _, open := range []func() error{
+			func() error { return tt.Click("Menu") },
+			func() error { return tt.RightClick("Row") },
+			func() error { return tt.RightClick("Input") },
+		} {
+			if err := open(); err != nil {
+				t.Fatal(err)
+			}
+			if m := tt.h.menu; m == nil || m.Dark == nil || *m.Dark != theme.Dark {
+				t.Fatalf("native popup did not take the view appearance (dark=%t)", theme.Dark)
+			}
+			tt.CloseMenu()
+		}
+	}
+}
+
 func TestContextMenu(t *testing.T) {
 	var (
 		chosen       []string

@@ -1,14 +1,37 @@
 {
   "name": "OShell Desktop",
   "identifier": "dev.oshell.desktop",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "out": "dist",
-  "icon": "resources/icon.png",
+  "windows": {
+    "originalFilename": "OShell Desktop (PuTTY Xshell SecureCRT MobaXterm).exe",
+    "fileVersionMajor": 6
+  },
+  "icon": "internal/desktop/assets/icon.png",
   "resources": [
+    "internal/desktop/assets/icon.png",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md"
   ],
   "macos": {
-    "minimumSystemVersion": "13.0"
+    "minimumSystemVersion": "13.0",
+    "infoPlist": {
+      "NSServices": [
+        {
+          "NSMenuItem": {
+            "default": "在 OShell Desktop 中打开目录"
+          },
+          "NSMessage": "openDirectoryInOShell",
+          "NSPortName": "OShell Desktop",
+          "NSSendTypes": [
+            "public.file-url",
+            "NSFilenamesPboardType"
+          ],
+          "NSRequiredContext": {
+            "NSApplicationIdentifier": "com.apple.finder"
+          }
+        }
+      ]
+    }
   }
 }

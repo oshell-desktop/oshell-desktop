@@ -103,18 +103,33 @@ func (a *App) tabDetailsHover(c *ui.Context, anchor ui.Element, t *tab) {
 		s.last = now
 		c.After(500 * time.Millisecond)
 	}
-	if s.since.IsZero() || now.Sub(s.last) > 250*time.Millisecond {
+	if s.since.IsZero() {
 		*s = tabHoverState{panel: s.panel}
 		return
 	}
 	if now.Sub(s.since) < 500*time.Millisecond {
+		if now.Sub(s.last) > 250*time.Millisecond {
+			*s = tabHoverState{panel: s.panel}
+		}
 		return
 	}
 	ui.Overlay(c, func() {
-		panel := ui.Column(c.Key("tab-details-"+t.id)).KeepFocusOnClick().AttachTo(anchor, ui.AnchorBottomLeft, ui.AnchorTopLeft).Width(460).MaxHeight(480).Padding(12).Gap(8).Radius(6).Background(c.Theme().Surface).Border(1, c.Theme().Border).Label("标签连接详情")
+		panel := ui.Column(c.Key("tab-details-" + t.id))
+		// Check the card before expiring it: the scheduled frame can arrive
+		// after the grace period even while the pointer rests inside the card.
+		if panel.Hovered() {
+			s.last = now
+		}
+		if now.Sub(s.last) > 250*time.Millisecond {
+			*s = tabHoverState{panel: s.panel}
+			return
+		}
+		width, _ := c.Size()
+		ui.StylePopupPanel(panel)
+		panel.KeepFocusOnClick().AttachTo(anchor, ui.AnchorBottomLeft, ui.AnchorTopLeft).Width(min(float32(460), max(1, width-16))).MaxHeight(480).Padding(8).Gap(4).Label("标签连接详情")
 		panel.Bind(&s.panel)
 		panel.Children(func() {
-			ui.Text(c, t.name).Bold()
+			windowHeading(c, t.name)
 			p := t.active
 			for _, field := range a.paneDetailFields(p) {
 				f := field
@@ -122,7 +137,7 @@ func (a *App) tabDetailsHover(c *ui.Context, anchor ui.Element, t *tab) {
 				if value == "" {
 					value = "未获取"
 				}
-				ui.Row(c).FillWidth().Padding(3, 0).Gap(8).Children(func() {
+				ui.Row(c).FillWidth().MinHeight(detailRowHeight).AlignItems(ui.Center).Gap(8).Children(func() {
 					ui.Text(c, f.label).Width(86).TextColor(c.Theme().TextMuted)
 					ui.Text(c, value).Grow(1).MinWidth(0).SingleLine().Tooltip(value)
 					if f.value != "" {
@@ -157,9 +172,6 @@ func (a *App) tabDetailsHover(c *ui.Context, anchor ui.Element, t *tab) {
 			ui.Text(c, feedback).FontSize(11).TextColor(c.Theme().TextMuted)
 
 		})
-		if panel.Hovered() {
-			s.last = now
-		}
 		c.After(250 * time.Millisecond)
 	})
 }

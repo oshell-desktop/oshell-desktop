@@ -721,6 +721,9 @@ func (p *Painter) drawBitmapRegion(img *Bitmap, dst, frac Rect, radius [4]float3
 // scrollbars draws the thumbs of a scroll container whose content
 // overflows it.
 func (p *Painter) scrollbars(e *node) {
+	if e.hideScrollbars {
+		return
+	}
 	st := e.st
 	rt := e.c.rt
 	theme := e.c.theme

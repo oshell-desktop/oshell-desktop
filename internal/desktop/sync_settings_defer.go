@@ -6,7 +6,7 @@ func (a *App) syncEditingBlocked() bool {
 		windows = a.hub.configurationWindows()
 	}
 	for _, window := range windows {
-		if window.settingsOpen || window.modalActive() || tabMoveDialogOpen(window.win) {
+		if window.manager != nil || window.managerRename != nil || window.settingsOpen || window.modalActive() || tabMoveDialogOpen(window.win) {
 			return true
 		}
 	}

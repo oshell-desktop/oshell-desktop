@@ -37,28 +37,24 @@ func (a *App) clockSettings(c *ui.Context) {
 			combo := ui.ComboboxBase(c, &s.TerminalClockFontName)
 			combo.Input.Label("时钟字体").Placeholder("系统等宽（默认），或搜索本机字体").Padding(5, 8).Border(1, c.Theme().Border).Background(c.Theme().Surface)
 			combo.Popup(func(panel ui.Element) {
-				panel.Padding(4).Background(c.Theme().Background).Border(1, c.Theme().Border)
-				ui.Scroll(c).MaxHeight(240).Children(func() {
-					shown := 0
-					for _, name := range fonts {
-						if combo.Filtering() && !strings.Contains(strings.ToLower(name), strings.ToLower(s.TerminalClockFontName)) {
-							continue
-						}
-						if shown >= 200 {
-							break
-						}
-						shown++
-						label := name
-						if label == "" {
-							label = "系统等宽（默认）"
-						}
-						item := combo.Item(name).Padding(5, 8)
-						if item.Highlighted() {
-							item.Background(c.Theme().Selection)
-						}
-						item.Children(func() { ui.Text(c, label) })
+				ui.StylePickerPanel(panel)
+				shown := 0
+				for _, name := range fonts {
+					if combo.Filtering() && !strings.Contains(strings.ToLower(name), strings.ToLower(s.TerminalClockFontName)) {
+						continue
 					}
-				})
+					if shown >= 200 {
+						break
+					}
+					shown++
+					label := name
+					if label == "" {
+						label = "系统等宽（默认）"
+					}
+					item := combo.Item(name)
+					ui.StylePopupOption(item, name == s.TerminalClockFontName)
+					item.Children(func() { ui.Text(c, label).SingleLine() })
+				}
 			})
 			if value, ok := combo.Chosen(); ok {
 				s.TerminalClockFontName = value
@@ -80,7 +76,7 @@ func (a *App) clockSettings(c *ui.Context) {
 	ui.Text(c, fmt.Sprintf("透明度 %.0f%%", s.TerminalClockOpacity*100))
 	ui.Slider(c, &s.TerminalClockOpacity, 0, 1).Label("时钟透明度")
 	ui.Text(c, "缺失字体自动回退到系统等宽字体；0% 时停止时钟刷新。").FontSize(12).TextColor(c.Theme().TextMuted)
-	ui.Text(c, "叠加预览").Bold()
+	sectionTitle(c, "叠加预览")
 	preview := *s
 	if size, err := strconv.ParseFloat(a.clockSizeDraft, 64); err == nil && size >= 8 && size <= 96 {
 		preview.TerminalClockFontSize = size
@@ -91,5 +87,5 @@ func (a *App) clockSettings(c *ui.Context) {
 	box := ui.Column(c).Height(180).FillWidth().Padding(12).Background(ui.Hex(s.Scheme().Background)).Label("时钟叠加预览").Children(func() {
 		ui.Text(c, "user@server:~$ ls -la\nDocuments  Downloads  projects\nuser@server:~$ ping example.com\n64 bytes: time=12.4 ms\n终端文字继续显示，时钟浮层不占用行列。").Font("monospace").FontSize(13).TextColor(ui.Hex(s.Scheme().Foreground))
 	})
-	drawClockOverlay(box, preview, core.LocalClockText(time.Now()))
+	drawClockOverlay(box, preview, core.LocalClockText(time.Now()), nil)
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"net"
 	"strconv"
@@ -110,13 +111,8 @@ type sender struct {
 
 	reader *reader
 
-	// escctlApplied flips to true after we've committed to an ESCCTL decision
-	// based on the first ZRINIT we sniff from the receiver.
-	escctlApplied bool
-
-	// Rolling windows for incremental frame detection.
-	sniff    []byte // 24-byte ESCCTL negotiation window
-	hexSniff []byte // 32-byte hex-header match window
+	// Receiver-advertised byte window; zero means no explicit limit.
+	receiveWindow uint32
 
 	startedAt time.Time
 }
@@ -172,55 +168,20 @@ func (s *sender) run() error {
 	return nil
 }
 
-// maybeNegotiateEscctl accumulates a rolling sniff buffer and, once the
-// receiver's first ZRINIT is fully in the window, toggles the ZDLE table.
-func (s *sender) maybeNegotiateEscctl(chunk []byte) {
-	if s.escctlApplied {
-		return
-	}
-	s.sniff = append(s.sniff, chunk...)
-	if len(s.sniff) > 24 {
-		s.sniff = s.sniff[len(s.sniff)-24:]
-	}
-	requested, ok := DetectEscctlFromZrinit(s.sniff)
-	if !ok {
-		return
-	}
-	if requested {
-		s.codec.allControls = true
-	}
-	s.escctlApplied = true
-}
-
-// waitForZrinit reads bytes until a ZRINIT header appears, piping all
-// consumed bytes through the ESCCTL sniff logic along the way.
+// waitForZrinit accepts the same checked header encodings as the receiver.
+// Negotiate only a complete CRC-valid ZRINIT, including its receive window.
 func (s *sender) waitForZrinit() error {
-	return s.awaitHexFrame(FrameZRINIT, true)
-}
-
-// waitForZfin reads until we see a ZHEX ZFIN frame from the receiver.
-func (s *sender) waitForZfin() error {
-	return s.awaitHexFrame(FrameZFIN, false)
-}
-
-// awaitHexFrame drives the reader until a ZHEX header of the given type
-// arrives. When `sniffEscctl` is true, each byte is also fed through the
-// ESCCTL negotiation window — only the first waitForZrinit does this since
-// once we've committed to an ESCCTL decision for the session there's no
-// value re-evaluating later frames.
-func (s *sender) awaitHexFrame(want byte, sniffEscctl bool) error {
-	for {
-		b, err := s.reader.readByte(activityTimeout)
-		if err != nil {
-			return err
-		}
-		if sniffEscctl {
-			s.maybeNegotiateEscctl([]byte{b})
-		}
-		if frame, ok := s.matchNextHexFrame(b); ok && frame == want {
-			return nil
-		}
+	_, count, err := s.awaitOneOfWithCount(FrameZRINIT)
+	if err == nil {
+		s.codec.allControls = s.codec.allControls || byte(count>>24)&EscCtl != 0
+		s.receiveWindow = count & 0xffff
 	}
+	return err
+}
+
+func (s *sender) waitForZfin() error {
+	_, _, err := s.awaitOneOfWithCount(FrameZFIN)
+	return err
 }
 
 // waitForZrpos waits for a ZRPOS header (can be ZHEX or ZBIN), parses the
@@ -241,7 +202,7 @@ func (s *sender) waitForZrpos() (uint32, error) {
 	for {
 		frame, count, err := s.awaitOneOfWithCount(
 			FrameZRPOS, FrameZSKIP, FrameZABORT, FrameZFERR,
-			FrameZNAK, FrameZRINIT,
+			FrameZNAK, FrameZRINIT, FrameZCRC,
 		)
 		if err != nil {
 			return 0, err
@@ -258,7 +219,35 @@ func (s *sender) waitForZrpos() (uint32, error) {
 		case FrameZFERR:
 			logger.Info("ZMODEM receiver sent ZFERR — aborting transfer")
 			return 0, ErrRemoteFile
+		case FrameZCRC:
+			// lrzsz verifies the existing prefix before allowing resume.
+			length := s.size
+			if count != 0 && int64(count) < length {
+				length = int64(count)
+			}
+			hash := crc32.NewIEEE()
+			n, err := io.Copy(hash, io.NewSectionReader(s.source, 0, length))
+			if err != nil {
+				return 0, err
+			}
+			if n != length {
+				return 0, io.ErrUnexpectedEOF
+			}
+			if _, err := s.conn.Write(s.codec.header16(FrameZCRC, hash.Sum32())); err != nil {
+				return 0, err
+			}
 		case FrameZNAK, FrameZRINIT:
+			if frame == FrameZRINIT {
+				// Like lrzsz zsendfile: a delayed init can precede a valid
+				// ZRPOS. Allow that next header to arrive before resending.
+				pending, err := s.nextHeaderPending()
+				if err != nil {
+					return 0, err
+				}
+				if pending {
+					continue
+				}
+			}
 			if resends >= maxZfileResends {
 				return 0, fmt.Errorf("ZMODEM ZFILE resend limit exceeded")
 			}
@@ -271,6 +260,27 @@ func (s *sender) waitForZrpos() (uint32, error) {
 	}
 }
 
+func (s *sender) nextHeaderPending() (bool, error) {
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return false, nil
+		}
+		b, err := s.reader.readByte(remaining)
+		if errors.Is(err, errActivityTimeout) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if b == ZPAD {
+			s.reader.unread([]byte{b})
+			return true, nil
+		}
+	}
+}
+
 // gracefulClose emits a best-effort ZFIN + OO so the receiver sees a clean
 // session terminator. Used when the receiver has signalled ZSKIP/ZABORT —
 // the transfer is over, but we still owe the peer a tidy goodbye so it
@@ -279,26 +289,6 @@ func (s *sender) waitForZrpos() (uint32, error) {
 func (s *sender) gracefulClose() {
 	_, _ = s.conn.Write(BuildZhexHeader(FrameZFIN, 0))
 	_, _ = s.conn.Write([]byte{'O', 'O'})
-}
-
-// matchNextHexFrame appends `cur` to the rolling hex-sniff window and
-// reports any complete ZHEX header it can now decode out of the tail.
-func (s *sender) matchNextHexFrame(cur byte) (frame byte, ok bool) {
-	s.hexSniff = append(s.hexSniff, cur)
-	if len(s.hexSniff) > 32 {
-		s.hexSniff = s.hexSniff[len(s.hexSniff)-32:]
-	}
-	buf := s.hexSniff
-	for i := 0; i+18 <= len(buf); i++ {
-		if buf[i] != ZPAD || buf[i+1] != ZPAD || buf[i+2] != ZDLE || buf[i+3] != ZHEX {
-			continue
-		}
-		if f, _, decOk := DecodeHexHeader(buf, i+4); decOk {
-			s.hexSniff = nil
-			return f, true
-		}
-	}
-	return 0, false
 }
 
 // buildZfile emits the ZBIN16 ZFILE header + lrzsz-format fileinfo subpacket.
@@ -343,6 +333,10 @@ func (s *sender) streamData(startOffset uint32) error {
 		return fmt.Errorf("ZMODEM: resume offset %d exceeds file size %d", startOffset, s.size)
 	}
 	offset := startOffset
+	burstLimit := uint32(subpacketSize * subpacketsPerAck)
+	if s.receiveWindow != 0 && s.receiveWindow < burstLimit {
+		burstLimit = s.receiveWindow
+	}
 	for int(offset) < int(s.size) {
 		burstStart := offset
 		// Assemble one ZDATA burst (up to subpacketsPerAck subpackets or EOF).
@@ -353,7 +347,7 @@ func (s *sender) streamData(startOffset uint32) error {
 			if remaining <= 0 {
 				break
 			}
-			size := min(remaining, subpacketSize)
+			size := min(remaining, subpacketSize, int(burstLimit-(offset-burstStart)))
 			chunk := make([]byte, size)
 			n, e := s.source.ReadAt(chunk, int64(offset))
 			if n != size {
@@ -364,7 +358,7 @@ func (s *sender) streamData(startOffset uint32) error {
 			}
 
 			kind := byte(ZCRCG)
-			last := int(offset)+len(chunk) == int(s.size) || i == subpacketsPerAck-1
+			last := int(offset)+len(chunk) == int(s.size) || i == subpacketsPerAck-1 || offset-burstStart+uint32(len(chunk)) == burstLimit
 			if last {
 				kind = ZCRCW
 			}
@@ -455,110 +449,25 @@ func (s *sender) awaitBurstResponse() (burstResponse, error) {
 	return burstResponse{frame: frame, offset: count}, nil
 }
 
-// awaitOneOfWithCount scans incoming bytes for any frame whose type appears
-// in `wants` and returns (frame, 32-bit count/offset payload). Accepts both
-// ZHEX and ZBIN encodings — old receivers send ZHEX, lrzsz-in-CANOVIO-mode
-// can send ZBIN.
+// awaitOneOfWithCount shares the receiver's CRC-checked header decoder.
+// This handles flow control inside headers, legal padding, binary CRC16/32,
+// and ZRUB0/ZRUB1 escapes identically in both transfer directions.
 func (s *sender) awaitOneOfWithCount(wants ...byte) (byte, uint32, error) {
-	const windowSize = 64
-	var rolling []byte
+	r := &receiver{conn: s.conn, reader: s.reader}
 	for {
-		b, err := s.reader.readByte(activityTimeout)
+		frame, count, err := r.readHeader()
 		if err != nil {
 			return 0, 0, err
 		}
-		s.maybeNegotiateEscctl([]byte{b})
-		rolling = append(rolling, b)
-		if len(rolling) > windowSize {
-			rolling = rolling[len(rolling)-windowSize:]
-		}
 		for _, want := range wants {
-			if count, ok := scanZhexFrame(rolling, want); ok {
-				return want, count, nil
-			}
-			if count, ok := scanZbinFrame(rolling, want); ok {
-				return want, count, nil
+			if frame == want {
+				return frame, count, nil
 			}
 		}
-	}
-}
-
-// scanZhexFrame looks for a ZHEX header of type `want` in `buf` and returns
-// its 4-byte count if found.
-func scanZhexFrame(buf []byte, want byte) (uint32, bool) {
-	for i := 0; i+18 <= len(buf); i++ {
-		if buf[i] != ZPAD || buf[i+1] != ZPAD || buf[i+2] != ZDLE || buf[i+3] != ZHEX {
-			continue
-		}
-		frame, flags, ok := DecodeHexHeader(buf, i+4)
-		if !ok || frame != want {
-			continue
-		}
-		return uint32(flags[0]) | uint32(flags[1])<<8 | uint32(flags[2])<<16 | uint32(flags[3])<<24, true
-	}
-	return 0, false
-}
-
-// scanZbinFrame looks for a ZBIN (CRC16) header of type `want` in `buf` and
-// returns its 4-byte count if found.
-func scanZbinFrame(buf []byte, want byte) (uint32, bool) {
-	for i := 0; i+3 < len(buf); i++ {
-		if buf[i] != ZPAD || buf[i+1] != ZDLE || buf[i+2] != ZBIN {
-			continue
-		}
-		payload, ok := parseZbinPayload(buf[i+3:])
-		if !ok || payload[0] != want {
-			continue
-		}
-		return uint32(payload[1]) | uint32(payload[2])<<8 | uint32(payload[3])<<16 | uint32(payload[4])<<24, true
-	}
-	return 0, false
-}
-
-// parseZbinPayload unescapes up to 7 bytes (5 payload + 2 CRC) from a ZBIN
-// frame body that starts immediately after the ZBIN marker. Returns the 5
-// payload bytes on success (CRC is checked).
-func parseZbinPayload(buf []byte) ([]byte, bool) {
-	payload := make([]byte, 0, 5)
-	crcIn := make([]byte, 0, 2)
-	i := 0
-	for len(payload) < 5 && i < len(buf) {
-		b := buf[i]
-		if b == ZDLE {
-			if i+1 >= len(buf) {
-				return nil, false
-			}
-			payload = append(payload, buf[i+1]^0x40)
-			i += 2
-		} else {
-			payload = append(payload, b)
-			i++
+		if frame == FrameZABORT || frame == FrameZFERR || frame == FrameZSKIP {
+			return 0, 0, peerRejection(frame)
 		}
 	}
-	if len(payload) < 5 {
-		return nil, false
-	}
-	for len(crcIn) < 2 && i < len(buf) {
-		b := buf[i]
-		if b == ZDLE {
-			if i+1 >= len(buf) {
-				return nil, false
-			}
-			crcIn = append(crcIn, buf[i+1]^0x40)
-			i += 2
-		} else {
-			crcIn = append(crcIn, b)
-			i++
-		}
-	}
-	if len(crcIn) < 2 {
-		return nil, false
-	}
-	expected := uint16(crcIn[0])<<8 | uint16(crcIn[1])
-	if CRC16(payload) != expected {
-		return nil, false
-	}
-	return payload, true
 }
 
 // --- reader ----------------------------------------------------------------

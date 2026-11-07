@@ -86,7 +86,7 @@ func (w *Window) attachContent() {
 			// event that asked for it, which the surface is handling.
 			postMain(func() {
 				if w.native != nil {
-					menu.popup(w, pos)
+					menu.popup(w, pos, m.Dark)
 				}
 			})
 		},

@@ -39,9 +39,9 @@ func (a *App) openFileAction(p *pane, action string) {
 }
 func (a *App) fileActionDialog(c *ui.Context) {
 	f := &a.features
-	ui.Modal(c, &f.fileOpen, func() {
-		ui.Column(c).Width(420).Gap(12).Children(func() {
-			ui.Text(c, f.fileAction).FontSize(17).Bold()
+	desktopModal(c, &f.fileOpen, func() {
+		dialogBody(c, 420).Gap(12).Children(func() {
+			windowHeading(c, f.fileAction)
 			if f.filePane != nil {
 				ui.Text(c, f.filePane.profile.Name+" · "+f.filePane.profile.Host+" · "+f.fileActionDirectory).FontSize(12).TextColor(c.Theme().TextMuted)
 			}
@@ -58,7 +58,7 @@ func (a *App) fileActionDialog(c *ui.Context) {
 			if f.fileError != "" {
 				ui.Text(c, f.fileError).TextColor(c.Theme().Danger)
 			}
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			dialogActions(c).Children(func() {
 				ui.Button(c, "取消").OnClick(func() { f.fileOpen = false })
 				ui.PrimaryButton(c, "应用").OnClick(a.applyFileAction)
 			})
@@ -79,7 +79,7 @@ func (a *App) deleteRemote(p *pane) {
 		}
 	}
 	a.withTransfer(p, func(ctx context.Context, client core.RemoteFileSystem) error {
-		result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Type: mygo.MessageWarning, Title: "删除远程项目", Message: fmt.Sprintf("删除 %d 个远程项目？", len(names)), Detail: strings.Join(names, "\n") + "\n永久删除，不进入废纸篓；目录必须为空。", Buttons: []string{"取消", "删除"}, DefaultButton: 0, CancelButton: 0})
+		result, err := mygo.Dialog.Message(mygo.MessageOptions{Parent: a.fileParent(), Type: mygo.MessageWarning, Title: "删除远程项目", Message: fmt.Sprintf("删除 %d 个远程项目？", len(names)), Detail: strings.Join(names, "\n") + "\n永久删除，不进入废纸篓；目录必须为空。", Buttons: []string{"取消", "删除"}, DefaultButton: 0, CancelButton: 0})
 		if err != nil {
 			return err
 		}

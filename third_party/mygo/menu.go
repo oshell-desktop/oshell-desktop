@@ -181,18 +181,19 @@ func (m *Menu) itemByID(id string) *MenuItem {
 // It returns once the menu is closed.
 func (m *Menu) Popup(win *Window) {
 	needsApp("Menu.Popup")
-	m.popup(win, nil)
+	m.popup(win, nil, nil)
 }
 
 // PopupAt shows the menu as a context menu at a position relative to the
 // top-left corner of win's page area.
 func (m *Menu) PopupAt(win *Window, x, y int) {
 	needsApp("Menu.PopupAt")
-	m.popup(win, &platform.Point{X: x, Y: y})
+	m.popup(win, &platform.Point{X: x, Y: y}, nil)
 }
 
-func (m *Menu) popup(win *Window, pos *platform.Point) {
+func (m *Menu) popup(win *Window, pos *platform.Point, dark *bool) {
 	snap := m.snapshot()
+	snap.Dark = dark
 	onMain(func() {
 		var n platform.Window
 		if win != nil {

@@ -834,6 +834,7 @@ func (rt *engine) commitElement(e *node, clip Rect, hidden bool) {
 	if e.flags&(flagScrollX|flagScrollY) != 0 {
 		s.contentW, s.contentH = e.contentW, e.contentH
 		s.barInset = e.barInset
+		s.hideScrollbars = e.hideScrollbars
 	}
 	// What is invisible keeps its box but takes neither the pointer nor
 	// the focus, and has no text to find; so does what is inert, which

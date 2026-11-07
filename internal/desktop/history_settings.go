@@ -26,7 +26,7 @@ func (a *App) historySettings(c *ui.Context) {
 	labels := append(append([]string(nil), historyPresets...), "自定义…")
 	ui.Field(c, "历史行数", func() {
 		choice := labels[index]
-		ui.Select(c, &choice, labels).Label("历史行数预设")
+		ui.Select(c, &choice, labels).Label("历史行数预设").Width(160)
 		index = historyPresetIndex(choice)
 		if index != before {
 			if index == len(historyPresets) {
@@ -41,7 +41,7 @@ func (a *App) historySettings(c *ui.Context) {
 			}
 		}
 		if index == len(historyPresets) {
-			ui.TextInput(c, &f.settingsLines).Label("自定义历史行数").Placeholder("500–100000")
+			ui.TextInput(c, &f.settingsLines).Label("自定义历史行数").Placeholder("500–100000").Width(160)
 			f.historyCustomText = f.settingsLines
 		}
 	})

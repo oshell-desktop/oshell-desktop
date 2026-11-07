@@ -18,6 +18,9 @@ func (t *Terminal) noteIdleInput(data []byte) {
 
 // IdleInputSafe is called by the connection timer; never consults UI-owned state.
 func (t *Terminal) IdleInputSafe() bool {
+	if t.opts.Agent != nil && t.opts.Agent.Recording() {
+		return false
+	}
 	if !t.Available() || t.idleEditing.Load() {
 		return false
 	}

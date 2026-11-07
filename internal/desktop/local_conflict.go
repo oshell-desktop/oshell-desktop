@@ -277,9 +277,9 @@ func (a *App) resolveLocalConflict(reload bool) {
 }
 func (a *App) localConflictDialog(c *ui.Context) {
 	f := &a.features.localConflict
-	ui.Modal(c, &f.open, func() {
-		ui.Column(c).Width(760).Gap(10).Children(func() {
-			ui.Text(c, "本地配置发生变化").FontSize(18).Bold()
+	desktopModal(c, &f.open, func() {
+		dialogBody(c, 760).Gap(10).Children(func() {
+			windowHeading(c, "本地配置发生变化")
 			ui.Text(c, "其他进程修改了磁盘配置。会话和对应凭据作为整体选择；独立改动会自动合并，当前连接保持运行。").Wrap()
 			if f.error != "" {
 				ui.Text(c, f.error).Wrap().TextColor(c.Theme().Danger)

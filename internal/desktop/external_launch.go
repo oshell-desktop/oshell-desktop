@@ -67,6 +67,9 @@ func (h *applicationHub) drainExternalLaunch() {
 		var e error
 		if request := pending.request.Terminal; request != nil {
 			profile, e = request.ProfileValue()
+			if e == nil && profile.RuntimeBastionEndpoint != "" {
+				e = core.LoadBastionKeepAlive(a.store.Dir, &profile, a.config.SessionDefaults.KeepAlive)
+			}
 			password = request.Password
 		} else {
 			profile = pending.request.File.Profile
@@ -76,6 +79,9 @@ func (h *applicationHub) drainExternalLaunch() {
 			credentials := core.Credentials{ExternalLaunch: true}
 			if password != nil {
 				credentials.Password = *password
+				if r := pending.request.Terminal; r != nil && r.BastionSSH {
+					credentials.Method = "password"
+				}
 			}
 			if pending.request.File != nil {
 				h.openExternalFile(profile, credentials)

@@ -8,6 +8,8 @@ type Theme struct {
 	Dark bool
 	// Background fills the window.
 	Background Color
+	// Panel is the fill of floating panels. Zero inherits Background.
+	Panel Color
 	// Surface is the face of buttons, inputs and other controls;
 	// SurfaceHover and SurfacePressed while hovered or pressed.
 	Surface        Color
@@ -32,6 +34,9 @@ type Theme struct {
 	Success Color
 	// Selection highlights selected text.
 	Selection Color
+	// CompactLists uses the selection tint for rows and draws tables with
+	// narrow cell padding and column separators.
+	CompactLists bool
 	// Focus is the ring around the control with the keyboard focus.
 	Focus Color
 	// Inverse fills tooltips and toasts, the theme turned over so that

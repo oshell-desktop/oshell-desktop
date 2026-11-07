@@ -21,7 +21,10 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+type testSSHExecHandler func(string, ssh.Channel)
+
 type testSSH struct {
+	execHandler                      atomic.Pointer[testSSHExecHandler]
 	hostKey                          ssh.PublicKey
 	terminalTypes                    chan string
 	address                          string
@@ -197,6 +200,11 @@ func startSSH(t *testing.T, password string, configure ...func(*ssh.ServerConfig
 								case "exec":
 									var payload struct{ Command string }
 									ssh.Unmarshal(r.Payload, &payload)
+									if handler := server.execHandler.Load(); handler != nil {
+										r.Reply(true, nil)
+										(*handler)(payload.Command, ch)
+										return
+									}
 									args, ok := scpTestArgs(payload.Command)
 									if !ok {
 										r.Reply(false, nil)

@@ -59,6 +59,8 @@ python scripts/test-configuration-contract.py
 
 macOS 平台适配和连接助手保留作兼容用途，不参与 Windows / Linux 发布。第三方许可证、必要协议样本和互通脚本不能作为缓存清理。
 
+清理本机工作区时，`validation/` 中的旧编译缓存、重复 EXE/ZIP、测试二进制及已完成的一次性修改脚本可以删除；日志、截图、验收 JSON 和源码对照证据保留。`validation/vt` 只需保留当前补丁指纹对应的 Windows/Linux 构建与所用工具链，旧指纹目录和 `.zig-cache` 可重建。不要整体删除 `validation/`：其中还有参考源码、互通工具和配置备份。`dist` 用户数据、`.release-private` 签名材料及未提交源码不属于缓存。
+
 CI 的容器、缓存和分片规则见 [CI 说明](ci-performance.md)。
 
 OShell 源码索引、功能交互对照及未完成项见 [跨端对齐记录](oshell-parity.md)。测试通过不能代替逐项行为一致性验收。

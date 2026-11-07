@@ -626,8 +626,67 @@ func corePopover(c *context, anchor *node, open *bool, fn func()) *node {
 // stylePanel gives the panel of a popup the theme's look.
 func stylePanel(c *context, panel *node) {
 	t := c.theme
-	panel.Margin(t.Space(1), 0, 0, 0).Padding(t.Space(1)).Radius(t.Radius+2).Background(t.Background).Border(1, t.Border)
+	fill, radius := t.Background, t.Radius+2
+	if t.Panel != Transparent {
+		fill, radius = t.Panel, t.Radius
+	}
+	panel.Margin(t.Space(1), 0, 0, 0).Padding(t.Space(1)).Radius(radius).Background(fill).Border(1, t.Border)
 	panel.Shadow(0, 6, 20, 0, RGBA(0, 0, 0, 0.18))
+}
+
+// StylePopupPanel applies the standard popover surface to a custom overlay.
+func StylePopupPanel(panel Element) {
+	if n := panel.node(); n != nil {
+		stylePanel(n.c, n)
+	}
+}
+
+// StylePickerPanel styles an anchored SelectBase or ComboboxBase popup.
+// Long option lists scroll on the side of the trigger with more room.
+func StylePickerPanel(panel Element) {
+	if n := panel.node(); n != nil {
+		stylePickerPanel(n)
+	}
+}
+
+func stylePickerPanel(panel *node) {
+	c := panel.c
+	stylePanel(c, panel)
+	trigger := panel.popover.Bounds()
+	room := max(trigger.Y, c.h-trigger.Y-trigger.H) - c.theme.Space(1) - windowMargin
+	panel.MaxHeight(max(1, min(c.theme.Space(96), room)))
+	panel.flags |= flagScrollY | flagHover
+}
+
+// StylePopupOption matches the highlight and row metrics of a standard picker.
+func StylePopupOption(item Element, selected bool) {
+	if n := item.node(); n != nil {
+		stylePopupOption(n, selected)
+	}
+}
+
+func stylePopupOption(item *node, selected bool) {
+	t := item.c.theme
+	item.Padding(t.Space(1.5), t.Space(2.5)).Radius(t.Radius)
+	if t.CompactLists {
+		item.MinHeight(t.Space(8)).Radius(0)
+		if item.Highlighted() && item.parent.scrolls() {
+			last := coreLocal(item.parent, "highlighted-option", func() uint64 { return 0 })
+			if *last != item.id {
+				// Reveal a new keyboard highlight once, then let the wheel scroll freely.
+				item.ScrollIntoView()
+				*last = item.id
+			}
+		}
+	}
+	switch {
+	case item.Highlighted() && t.CompactLists:
+		item.Background(t.Selection).TextColor(t.Text)
+	case item.Highlighted():
+		item.Background(t.Accent).TextColor(t.AccentText)
+	case selected:
+		item.Background(t.Surface)
+	}
 }
 
 // Select creates a drop-down choosing one of options into *selected.
@@ -642,15 +701,14 @@ func coreSelect(c *context, selected *string, options []string) *node {
 		chevron(c)
 	})
 	sel.Popup(func(panel *node) {
-		stylePanel(c, panel)
+		if t.CompactLists {
+			stylePickerPanel(panel)
+		} else {
+			stylePanel(c, panel)
+		}
 		for _, opt := range options {
-			item := sel.Item(opt).Padding(t.Space(1.5), t.Space(2.5)).Radius(t.Radius)
-			switch {
-			case item.Highlighted():
-				item.Background(t.Accent).TextColor(t.AccentText)
-			case opt == *selected:
-				item.Background(t.Surface)
-			}
+			item := sel.Item(opt)
+			stylePopupOption(item, opt == *selected)
 			item.Children(func() { coreText(c, opt).SingleLine() })
 		}
 	})

@@ -151,6 +151,9 @@ func (l *outputLog) run() {
 	}
 }
 func (t *Terminal) observeOutput(b []byte) {
+	if t.opts.Agent != nil {
+		t.opts.Agent.ObserveDisplay(b)
+	}
 	t.logMu.Lock()
 	l := t.logFile
 	t.logMu.Unlock()

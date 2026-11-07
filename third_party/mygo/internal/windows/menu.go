@@ -219,7 +219,7 @@ func (w *window) popupMenuBar(key uintptr) {
 		w.menuKey = menuKey{popup: popup, key: key}
 		postMessage(w.hwnd, wmChar, key, 0)
 	}
-	cmd := w.b.trackPopup(popup, w.hwnd, pt)
+	cmd := w.b.trackPopup(popup, w.hwnd, pt, nil)
 	w.menuKey = menuKey{}
 	for i := count - 1; i >= 0; i-- {
 		procRemoveMenu.Call(popup, uintptr(i), mfByPosition)
@@ -356,15 +356,22 @@ func (b *Backend) PopupMenu(m *platform.Menu, pw platform.Window, pos *platform.
 	} else {
 		procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
 	}
-	cmd := b.trackPopup(menu, owner, pt)
+	cmd := b.trackPopup(menu, owner, pt, m.Dark)
 	if cmd != 0 {
 		b.menuCommand(cmd, w)
 	}
 }
 
 // trackPopup shows a popup menu and returns the chosen command, or 0.
-func (b *Backend) trackPopup(menu, owner uintptr, pt point) uint16 {
-	b.applyNativeMenuTheme(owner)
+func (b *Backend) trackPopup(menu, owner uintptr, pt point, viewDark *bool) uint16 {
+	dark := b.isDark()
+	if viewDark != nil && *viewDark != dark {
+		dark = *viewDark
+		// UxTheme's preference is process-wide. A settings preview should
+		// only override it for the lifetime of its native menu.
+		defer func() { b.applyNativeMenuTheme(owner, b.isDark()) }()
+	}
+	b.applyNativeMenuTheme(owner, dark)
 	// The owner must be in the foreground, or the menu does not close
 	// when the user clicks elsewhere.
 	procSetForegroundWindow.Call(owner)

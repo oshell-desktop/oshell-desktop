@@ -83,7 +83,8 @@ func (a *App) managerNameEditor(c *ui.Context, r sessionRow) bool {
 	if s == nil || s.row.id != r.id {
 		return false
 	}
-	input := ui.TextInput(c.Key("rename-"+r.id), &s.name).Label("重命名 " + r.name).AutoFocus().FillWidth().TextColor(c.Theme().Text)
+	input := ui.TextInput(c.Key("rename-"+r.id), &s.name).Label("重命名 "+r.name).AutoFocus().FillWidth().
+		Height(22).MinHeight(0).Padding(1, 3).TextColor(c.Theme().Text)
 	if !s.focused {
 		input.Focus().SetTextSelection(0, len([]rune(s.name)))
 	}

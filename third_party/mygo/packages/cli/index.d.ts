@@ -195,6 +195,8 @@ export interface NotarizeConfig {
 
 /** Windows packaging. */
 export interface WindowsConfig {
+  /** Windows executable and installer artwork (PNG or SVG). Defaults to the shared icon. */
+  icon?: string;
   /** A code signing certificate (.pfx); its password comes from `MYGO_WINDOWS_CERTIFICATE_PASSWORD`. */
   certificate?: string;
   /** Instead of `certificate`, a command that signs a file, with `%1` for its path. */

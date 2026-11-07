@@ -67,9 +67,9 @@ func (a *App) commitQuickCommand(deleting bool) {
 }
 func (a *App) quickCommandDialog(c *ui.Context) {
 	f := &a.features
-	ui.Modal(c, &f.commandsOpen, func() {
-		ui.Column(c).Width(740).Gap(10).Children(func() {
-			ui.Text(c, "快速命令管理器").FontSize(18).Bold()
+	desktopModal(c, &f.commandsOpen, func() {
+		dialogBody(c, 740).Gap(10).Children(func() {
+			windowHeading(c, "快速命令管理器")
 			if f.commandError != "" {
 				ui.Text(c, f.commandError).TextColor(c.Theme().Danger)
 			}
@@ -78,7 +78,7 @@ func (a *App) quickCommandDialog(c *ui.Context) {
 				ui.Field(c, "分组", func() { ui.TextInput(c, &q.Group).Label("命令分组") })
 				ui.TextArea(c, &q.Text).Height(210).Label("命令内容")
 				ui.Checkbox(c, &q.AppendReturn, "追加回车")
-				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+				dialogActions(c).Children(func() {
 					ui.Button(c, "取消编辑").OnClick(func() { f.commandEdit = nil; f.commandOriginal = nil; f.commandError = "" })
 					ui.PrimaryButton(c, "保存命令").OnClick(func() { a.commitQuickCommand(false) })
 				})
@@ -86,7 +86,7 @@ func (a *App) quickCommandDialog(c *ui.Context) {
 			}
 			if q := f.commandDelete; q != nil {
 				ui.Text(c, "删除“"+q.Name+"”？").Wrap()
-				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+				dialogActions(c).Children(func() {
 					ui.Button(c, "取消删除").OnClick(func() { f.commandDelete = nil; f.commandError = "" })
 					ui.Button(c, "确认删除").OnClick(func() { a.commitQuickCommand(true) })
 				})
@@ -106,7 +106,7 @@ func (a *App) quickCommandDialog(c *ui.Context) {
 					text = strings.ReplaceAll(q.Text, "\n", " ↵ ")
 				}
 				ui.Text(c, text).SingleLine()
-			}).Height(280)
+			}).Height(280).Border(1, c.Theme().Border).Background(panelColor(c))
 			valid := f.commandRow >= 0 && f.commandRow < len(commands)
 			var selected core.QuickCommand
 			if valid {

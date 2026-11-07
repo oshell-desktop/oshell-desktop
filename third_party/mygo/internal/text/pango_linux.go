@@ -142,6 +142,7 @@ var pangoLib struct {
 	descFree                  func(desc uintptr)
 	descSetFamily             func(desc uintptr, family string)
 	descSetWeight             func(desc uintptr, weight int32)
+	descSetStretch            func(desc uintptr, stretch int32)
 	descSetStyle              func(desc uintptr, style int32)
 	descSetAbsoluteSize       func(desc uintptr, size float64)
 	descGetSize               func(desc uintptr) int32
@@ -190,6 +191,7 @@ var pangoLib struct {
 	cairoShowGlyphs           func(cr uintptr, glyphs *cairoGlyph, n int32)
 	fcConfigGetCurrent        func() uintptr
 	fcConfigAppFontAddFile    func(config uintptr, file string) int32
+	fcConfigAppFontClear      func(config uintptr)
 	fcConfigGetFonts          func(config uintptr, set int32) *fcFontSet
 	fcConfigParseFromMemory   func(config uintptr, xml string, complain int32) int32
 	fcPatternGetString        func(pattern uintptr, object string, n int32, out **byte) int32
@@ -255,6 +257,7 @@ func loadPango() error {
 	bind(pango, &l.descFree, "pango_font_description_free")
 	bind(pango, &l.descSetFamily, "pango_font_description_set_family")
 	bind(pango, &l.descSetWeight, "pango_font_description_set_weight")
+	bind(pango, &l.descSetStretch, "pango_font_description_set_stretch")
 	bind(pango, &l.descSetStyle, "pango_font_description_set_style")
 	bind(pango, &l.descSetAbsoluteSize, "pango_font_description_set_absolute_size")
 	bind(pango, &l.descGetSize, "pango_font_description_get_size")
@@ -318,6 +321,7 @@ func loadPango() error {
 	if fc, err := open("libfontconfig.so.1"); err == nil {
 		bind(fc, &l.fcConfigGetCurrent, "FcConfigGetCurrent")
 		bind(fc, &l.fcConfigAppFontAddFile, "FcConfigAppFontAddFile")
+		bind(fc, &l.fcConfigAppFontClear, "FcConfigAppFontClear")
 		bind(fc, &l.fcConfigGetFonts, "FcConfigGetFonts")
 		bind(fc, &l.fcConfigParseFromMemory, "FcConfigParseAndLoadFromMemory")
 		bind(fc, &l.fcPatternGetString, "FcPatternGetString")
@@ -335,6 +339,7 @@ type pangoEngine struct {
 	scaled map[scaledKey]uintptr
 
 	registered map[string]bool // files of registered fonts
+	namedFaces map[string]namedFace
 	// uiFamily is the desktop's interface font, which system-ui stands for
 	// before fontconfig's default.
 	uiFamily string
@@ -453,7 +458,23 @@ func (e *pangoEngine) desc(style Style) uintptr {
 		clear(e.descs)
 	}
 	d := l.descNew()
+	stretch := 4
+	families := familyList(key.Family)
+	if len(families) > 0 {
+		if face, ok := e.namedFaces[strings.ToLower(families[0])]; ok {
+			families[0] = face.family
+			key.Family = strings.Join(families, ",")
+			if key.Weight == 400 {
+				key.Weight = face.weight
+			} else {
+				key.Weight = max(key.Weight, face.weight)
+			}
+			key.Italic = key.Italic || face.italic
+			stretch = face.stretch
+		}
+	}
 	l.descSetFamily(d, pangoFamily(key.Family, e.uiFamily))
+	l.descSetStretch(d, int32(stretch))
 	l.descSetWeight(d, int32(key.Weight))
 	if key.Italic {
 		l.descSetStyle(d, pangoStyleItalic)
@@ -461,7 +482,7 @@ func (e *pangoEngine) desc(style Style) uintptr {
 		l.descSetStyle(d, pangoStyleNormal)
 	}
 	l.descSetAbsoluteSize(d, float64(key.Size)*pangoScale)
-	e.descs[key] = d
+	e.descs[Style{Family: style.Family, Size: style.FontSize(), Weight: style.weight(), Italic: style.Italic}] = d
 	return d
 }
 
@@ -925,6 +946,12 @@ func (e *pangoEngine) register(data []byte, family string) error {
 		}
 		e.registered[path] = true
 	}
+	if e.namedFaces == nil {
+		e.namedFaces = map[string]namedFace{}
+	}
+	for _, face := range fontNames(data) {
+		e.namedFaces[strings.ToLower(face.name)] = face
+	}
 	if family != "" {
 		names := fontFamilies(config, path)
 		if len(names) == 0 {
@@ -986,6 +1013,23 @@ func xmlEscape(s string) string {
 }
 
 func (e *pangoEngine) fontCount() int { return len(e.fonts) }
+
+func (e *pangoEngine) clearRegistered() error {
+	l := &pangoLib
+	if l.fcConfigAppFontClear == nil || l.fontMapConfigChanged == nil {
+		return errors.New("mygo: removing fonts needs fontconfig and PangoFT2")
+	}
+	e.forgetFonts()
+	for _, d := range e.descs {
+		l.descFree(d)
+	}
+	clear(e.descs)
+	l.fcConfigAppFontClear(l.fcConfigGetCurrent())
+	clear(e.registered)
+	clear(e.namedFaces)
+	l.fontMapConfigChanged(e.fontMap)
+	return nil
+}
 
 // forgetFonts lets go of the Pango and cairo fonts of the Fonts made so
 // far.

@@ -17,6 +17,17 @@ import (
 
 // Windows configures Windows packaging.
 type Windows struct {
+	// Icon overrides the shared artwork for Windows executable and installer icons.
+	Icon string `json:"icon,omitempty"`
+	// IconInset trims this many source pixels from each side before rendering
+	// Windows icons, so artwork with macOS padding can fill a shortcut tile.
+	IconInset int `json:"iconInset,omitempty"`
+	// OriginalFilename overrides the PE version string for external launchers
+	// that identify compatible programs by this field.
+	OriginalFilename string `json:"originalFilename,omitempty"`
+	// Some external clients select a launch protocol by the PE file major.
+	// ProductVersion and the application's own version remain independent.
+	FileVersionMajor uint16 `json:"fileVersionMajor,omitempty"`
 	// Certificate is a code signing certificate (.pfx) to sign the
 	// executable, the installer and its uninstaller with, which keeps
 	// SmartScreen from warning users; signing the uninstaller needs NSIS

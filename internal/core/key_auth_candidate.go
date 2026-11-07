@@ -28,6 +28,9 @@ func SSHKeyAuthenticationCandidate(ctx context.Context, p Profile) bool {
 			return true
 		}
 	}
+	if p.resolvedAgentDisabled || p.resolvedIdentitiesOnly {
+		return false
+	}
 	probe, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	connection, err := dialSSHAgent(probe)

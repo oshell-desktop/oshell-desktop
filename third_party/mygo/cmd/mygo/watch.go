@@ -53,6 +53,9 @@ func listBuildInputs(c *Config) (*buildInputs, error) {
 	if c.Icon != "" {
 		in.files = append(in.files, c.path(c.Icon))
 	}
+	if runtime.GOOS == "windows" && c.Windows.Icon != "" {
+		in.files = append(in.files, c.path(c.Windows.Icon))
+	}
 	if c.MacOS.Entitlements != "" {
 		in.files = append(in.files, c.path(c.MacOS.Entitlements))
 	}

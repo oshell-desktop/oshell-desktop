@@ -65,3 +65,41 @@ func TestPasteClosedTargetRejectsWholeDispatchAndEmptyCancelSendNothing(t *testi
 		})
 	}
 }
+
+func TestPasteCRLFPreviewAndPerTargetDispatch(t *testing.T) {
+	for _, preview := range []bool{false, true} {
+		name := "direct"
+		if preview {
+			name = "preview-edited"
+		}
+		t.Run(name, func(t *testing.T) {
+			a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
+			left, lc := operatorPane(t, a, "plain")
+			right, rc := operatorPane(t, a, "bracketed")
+			right.term.Feed([]byte("\x1b[?2004h"))
+			a.config.Settings.Input.ConfirmMultiline = preview
+			a.features.syncEnabled = true
+			a.features.syncTargets = map[string]bool{left.id: true, right.id: true}
+			a.requestPaste(left, "first\r\n\r\n  中文\r\n")
+			want := "first\n\n  中文\n"
+			if preview {
+				if !a.features.pasteOpen || a.features.pasteText != want || lc.text() != "" || rc.text() != "" {
+					t.Fatal("preview did not normalize CRLF or sent before confirmation")
+				}
+				// Editing can introduce Windows line endings again; dispatch must
+				// normalize them too without removing intentional blank lines.
+				a.features.pasteText = "edited\r\n\r\n\t中文\rfinal"
+				want = "edited\n\n\t中文\nfinal"
+				a.confirmPaste()
+			}
+			left.term.Send([]byte("<barrier>"))
+			right.term.Send([]byte("<barrier>"))
+			waitOperator(t, a, func() bool {
+				return strings.HasSuffix(lc.text(), "<barrier>") && strings.HasSuffix(rc.text(), "<barrier>")
+			})
+			if lc.text() != strings.ReplaceAll(want, "\n", "\r")+"<barrier>" || rc.text() != "\x1b[200~"+want+"\x1b[201~<barrier>" {
+				t.Fatalf("line endings/framing changed: plain %q, bracketed %q", lc.text(), rc.text())
+			}
+		})
+	}
+}

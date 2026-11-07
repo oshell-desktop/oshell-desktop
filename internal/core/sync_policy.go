@@ -7,6 +7,7 @@ import (
 
 // Device-local policy; these fields never enter the shared-vault contract.
 type SyncContentSelection struct {
+	FontFiles       bool `json:"fontFiles,omitempty"`
 	Sessions        bool `json:"sessions"`
 	ClientSettings  bool `json:"clientSettings"`
 	QuickCommands   bool `json:"quickCommands"`
@@ -55,7 +56,7 @@ func (s SyncContentSelection) Summary() string {
 	for _, item := range []struct {
 		enabled bool
 		name    string
-	}{{s.Sessions, "会话资料"}, {s.ClientSettings, "客户端设置与高亮规则"}, {s.QuickCommands, "快速命令"}, {s.SessionDefaults, "默认会话属性"}} {
+	}{{s.Sessions, "会话资料"}, {s.ClientSettings, "客户端设置与高亮规则"}, {s.QuickCommands, "快速命令"}, {s.SessionDefaults, "默认会话属性"}, {s.FontFiles, "字体文件（明文附件）"}} {
 		if item.enabled {
 			names = append(names, item.name)
 		}

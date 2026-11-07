@@ -5,6 +5,7 @@ package terminal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -23,12 +24,50 @@ type transferController struct {
 	cancellable atomic.Pointer[protocolSession]
 }
 type protocolSession struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	pipe   *protocolPipe
-	done   chan struct{}
-	err    error
-	canRun int // input reader only; includes runs split across network reads
+	ctx              context.Context
+	cancel           context.CancelFunc
+	pipe             *protocolPipe
+	done             chan struct{}
+	err              error
+	canRun           int  // input reader only; includes runs split across network reads
+	waiting          bool // protected by transferController.mu
+	ready            chan struct{}
+	paths            []string
+	handshakeTimeout time.Duration
+}
+
+type uploadPathsKey struct{}
+
+// UploadPaths returns the files supplied by an explicit drop, if any. These
+// belong to this protocol session only, never to a later automatic transfer.
+func UploadPaths(ctx context.Context) []string {
+	paths, _ := ctx.Value(uploadPathsKey{}).([]string)
+	return append([]string(nil), paths...)
+}
+
+// StartUpload reserves this terminal before sending rz. File data is sent only
+// after a valid receiver handshake; ordinary shell errors remain visible.
+func (t *Terminal) StartUpload(paths []string) error {
+	return t.startUpload(paths, 10*time.Second)
+}
+
+func (t *Terminal) startUpload(paths []string, timeout time.Duration) error {
+	if len(paths) == 0 || t.transfers == nil || t.opts.TransferHandler == nil || t.InLocalToolsMode() || !t.ManagedInputAvailable() {
+		return fmt.Errorf("当前终端无法启动 rz 上传")
+	}
+	c := t.transfers
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.active != nil || !t.Available() {
+		return fmt.Errorf("终端正在传输或已断开")
+	}
+	t.write(c.detector.flush())
+	session := c.newSession()
+	session.waiting, session.ready = true, make(chan struct{})
+	session.paths = append([]string(nil), paths...)
+	session.handshakeTimeout = timeout
+	c.run(session, true)
+	return nil
 }
 
 func newTransferController(t *Terminal) *transferController { return &transferController{term: t} }
@@ -82,6 +121,20 @@ func (c *transferController) process(data []byte) {
 			continue
 		default:
 		}
+		if session.waiting {
+			text, upload, protocol := c.detector.consume(data)
+			c.term.write(text)
+			if protocol == nil {
+				return
+			}
+			if !upload {
+				session.cancel()
+				return
+			}
+			session.waiting = false
+			close(session.ready)
+			data = protocol
+		}
 		n, ok := session.feed(data)
 		if ok {
 			return
@@ -102,20 +155,8 @@ func (c *transferController) process(data []byte) {
 	}
 }
 func (c *transferController) start(upload bool, prefix []byte) {
-	ctx, cancel := context.WithCancel(context.Background())
-	session := &protocolSession{ctx: ctx, cancel: cancel, done: make(chan struct{})}
-	session.pipe = newProtocolPipe(ctx, session.done, func(p []byte) (int, error) { return c.term.in.raw(ctx, p) })
-	c.active = session
-	c.cancellable.Store(session)
-	c.term.in.pauseWithCancel(true, session.cancel)
-	go func() {
-		session.err = c.term.opts.TransferHandler(ctx, upload, session.pipe)
-		session.pipe.finish()
-		close(session.done)
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		c.complete(session)
-	}()
+	session := c.newSession()
+	c.run(session, upload)
 	n, ok := session.feed(prefix)
 	if !ok {
 		<-session.done
@@ -124,6 +165,56 @@ func (c *transferController) start(upload bool, prefix []byte) {
 			c.process(prefix[n:])
 		}
 	}
+}
+
+func (c *transferController) newSession() *protocolSession {
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &protocolSession{ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	session.pipe = newProtocolPipe(ctx, session.done, func(p []byte) (int, error) { return c.term.in.raw(ctx, p) })
+	c.active = session
+	c.cancellable.Store(session)
+	c.term.in.pauseWithCancel(true, session.cancel)
+	if c.term.opts.TransferStarted != nil {
+		c.term.opts.TransferStarted()
+	}
+	return session
+}
+
+func (c *transferController) run(session *protocolSession, upload bool) {
+	go func() {
+		session.err = c.handle(session, upload)
+		session.pipe.finish()
+		close(session.done)
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.complete(session)
+	}()
+}
+
+func (c *transferController) handle(session *protocolSession, upload bool) error {
+	ctx := session.ctx
+	if session.ready != nil {
+		wait, cancel := context.WithTimeout(ctx, session.handshakeTimeout)
+		defer cancel()
+		// Clear an unfinished shell line before executing the fixed command;
+		// never append rz to text the user has already typed at the prompt.
+		if _, err := c.term.in.raw(wait, []byte("\x15rz\r")); err != nil {
+			return err
+		}
+		select {
+		case <-session.ready:
+		case <-wait.Done():
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("等待 rz 响应超时，请确认远端已安装 rz 且终端处于命令提示符")
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		ctx = context.WithValue(ctx, uploadPathsKey{}, session.paths)
+	}
+	return c.term.opts.TransferHandler(ctx, upload, session.pipe)
 }
 func (c *transferController) complete(session *protocolSession) {
 	if c.active != session {
@@ -137,10 +228,19 @@ func (c *transferController) complete(session *protocolSession) {
 	c.active = nil
 	c.cancellable.CompareAndSwap(session, nil)
 	tail := session.pipe.takeTail()
+	if session.waiting {
+		c.term.write(c.detector.flush())
+	}
 	finishedBatch := session.err == nil || errors.Is(session.err, zmodem.ErrSkipped)
 	if !finishedBatch {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		c.term.in.raw(ctx, []byte{0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 8, 8, 8, 8, 8, 8, 8, 8})
+		if session.waiting {
+			// No protocol was established: interrupt the pending command, not
+			// a binary cancellation frame written into the shell prompt.
+			c.term.in.raw(ctx, []byte{3})
+		} else {
+			c.term.in.raw(ctx, []byte{0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 8, 8, 8, 8, 8, 8, 8, 8})
+		}
 		cancel()
 	}
 	session.cancel()

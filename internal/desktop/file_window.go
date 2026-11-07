@@ -15,6 +15,15 @@ import (
 // The toolbar entry opens or focuses the manager even without an SSH terminal.
 // Repeated clicks must not create another connection or duplicate file tab.
 func (a *App) showFileManager() {
+	settings, err := core.LoadFileManagementSettings(a.store.Dir)
+	if err != nil {
+		a.status = err.Error()
+		return
+	}
+	if p := a.activePane(); (a.hub == nil || a.hub.fileWindow != a) && settings.Mode == "terminal" && p != nil && (p.profile.Kind == "local" || p.profile.Kind == "ssh" || p.terminalOnly) {
+		a.prepareTerminalFileManager(settings.Command)
+		return
+	}
 	if a.hub == nil {
 		a.showFileSessionPicker()
 		return
@@ -23,27 +32,26 @@ func (a *App) showFileManager() {
 		a.hub.openFilesFromPane(p)
 		return
 	}
-	if existing := a.hub.fileWindow; existing != nil {
-		if existing.win != nil {
-			existing.win.Focus()
-		}
+	if a.hub.fileWindow != nil {
+		a.hub.presentFileWorkspace(a, settings.Placement)
 		return
 	}
-	target := a.hub.externalFileWindow()
-	target.win.Focus()
+	a.hub.externalFileWindow()
+	a.hub.presentFileWorkspace(a, settings.Placement)
 }
 
 // External file launches share a dedicated window. They must never consume a
 // terminal workspace tab or silently replace its active SSH session.
 func (h *applicationHub) externalFileWindow() *App {
 	if h.fileWindow != nil {
+		h.presentFileWorkspace(nil, "")
 		return h.fileWindow
 	}
 	a := newApp(h.store, h.config.Clone())
 	a.hub = h
 	a.vault = h.vault
 	a.trust = h.trust
-	a.win = mygo.NewWindow(mygo.WindowOptions{Title: "文件管理", Width: 1080, Height: 720, MinWidth: 760, MinHeight: 480, Content: ui.View(a.fileWindowView)})
+	a.win = mygo.NewWindow(mygo.WindowOptions{Title: "文件管理", Hidden: true, Width: 1080, Height: 720, MinWidth: 760, MinHeight: 480, Content: ui.View(a.fileWindowView)})
 	h.fileWindow = a
 	a.win.OnClose(a.onWorkspaceClose)
 	a.win.OnClosed(func() {
@@ -63,16 +71,31 @@ func (h *applicationHub) externalFileWindow() *App {
 		h.scheduleSharedSync(time.Minute)
 	})
 	h.scheduleSharedSync(2 * time.Second)
+	h.presentFileWorkspace(nil, "")
 	return a
 }
 func (a *App) fileWindowView(c *ui.Context) {
 	defer a.resumeDeferredUpdate() // Modal teardown may happen after drain during this frame.
 	a.drain()
-	if !a.modalActive() && c.Shortcut(ui.Ctrl, ui.KeyW) && a.win != nil {
-		a.win.Close()
+	// A posted close confirmation can synchronously destroy this frame.
+	if !c.Valid() {
 		return
 	}
-	if !a.modalActive() && auxiliaryEscape(c, func() {
+	docked := a.filePresentation.owner.Load() != nil
+	focused := !docked || a.filePresentation.focus.FocusWithin(c)
+	if focused && !a.modalActive() && c.Shortcut(ui.Ctrl, ui.KeyW) && a.win != nil {
+		if docked {
+			a.hideFileDock()
+		} else {
+			a.win.Close()
+		}
+		return
+	}
+	if focused && !a.modalActive() && auxiliaryEscape(c, func() {
+		if docked {
+			a.hideFileDock()
+			return
+		}
 		if a.win != nil {
 			a.win.Minimize()
 		}
@@ -83,8 +106,8 @@ func (a *App) fileWindowView(c *ui.Context) {
 	if a.lockedWorkspace(c) {
 		return
 	}
-	ui.Column(c).Fill().MinHeight(0).Children(func() {
-		ui.Row(c).Padding(8).Gap(8).Children(func() {
+	ui.Column(c).Fill().MinHeight(0).Background(c.Theme().Background).Children(func() {
+		ui.Toolbar(c, func() {
 			ui.MenuButton(c, "新会话…", func(m *ui.Menu) {
 				if m.Item("新建 SFTP 会话…").Chosen() {
 					a.edit(a.newProfile("sftp"))
@@ -98,18 +121,28 @@ func (a *App) fileWindowView(c *ui.Context) {
 				}
 
 			})
-			ui.Button(c, "复制文件标签").Disabled(a.activePane() == nil).OnClick(a.duplicateFileSession)
+			ui.MenuButton(c, "位置", func(m *ui.Menu) {
+				for _, p := range [][2]string{{"window", "独立窗口"}, {"left", "窗口左侧"}, {"right", "窗口右侧"}, {"bottom", "窗口底部"}} {
+					if m.Item(p[1]).Chosen() && a.hub != nil {
+						a.hub.presentFileWorkspace(nil, p[0])
+					}
+				}
+				if docked && m.Item("隐藏文件管理").Chosen() {
+					a.hideFileDock()
+				}
+			})
+			ui.Button(c, "复制标签").Label("复制文件标签").Disabled(a.activePane() == nil).OnClick(a.duplicateFileSession)
 			ui.Button(c, "重连").Disabled(a.activePane() == nil).OnClick(a.reconnectActive)
 			ui.Spacer(c)
 			toolButton(c, "设置", settingsIcon, "设置").OnClick(a.openSettings)
-		})
+		}).Height(detailBarHeight).Padding(2, 6).Gap(4).Background(panelColor(c)).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border)
 		a.ensureGroups()
 		g := a.groupByID(a.groups.active)
 		if g == nil {
 			g = a.groups.root.leaves()[0]
 		}
 		g.dragOver = false
-		scroll := ui.ScrollHorizontal(c).TrackScroll(&g.scroll).Height(38).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
+		scroll := ui.ScrollHorizontal(c).HideScrollbars().TrackScroll(&g.scroll).Height(detailBarHeight).Padding(2, 6).Background(c.Theme().Surface).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Children(func() {
 			ui.Row(c).Gap(4).Children(func() {
 				for _, tab := range a.tabs {
 					selected := tab == a.activeTab()
@@ -120,11 +153,17 @@ func (a *App) fileWindowView(c *ui.Context) {
 							title = tab.active.fileDisplayIP
 						}
 					}
-					background, underline := c.Theme().Surface, ui.Transparent
+					background, underline := ui.Transparent, ui.Transparent
 					if selected {
 						background, underline = c.Theme().Selection, c.Theme().Accent
 					}
-					row := ui.Row(c.Key(tab.id)).Height(37).Gap(2).Padding(2, 3).Background(background).BorderWidth(0, 0, 3, 0).BorderColor(underline).Label("文件标签 " + tab.id)
+					row := ui.Row(c.Key(tab.id)).Height(28).Gap(2).Padding(1, 3).Radius(2).Background(background).BorderWidth(0, 0, 2, 0).BorderColor(underline).Label("文件标签 " + tab.id)
+					if selected {
+						g.revealSelectedTab(row, tab.id)
+					}
+					if !selected && row.Hovered() {
+						row.Background(c.Theme().SurfaceHover)
+					}
 					if _, over := ui.DragOver[tabDrag](row); over {
 						g.dragOver = true
 						x, _, _ := row.PointerPosition()
@@ -147,7 +186,7 @@ func (a *App) fileWindowView(c *ui.Context) {
 							button.FontWeight(600)
 						}
 						a.tabTitleEvents(button, tab)
-						ui.Button(c, "×").Background(ui.Transparent).BorderWidth(0).Label("关闭文件会话 " + title).OnClick(func() { a.requestSessionClose(tab, nil) })
+						tabBarButton(c, "关闭文件会话 "+title, closeIcon).OnClick(func() { a.requestSessionClose(tab, nil) })
 					})
 				}
 			})
@@ -155,20 +194,27 @@ func (a *App) fileWindowView(c *ui.Context) {
 		a.tabDragScroll(c, scroll, g)
 		if p := a.activePane(); p != nil {
 			current := "当前会话：" + fileTabDescription(a.activeTab())
-			ui.Text(c, current).SingleLine().Tooltip(current).FontWeight(600).Padding(6, 10).FillWidth().MinWidth(0)
+			if !docked {
+				ui.Text(c, current).SingleLine().Tooltip(current).FontWeight(600).Padding(6, 10).FillWidth().MinWidth(0)
+			}
 			if (p.conn != nil && !p.conn.Alive()) || strings.HasPrefix(p.status, "连接失败") || strings.HasPrefix(p.status, "FTP 连接失败") {
 				ui.Row(c).Padding(8).Gap(8).Children(func() {
 					ui.Text(c, "文件连接已断开").Grow(1)
 					ui.Button(c, "重新连接").OnClick(a.reconnectActive)
+					a.hostKeyCleanupButton(c, p)
 				})
 			}
 			if p.files != nil {
-				a.fileBrowser(c, p, true)
+				a.fileBrowser(c, p, !docked)
 			} else {
 				ui.Text(c, p.status).Padding(20)
 			}
 		} else {
-			ui.Text(c, "从会话管理或外部文件启动入口打开 FTP / SFTP 连接。").Padding(24)
+			ui.Column(c).Grow(1).FillWidth().Center().Gap(12).Children(func() {
+				ui.Icon(c, folderIcon).FontSize(24).TextColor(c.Theme().Accent)
+				windowHeading(c, "文件管理")
+				ui.Text(c, "从会话管理或外部文件启动入口打开 FTP / SFTP 连接。").TextColor(c.Theme().TextMuted).Wrap()
+			})
 		}
 		if strings.Contains(a.status, "密码") || strings.Contains(a.status, "SSH 连接") {
 			ui.Text(c, a.status).FontSize(11).TextColor(c.Theme().TextMuted).Padding(8)
@@ -206,7 +252,9 @@ func fileTabDescription(t *tab) string {
 func (h *applicationHub) openExternalFile(profile core.Profile, credentials core.Credentials) {
 	a := h.externalFileWindow()
 	a.open(profile, credentials, 0)
-	a.win.Focus()
+	if parent := a.fileParent(); parent != nil {
+		parent.Focus()
+	}
 }
 
 func (h *applicationHub) openFilesFromPane(source *pane) {
@@ -214,10 +262,13 @@ func (h *applicationHub) openFilesFromPane(source *pane) {
 		return
 	}
 	target := h.externalFileWindow()
+	h.presentFileWorkspace(source.owner.Load(), "")
 	defer func() {
 		if target.win != nil {
 			target.win.Invalidate()
-			target.win.Focus()
+			if parent := target.fileParent(); parent != nil {
+				parent.Focus()
+			}
 		}
 	}()
 	// Match the originating connection, not profile ID or host: separate SSH

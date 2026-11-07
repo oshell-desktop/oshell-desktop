@@ -69,9 +69,9 @@ func (a *App) saveHighlights() {
 }
 func (a *App) highlightsDialog(c *ui.Context) {
 	f := &a.features
-	ui.Modal(c, &f.highlightOpen, func() {
-		ui.Column(c).Width(690).Gap(12).Children(func() {
-			ui.Text(c, "突出显示集").FontSize(18).Bold()
+	desktopModal(c, &f.highlightOpen, func() {
+		dialogBody(c, 690).Gap(12).Children(func() {
+			windowHeading(c, "突出显示集")
 			var choices [][2]string
 			for _, set := range f.highlightSets {
 				choices = append(choices, [2]string{set.ID, set.Name})
@@ -110,7 +110,8 @@ func (a *App) highlightsDialog(c *ui.Context) {
 						}
 					}
 				})
-				ui.Text(c, "每集最多 32 条规则；${hostname} 匹配当前终端主机名。").TextColor(c.Theme().TextMuted)
+				ui.Text(c, "每集仅前 32 条规则参与渲染，其余规则仍可保存。").TextColor(c.Theme().TextMuted)
+				ui.Text(c, "${hostname} 匹配当前终端主机名。").TextColor(c.Theme().TextMuted)
 				ui.Scroll(c).Height(270).Gap(10).Children(func() {
 					for i := range set.Rules {
 						r := &set.Rules[i]
@@ -135,7 +136,7 @@ func (a *App) highlightsDialog(c *ui.Context) {
 			if f.highlightError != "" {
 				ui.Text(c, f.highlightError).TextColor(c.Theme().Danger)
 			}
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			dialogActions(c).Children(func() {
 				ui.Button(c, "取消").OnClick(func() { f.highlightOpen = false })
 				ui.PrimaryButton(c, "应用突出显示集").OnClick(a.saveHighlights)
 			})

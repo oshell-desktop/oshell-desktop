@@ -1,12 +1,178 @@
 # Desktop 原 161 项最终验收汇总与收尾清单
 
-更新日期：2026-10-26。范围严格保持 **OShell-0.2.92-scope-1 / 13 域 / 161 个 SF 条目**，参考 OShell 0.2.92 提交 `3f4efd9c70c82323f4e20180117c928227000580`。[固定基线](oshell-feature-inventory.md)不改；[历史差异表](oshell-desktop-gap-analysis.md)及 [43 项处置记录](oshell-desktop-remediation-plan.md)保留历史身份。全量可筛选结果见 [161 项 CSV](oshell-desktop-final-acceptance.csv)。
+> **2026-10-30 当前收尾：原 176 项已按完整复刻授权更新。** rsync、文件停靠/TUI、排列、工作区时钟、本地快捷键/Finder/macOS 全屏，以及 MCP/字体归档实现增量已补齐；有限自动验证通过，真实环境条件继续待验。当前 **81 已通过、94 待验收、1 平台专属排除**。原 161 与下方旧调查记录保留为历史，不把旧“待确认/未实现”当作当前结果。详见 [执行收尾清单](oshell-0.6.0-implementation.md) 和 [176 项逐项验收 CSV](oshell-desktop-0.6.0-final-acceptance.csv)。固定便携包已更新，原 11 个数据文件未变，未提交/推送/触发 Actions。
+
+## 2026-10-29 SF-C02 主机密钥主动清理
+
+用户针对换钥报错授权新增单地址清理入口。SSH 和 SFTP 失败页显示“清理旧主机密钥…”，确认框显示握手实际冲突地址（含跳板）、旧指纹和本次收到的新指纹。取消不改文件；确认仅移除目标地址的冲突记录，其他主机/同一行其他别名保留，原文件保存为本机 `known_hosts.before-cleanup`（最近一次备份）。不清空整个文件、不修改共享配置、不操作用户当前真实信任库。
+
+清理不代表信任，也不自动重连；仍需点击“重新连接”并核对新的首次信任提示。文件在确认期间发生变化时拒绝覆盖；通配/特殊信任规则不能由此入口拆除，提示手动检查；撤销密钥或格式错误不提供误导的清理入口。
+
+**已通过**：普通/哈希主机、IPv6、默认/非默认端口、同一行别名保留、备份、取消、过期确认与备份失败保护；SSH/SFTP 软件 UI 确认流程；真实回环 SSH 换钥拒绝→清理→拒绝新指纹→批准→同钥免询问；相关认证/重连回归与 vet。Windows Agent 环境用例跳过，保留日志，不计通过。
+
+**人工窗口待验**：按用户要求不再操作桌面；具体有限步骤见 CSV 的 SF-C02。本条原身份保护已通过，新入口增加待验条件，因此当前原 161 项状态为 **93 已通过、67 待验收、1 平台专属排除**，条目身份不增加。下方 94/66 为上轮历史快照。其他待验与尚未确认的 34 条新版能力不变。
+
+固定 dist EXE/ZIP 已更新，ZIP 完整性、内容一致、独立空目录隐藏启动及正常关闭退出码 0 通过；不等于人工窗口验收。原 11 个配置/数据文件摘要未变，本轮约 78.3 MiB 暂存已清理。证据见 `validation/host-key-cleanup/results.json`。ZIP SHA-256：`5BC61BB600C243450AE0953A25AA3E8D4FEB99D8448C3D4108EAD1A2972E6159`。未提交、推送或触发 Actions。
+
+
+## 2026-10-29 收尾更新：窗口待验与临时产物清理
+
+用户明确要求：**窗口验收先保留待验，不再操作桌面；暂不提交或推送。** 用户同时确认暂时没有真实 macOS OShell 与专用 WebDAV 测试环境，相关项保留待验。此前 Computer Use 已被用户 Escape 中止，仅观察到独立程序主窗口，未完成设置/字体/同步操作验收，不能计为通过；此前自动测试和独立启动证据保留。
+
+用户告知测试窗口已关闭后，本轮只通过进程/文件查询确认隔离程序退出，删除 `validation/portable-smoke` 的程序副本、锁文件和合成诊断日志，共 **32,239,669 字节（约 30.7 MiB）**。`portable-build`、`portable-cache` 均已不存在；未关闭其他进程，未操作桌面，未触碰真实 OShell 数据。`validation` 当前约 1.20 GiB，主要为现用终端运行库/工具链、参考源码及既有证据；当天修改的大于 20 MiB 文件为零，不将这些既有依赖作为本轮临时文件删除。精简记录见 `validation/font-sync/closeout-cleanup.json`。
+
+本轮只清理并更新文档，没有代码修复，不重复构建或替换便携包。固定 dist EXE/ZIP 摘要与已验证的字体同步包一致，具体摘要见下节；无提交、推送、发布或 Actions。
+
+### 当前仍未完成的工作
+
+**原 161 项验收口径：94 项已通过，66 项待验收，1 项平台专属排除。** 没有把“缺少验收证据”计为“缺少实现”，也没有因暂停窗口验收关闭条目。下表按 CSV 的原验收批次列出全部 66 项，混合批次按一项计数；每项的具体步骤仍见 CSV 与下文原条目。
+
+| 剩余验收批次 | 条目数 | 原条目 |
+| --- | ---: | --- |
+| Linux 原生 | 11 | SF-S02、SF-S07、SF-S14、SF-C04、SF-C08、SF-W01、SF-I08、SF-I09、SF-M03、SF-O08、SF-E08 |
+| Windows 交互 | 21 | SF-S06、SF-P06、SF-W05、SF-W07、SF-W09、SF-W10、SF-W11、SF-T06、SF-T09、SF-Y16、SF-I01、SF-I02、SF-I18、SF-I19、SF-I20、SF-F01、SF-O04、SF-O09、SF-A01、SF-A09、SF-U07 |
+| 真实双端互通 | 16 | SF-P01、SF-P02、SF-P03、SF-Y04、SF-Y05、SF-Y06、SF-Y08、SF-Y09、SF-Y10、SF-Y11、SF-Y12、SF-Y17、SF-O07、SF-A02、SF-E01、SF-E02 |
+| 真实 Shell | 2 | SF-T03、SF-T05 |
+| 原版显示对照 | 1 | SF-T07 |
+| 同步目录环境 | 1 | SF-Y02 |
+| 原版字节对照 | 1 | SF-I14 |
+| 图形联验 | 4 | SF-I21、SF-I23、SF-I25、SF-A04 |
+| 图片共享内存（平台补验）;图形联验;Linux 图形 | 1 | SF-I22 |
+| 图形联验;Linux 图形 | 2 | SF-I24、SF-A06 |
+| Linux 原生;原版显示对照 | 1 | SF-M01 |
+| 原目录复验；跨平台原生窗口与 SSH 联验 | 1 | SF-F14 |
+| Linux 图形;原版显示对照 | 1 | SF-A03 |
+| 发行环境 | 1 | SF-U02 |
+| Linux 分发 | 1 | SF-U04 |
+| Linux 分发;最低系统 | 1 | SF-U05 |
+
+- **字体同步 Y06/Y09/Y10/Y11/Y17**：代码与 Windows 自动验证已完成；真实 Swift↔Go 目录/WebDAV 往返、实际服务条件写，以及实窗字体激活/回退仍待验。A03 本机字体库与 C08 全局代理的原窗口/平台待验条件同样保留。
+- **F14 下载目录卡顿**：持续卡顿尚未复现，根因未定位，未据猜测修改实现；按用户要求保留原目录与真实 SSH/原生窗口联验。
+- **0.6.0 尚未确认的新能力共 34 个处置条目**：D1 剩余 27 条——E01 归档字体附件 1 条、rsync 6 条（C11/F07/F08/F09/F10/F13）、MCP 20 条（G01–G15 及 I06/I19/I26/I27/A10）。D2 剩余 7 条——C04 本地终端入口/Finder 服务、W05 标签/分屏排列规则、W10 macOS 全屏策略、I18 新增快捷键、F01 文件窗口停靠、F02 TUI 文件管理模式、A08 每工作区窗口时钟。均须后续明确选择纳入，未自动扩大范围。
+
+上述 **34 个待确认条目与 66 个待验收条目是不同口径且存在重叠，不能相加计算未完成数量**。D1 已确认的 C08/A03/字体同步五项共 7 条保持实施记录；176 项初始调查和 69 项差异身份不改，后续执行状态以本节、范围确认清单及各 CSV 为准。
+
+
+## 2026-10-29 SF-Y06/Y09/Y10/Y11/Y17 字体同步
+
+按用户明确确认实现默认关闭的明文字体附件同步，目录与 WebDAV 两种现有目标均覆盖。新增合并/删除传播、每目标独立基准、对象先传/清单条件提交、本机快照比较、失败重试、取消及无变化不重写均有回归证据。只同步字体时本机会话、密码及共享正文不变；关闭时不读写附件。保留内置字体，未纳入 E01 归档附件。
+
+**这五项实现已补齐，最终验收状态仍为待验收**：真实 Swift 双端、实际 WebDAV 服务、人工窗口及其他平台原生注册缺少本轮环境证据。共享 v2 合同不变，Windows 合同样本/同步/字体/归档相关回归与 vet 通过；交叉编译不算真实互通。逐项证据和有限步骤见 [字体同步范围与验收清单](oshell-desktop-0.6.0-d1-scope-confirmation.md#字体同步实施与有限验收2026-10-29)。CSV 仍为原 161 行，总状态数量不因新增测试而变化，F14 继续待验。
+
+固定 dist 单文件 EXE/ZIP 已更新，ZIP 完整性、内容一致、隔离空目录启动、内嵌运行库及 WM_CLOSE 退出码 0 均通过；原 11 个配置/数据文件集合和摘要不变。清理本轮固定暂存约 78.3 MiB，无本轮遗留的大于 20 MiB 验证文件，仅保留精简记录。最新结果见 `validation/font-sync/results.json` 和 `package-integrity.json`。未提交、推送或触发 Actions。下文旧轮次包摘要保留为历史证据，以本节对应结果为最新。
+
+- EXE：`dist/windows-amd64-single-file/OShell Desktop.exe`，SHA-256 `B27A98196E5F5C2DC69BEF2FD8DFA88B7AC0B61475D9C9F22057BDED65C1D417`。
+- ZIP：`dist/OShell-Desktop-windows-amd64-single-file.zip`，SHA-256 `B27292FB52F0DD17E5F27DA7B1301FCF0AF21428D458B544EAE4742D5B414C7F`。
+
+## 2026-10-29 SF-A03 本机字体库
+
+按用户确认纳入 V060-A03，关联 A04/I01/U05。设置 → 常规 → “管理本机字体…”支持 TTF/OTF/TTC/OTC 文件/目录导入、列表、预览、移除和打开目录；保留三组内置字体。同族不同字形以 PostScript 名称区分。导入/移除立即保存，字体选择另行应用；本机活动清单、历史文件与清单备份独立于共享配置。A03 当时未纳入字体同步及归档附件；字体同步现已按后续授权实施，归档附件仍排除。不新增 176/161 编号。
+
+Windows 真实 DirectWrite 注册/卸载、同族字形与失败回滚、软件 UI、容量与扫描限制、重复/非法/损坏输入、Windows 隐藏属性及符号链接过滤、重开/数据目录迁移、内置字体像素、已有终端网格/复制/临时缩放回归通过；终端包全部测试、MyGo 相关字体回归、共享合同样本和 vet 通过。Linux/macOS 仅编译通过。逐项用例、边界及剩余操作见 [A03 范围与验收清单](oshell-desktop-0.6.0-d1-scope-confirmation.md#a03-实施与有限验收2026-10-29)，精简证据见 `validation/a03-font-library/results.json`。
+
+**SF-A03 保留待验收**：真实 Windows 文件选择器/打开目录和人工终端画面未补证，Linux/macOS 原生字体栈未运行；A04/I01/U05 的原平台/交互待验条件不自动关闭。F14 保留待验。其他条目状态不变，旧汇总数量不以本轮测试数增减。
+
+固定 Windows 单文件便携包已更新；ZIP 完整性及内容一致、独立空目录启动、内嵌终端库摘要和原生 WM_CLOSE 退出码 0 验证通过。此启动验证没有截图/人工操作，不宣称 GUI 验收完成。原 11 个配置/数据文件集合及 SHA-256 均未改变。
+
+- EXE：`dist/windows-amd64-single-file/OShell Desktop.exe`，SHA-256 `238FACEFF4B6DC540DACE4A79CF7BF7B2520A2C20A087CDBF83B0A4EF52111BB`。
+- ZIP：`dist/OShell-Desktop-windows-amd64-single-file.zip`，SHA-256 `F67F3D23D50EA1E8C2007A492C5C2975EF7276679FE504A4B666B8663BA5B97C`。
+
+本轮固定构建/启动/缓存暂存已清理，释放 78.2 MiB；证据约 0.42 MiB，无本轮大文件残留。参考源码、所用运行库、用户数据及已有证据保留。未提交、推送或触发 Actions。
+
+## 2026-10-29 SF-A01 设置界面侧栏布局
+
+按用户提供的 OShell 设置截图优化九个现有分类：左侧图标与选中态，右侧固定标题/说明、可滚动内容卡片，底部固定取消/应用和保存说明；设置窗默认 1080×760，最小 700×560。常规页将终端显示、输入与粘贴前置，收紧字体/历史控件和操作按钮尺寸，原标签与图片粘贴功能仍可向下滚动访问。保留分页索引、原菜单入口及共享/本机配置行为；不添加参考图中未获授权的能力。
+
+`TestProfessionalSettingsGallery` 覆盖九页、浅/深两种主题、700×560/800×650/1080×760 三种尺寸，验证导航、标题、内容与操作区无重叠裁切。`TestSettingsSidebarNavigationAndDraftActions` 验证点击/方向键导航、滚动到底部、固定标题/按钮、切页草稿保留及取消/应用。相关主题预览、历史/字体提示、时钟、同步、存储及菜单复用回归通过，`go vet ./internal/desktop` 通过。截图已检查，精简证据见 `validation/settings-sidebar/settings-tests.log`、`navigation-tests.log`、`settings-light-0.png`、`settings-dark-1.png` 等。
+
+SF-A01 保留待验收：本轮使用软件 UI 渲染和自动输入，没有真人窗口操作及 Linux/macOS 实机证据。有限验收：打开设置，在正常与最小尺寸下切换分类并滚动，确认标题/底部按钮固定；修改字号/主题后取消应恢复，重新修改并应用应保存，原连接保持。原 161/176 条目身份及其他待验条件不变。
+
+本轮固定 `dist` EXE/ZIP 已更新，ZIP 完整性、内嵌运行库、空目录启动及原生关闭退出码 0 通过，原 11 个配置/数据文件摘要不变。EXE SHA-256：`79A763E6329EE855CE20A7D88F4FBEBCBA22069C7276C7864A381E209D4EDE22`。已清理约 75.4 MiB 临时程序、包及启动缓存，保留约 1.83 MiB 截图/日志，无新增大文件残留；详见 `validation/settings-sidebar/results.json`。未提交、推送或触发 Actions。
+
+## 2026-10-29 C08 本机全局代理（关联 C01/C11）
+
+用户明确将 OShell 0.6.0 的 C08 增量纳入原 SF-C08。已实现“工具 → 全局代理设置…”本机开关和现有代理/链选择：新 SSH/SFTP/SCP 使用选定路线，关闭恢复会话路线；旧连接、复制通道、共享配置不变，失败不直连。核心真实回环 SSH/SFTP/SCP、桌面自动点击/保存/取消、多窗口读取、原路复用、系统 SSH 配置及共享兼容回归和 vet 通过。
+
+逐项证据、边界与剩余有限验收步骤见 [C08 范围清单](oshell-desktop-0.6.0-d1-scope-confirmation.md#c08-实施与有限验收2026-10-29)。证据目录 `validation/c08-global-proxy/`。保留 SF-C08 待验收（真实窗口、Linux/macOS 原生及旧 POSIX helper），C01/C11 原已通过结论增加关联回归证据，不把 rsync 纳入；真实 Swift 互通未验证。161/176 条目身份和旧数量口径不变，F14 保留待验收。
+
+本轮 Windows 单文件便携包已更新至固定 `dist/windows-amd64-single-file/OShell Desktop.exe` 与 `dist/OShell-Desktop-windows-amd64-single-file.zip`。ZIP 内容/完整性、隔离空目录启动、内嵌终端库与原生 WM_CLOSE 正常退出（退出码 0）通过；原 11 个配置/数据文件集合和 SHA-256 均未改变。EXE SHA-256：`2313F50607FDF0D156F82A819F78A22C1DED80742BAC7FA89B173E73614A8102`。本轮固定暂存 EXE/ZIP、隔离启动目录及缓存已清理（约 75.4 MiB）；精简证据约 161 KiB，无新增大文件残留。未提交、推送或触发 Actions。
+
+
+更新日期：2026-10-29。条目身份保持 **OShell-0.2.92-scope-1 / 13 域 / 161 个 SF 条目**，授权增量以上方执行记录为准，参考 OShell 0.2.92 提交 `3f4efd9c70c82323f4e20180117c928227000580`。[固定基线及授权范围记录](oshell-feature-inventory.md)；[历史差异表](oshell-desktop-gap-analysis.md)及 [43 项处置记录](oshell-desktop-remediation-plan.md)保留历史身份。全量可筛选结果见 [161 项 CSV](oshell-desktop-final-acceptance.csv)。
 
 这是截至当前证据的验收汇总，**不是全项目验收完成声明**。2026-10-25 针对原 37 项 Windows 缺证据条目，12 项完成有限补证并通过；25 项因桌面会话无法持续连接，按用户“记录窗口项待验收”的要求保留。发现并修复的 SF-C10 隧道关闭失败占用问题仍归原条目，未扩大范围；详见[该轮补证报告](oshell-desktop-windows-evidence-validation.md)。该轮其余 124 行逐项记录不变。上轮 [C03/I22 修复](oshell-desktop-gap-closure-validation.md)保留历史证据。上述累积改动随后已按用户授权提交为 `9b0c87583867b80d4c403a20fdb5a4c5f3175195`，推送并手动触发 Actions；历史报告中的未提交声明对应当时状态。
 
 2026-10-26 已检查提交 `9b0c875` 的失败流水线，完成 [CI 本地修复与验证](oshell-desktop-ci-repair-validation.md)。SF-I18/I22 补充失败与修复证据，当前数量不变；后续流水线 40292800808 的 package/Linux/全部竞态分片已通过，Windows 在另一条目录路径断言失败；本地修复与耗时优化见[本地编译及 CI 优化记录](ci-build-optimization.md)。当前不据此关闭真实交互或缺环境条目。
 
 ## 状态口径与数量
+
+### 2026-10-29 SF-S04 侧栏目录双击展开
+
+已复现目录行缺少双击处理：普通会话行处理双击连接，目录仅依赖树控件的箭头单击与方向键展开。本轮给目录行补充双击展开/收起，使用当前搜索对应的展开状态；单击仍只选中。归 SF-S04（关联 S05/S06），不修改共享配置、目录数据或功能边界。
+
+`TestSidebarDirectoryDoubleClick` 在修复前六个场景均复现失败；修复后根目录、嵌套目录、Links 根/子目录、置顶目录和搜索结果全部通过，并检查单击选择、箭头单击、左右键、搜索状态隔离及不连接主机/不改配置。全部 `TestSidebar*` 回归通过。证据：`validation/sidebar-double-click/before-fix.log`、`regression.log`。真实鼠标操作未验，原平台待验状态保留；手工验收步骤为双击目录名称展开、再次双击收起，然后在搜索结果及 Links 中重复，确认子项显隐正确且未触发会话连接。
+
+本轮 Windows 固定 `dist` EXE/ZIP 已更新，EXE SHA-256：`58c309ebb6efe52a35f0175a82c7e66a33dab6e330b3b25ea4ca8cca44c9fa9d`。静态检查、包完整性、独立空目录启动、内嵌运行库及原生正常退出通过，11 个原配置/数据文件未改变。证据位于同目录 `vet.log`、`package-integrity.json`、`portable-smoke.json`、`diagnostic-smoke.json`、`dist-replacement.json`。验证后删除临时程序及缓存；未提交、推送或触发 Actions。
+
+### 2026-10-28 SF-W01 头部工具栏整理
+
+按用户参考图调整 Windows/Linux 头部操作顺序：左侧为侧栏、会话管理、快捷连接、新建、本地、文件管理；中间为工具、标签组、排列和编辑；右侧为同步、更新、搜索、日志记录、设置。低频会话/视图/窗口/快速命令/应用菜单收进“更多”，原编辑菜单仍保留原生焦点语义。880 DIP 起会话管理和文件管理保持文字；1000 DIP 展开其他操作文字；1200 DIP 将分组排列与分屏排列分开。快捷链接栏与标签栏继续沿用现有层次与操作，不增加协议或能力。
+
+归原 SF-W01（关联 W04/W05/W06），161 项身份及原平台待验状态不变。`TestUnifiedHeaderResponsiveActions` 覆盖 880/999/1000/1199/1200/1440 DIP、浅/深主题、无重叠裁切与新建/无终端动作；活动终端回归验证搜索、停止日志、分屏放大恢复、标签排列及分屏实例保留。既有菜单、焦点恢复、动态快速命令、同步、文件管理、分组、锁定/弹窗保护回归通过，软件渲染截图已检查。证据：`validation/header-toolbar/regression.log` 和同目录截图。真人鼠标操作、Linux 原生环境仍待验，不以软件截图替代。有限验收：宽窄窗口各打开一次常用按钮和“更多”子菜单；双分屏下切换布局、搜索及启停日志，确认原会话不重建。
+
+固定 `dist` EXE/ZIP 已更新，EXE SHA-256：`3c5852a237869c0882c02e5629ede3cab2f81e3cc39622cb7b19d71121ea85f0`。ZIP 完整性、独立空目录启动、内嵌运行库、心跳与原生正常关闭通过，原 11 个配置/数据文件集合及摘要不变。对应 `package-integrity.json`、`portable-smoke.json`、`diagnostic-smoke.json`、`dist-replacement.json` 位于上述证据目录。`go vet ./internal/desktop` 通过。本轮未提交、推送或触发 Actions；临时包及启动缓存验证后清除。
+
+### 2026-10-28 SF-A03 Cascadia Code Light 字体匹配
+
+本机 GDI 字体列表含 `Cascadia Code Light`，DirectWrite 将其归入 `Cascadia Code` 的 300 字重；原名称查找失败后使用比例字体，18 DIP 字号下终端最大 ASCII 步进约 17.19 DIP，导致整行间距变大。Windows 文字后端现通过 GDI interop 解析实际字体族、字重、斜体和拉伸，统一度量、整段及行内排版，并验证名称以拒绝未知字体的替代匹配。Light 步进恢复为 10.546875 DIP；内置普通字体不覆盖已安装 Light。缺失的已存字体增加等宽回退，保留保存的名称及配置协议。名称模型依据见 [Microsoft GDI / DirectWrite 互通说明](https://learn.microsoft.com/en-us/windows/win32/directwrite/interoperating-with-gdi)。仍归 SF-A03，不新增条目。
+
+`TestDWriteLegacyFamily` 验证真实 300 字重、粗/斜变体、度量与绘制一致及未知名称拒绝；`TestCascadiaLightGridAndSelection` 验证内置字体共存、100%/150%/200% DPI、网格、鼠标选择复制及切换字体。效果图已查看，缺失字体/图标回退、内置四样式、字号缩放和选区回归通过；完整 text 回归、改动包静态检查和框架 Windows/Linux/macOS 无 CGO 编译通过。证据在 `validation/font-grid/`。框架全量 vet 的既有 `internal/e2e/p2_image_clipboard_windows_test.go:54` unsafe.Pointer 告警单独保留，不计作本轮检查通过。未进行真人键鼠验收及其他平台字体实机验收，原待验口径不变。
+
+本轮固定 `dist` 单文件包已更新，EXE SHA-256 为 `700df502470a562b3c4b2e51c1a42951c6a82393cfa0d3e256a1528fbd6d3cbc`。ZIP、独立启动、内嵌 DLL、心跳及原生正常退出验证通过，原 11 个配置/数据文件未变；验证后清理临时程序包和启动缓存，复用既有脚本而未复制整套。证据见 `validation/font-grid/package-integrity.json`、`portable-smoke.json`、`dist-replacement.json`。未提交、推送或触发 Actions。
+
+### 2026-10-28 SF-W08 多窗口迁移焦点崩溃
+
+用户本机日志确认：北京时间 15:17:24 关闭标签后的 `closeTab → pruneGroups → setCurrentTab → ui.Handle.Focus` 在 `ref.go:77` 发生 panic，进程退出码 2。原因是迁移时保留同一个焦点句柄，两个仍存活的窗口先后绑定它，后续无窗口参数的焦点请求产生歧义。本轮在每个分屏迁移时取消旧请求并重建窗口专属句柄，使目标窗口的第一次绑定接收待处理焦点；终端实例、连接和内容不重建。主归原 SF-W08，关联 W01/W03/W07，未新增编号或共享字段。
+
+`TestMovedTerminalFocusLifecycle` 使用两个同时存活的软件 UI 窗口及实际终端库：旧代码复现与用户日志相同的 panic；修复后关闭标签、切换标签、关闭搜索、三次往返迁移、关闭时保留命令输入框焦点，以及分屏切换/放大恢复六个场景全部通过。各场景确认迁移后首次焦点及键盘输入属于目标窗口，原终端实例和连接保留。既有焦点报告、跨窗插入/拒收、连接/发送目标连续性、关闭确认和编辑器焦点回归及 `go vet ./internal/desktop` 通过。证据：`validation/multiwindow-focus/before-fix.log`、`regression.log`、`vet.log`。
+
+固定 `dist` Windows 单文件 EXE/ZIP 已更新，EXE SHA-256 为 `858ad8f27ded7ac8cebb0788b01a11e9f1e78fa5e2870885db8dd4466849e9ba`。ZIP 完整性、独立空配置目录启动、内嵌运行库、运行心跳、原生 WM_CLOSE 后退出码 0 及诊断助手无残留均通过；原 11 个配置/数据文件哈希未变。证据：同目录 `build.log`、`package-integrity.json`、`portable-smoke.json`、`diagnostic-smoke.json`、`dist-replacement.json`。本轮未提交、推送或触发 Actions。
+
+本次为确定缺陷的复现与闭合，不代表所有异常退出均已消除。SF-W07 原真实鼠标边界验收仍保留待验；未做人工多窗口拖拽联验。有限人工步骤：保留源窗其他标签，将一个普通/分屏标签移至另一个已有窗口，关闭目标窗其他当前标签，确认切换到迁入终端后可输入；往返迁移后重复，源窗连接和目标窗进程均正常。161 项身份、总数及原平台待验口径不变。
+
+### 2026-10-28 SF-I02 / SF-A02 Xshell 风格选区
+
+按用户截图调整内置九个配色的选区颜色：深色配色浅灰底/深色字，浅色配色深灰底/浅色字。复用已有 `selection` / `selectionText` 及选区绘制路径，不改变选区范围、复制提取、共享合同字段和自定义配色；未修改另一端项目。此为用户授权视觉差异，仍归原 SF-I02 / SF-A02。
+
+`TestPresetSelectionStyleAndCopy` 使用实际终端库与软件绘制，验证深/浅配色、跨行行尾高亮、选中文字颜色、未选择位置保留背景及复制内容不带填充空格；生成的 `validation/selection-style/selection-oshell-dark.png`、`selection-oshell-light.png` 已查看。配色合法性/导入导出及四组 Go 兼容样本通过，证据见 `selection-tests.log`、`compatibility-tests.log`。原真实窗口选择交互与 Swift 双端互通仍待验，未以软件效果图关闭原状态；161 项身份和总数不变。
+
+本轮已更新固定 `dist` Windows 单文件 EXE/ZIP；ZIP 完整性、独立空配置目录启动、内嵌运行库加载及正常退出通过，原 11 个配置/数据文件哈希未变。EXE SHA-256 为 `58d5b3c7ff204014f6693f63bbdbd625813b2a9dc9605cefe5872e98b2e8b178`；见 `validation/selection-style/package-integrity.json`、`portable-smoke.json`、`dist-replacement.json`。本轮未提交、推送或触发 Actions。
+
+### 2026-10-27 SF-W05 / SF-A03 滚轮交互调整
+
+按用户明确授权隐藏会话/文件窗口标签栏滚动条与对应指针热区，Shift＋滚轮横移，原生横向滚轮、程序定位及标签拖拽边缘滚动保留。新增终端 Ctrl＋滚轮临时字号缩放：累积 300 DIP 调整 1 点，默认 Windows 滚轮约 3–4 格；停顿超过 1 秒、反向、释放 Ctrl 或取消输入重置累积，单事件最多一级，范围 10–26。只作用鼠标所在终端，不保存或广播字号，普通滚动和远端鼠标处理保持原路由，Ctrl 缩放在远端鼠标模式下不发送协议字节。
+
+`TestHiddenScrollbarsKeepWheelAndReveal` 验证无滚动条绘制/热区、Shift 横移、横向滚轮及定位；`TestTabBarHiddenScrollbarStillScrolls` 验证实际标签栏；既有拖拽落点、分组和信息卡回归通过。`TestFontWheelAccumulation`、`TestCtrlWheelFontZoomStaysLocal` 覆盖阈值、小幅连续滚动、反向/超时/释放、字号边界、网格重排及远端事件隔离。Terminal/Desktop/UI 静态检查、UI Windows 构建和 Linux 交叉编译通过；日志见 `validation/wheel-controls/font-tests.log`、`scroll-tests.log`、`desktop-tests.log`、`vet.log`。本轮无真实物理滚轮联验，SF-W05 / SF-A03 原待验状态及 161 项总数不变。
+
+有限补验：窄窗口打开多个标签，确认悬停不显示滚动条且 Shift＋滚轮可访问两端；在普通终端和鼠标模式程序内，Ctrl＋滚轮少量滚动不缩放、累计约 3–4 格调一级，检查仅所在分屏变化，松开 Ctrl 后正常滚动。其他平台物理滚轮及原字体对照仍按原条目待验。
+
+本轮已本机编译并更新固定 `dist` Windows 单文件 EXE/ZIP，ZIP 完整性、独立空配置启动、内嵌运行库加载和正常退出通过，原 11 个配置/数据文件哈希未变。EXE SHA-256 为 `2a0e84cb2a0f0d2750d453b016883cebf1a352c5e88430b0ee1d5042cbbe94b1`；证据见 `validation/wheel-controls/package-integrity.json`、`portable-smoke.json`、`dist-replacement.json`。本轮未提交、推送或触发 Actions。
+
+### 2026-10-27 SF-I04 Windows 粘贴重复空行修复
+
+使用实际随包终端编码库复现：未规范化的 Windows CRLF 在普通模式被编码为两个 CR，5000 行输入产生 10000 个 CR；括号粘贴模式则原样保留 CRLF，未满足基线的换行规范化。现于预览入口及终端最终发送入口使用既有 `core.NormalizeInput`，CRLF/CR 统一为 LF，再按目标模式编码。保留真实空行、缩进、中文及末尾换行；原始大小/NUL 校验仍在规范化前执行，预览编辑后继续复查，未修改共享配置或其他 SF 边界。
+
+`TestPasteNormalizesLineEndings` 在旧代码复现失败，修复后覆盖普通/括号模式、LF/CRLF/CR/混合换行及 5000 行文本；`TestPasteCRLFPreviewAndPerTargetDispatch` 验证预览规范化、编辑重新引入 CRLF、确认前不发送及各同步目标独立 framing。既有预览取消、超限/NUL、目标失效与粘贴视口回归同时通过，Terminal/Desktop 静态检查通过。证据见 `validation/paste-newlines/before-test.log`、`after-tests.log`、`vet.log`。SF-I04 保持已通过，原 161 项身份、数量及其他条目状态不变。
+
+本轮修复后已更新固定 `dist` 中的 Windows 单文件 EXE/ZIP。ZIP 完整性、独立空配置目录启动、内嵌运行库加载及正常退出通过，原 11 个配置/数据文件哈希未变。EXE SHA-256 为 `5f8635888ab6ed53d77fa7c748db744998474dcc11a910e9ee2bd0300b2d4afd`；证据见 `validation/paste-newlines/package-integrity.json`、`portable-smoke.json`、`dist-replacement.json`。本轮未提交、推送或触发 Actions。
+
+### 2026-10-27 SF-T09 信息卡内部悬停修复
+
+修复主机信息卡在鼠标仍停留其内部时被自动关闭的问题：原逻辑在检查卡片悬停前就按 250 ms 超时退出，定时重绘略晚即误关；现在先检查卡片悬停，再判断离开超时。500 ms 展示延迟、250 ms 离开宽限及键盘/外部点击/失焦/身份变化关闭保持原基线。
+
+`TestTabHoverStaysOpenInsideCard` 在原实现中稳定复现，在修复后通过；覆盖卡片空白处静止悬停、延迟帧、复制按钮、离开宽限内重新进入及离开超时。既有 `TestTabHoverCopiesWithoutChangingFocus`、`TestTabHoverDismissInteractions` 同时通过。证据见 `validation/tab-hover/before-test.log`、`after-tests.log`。本轮为 UI.Tester 回归，真实窗口键鼠联验仍待验收，SF-T09 状态及 161 项总数不变。 真实窗口补验步骤：悬停标签超过 500 ms，移入卡片空白处及复制按钮各静止 3 秒，确认保持显示且复制不抢终端焦点；移出后约 250 ms 关闭，宽限内重新移入应保持显示。
+
+本轮 Windows 单文件便携包已本机编译并更新固定 `dist` EXE/ZIP；ZIP 完整性、独立空配置目录启动、内嵌运行库加载及正常退出通过，原 11 个配置/数据文件哈希未变。EXE SHA-256 为 `66993f7c9f4d74f3f7be98dd13e868c788db87bfd6cee2f6613afbec526b0005`，证据见 `validation/tab-hover/package-integrity.json`、`portable-smoke.json`、`dist-replacement.json`。本轮未提交、推送或触发 Actions。
 
 ### 2026-10-26 SF-F14 审查修复与本机复验
 
@@ -174,7 +340,7 @@ SF-C10 曾在监听关闭失败时提前释放同 UUID 隧道占用；现仅在�
 | SF-W10 专注全屏 | 无窗口状态机通过；真实全屏进入/退出失败、快速切换及 IME/Esc 未验。 | 连续切换与进入/退出失败状态正确；输入法/搜索/弹窗Esc各自处理；不重建连接、标签或草稿 |
 | SF-W11 全心专注 | 草稿/布局状态通过；真实全屏失败回退与快捷键冲突联验未验。 | 开关保留草稿/连接/布局；进入失败回退、退出全屏清状态；快捷键与已有配置冲突时不抢占 |
 | SF-T06 本机与嵌套主机 | 本机/嵌套及对端区分通过；真实网卡来源选择、进入/返回显示联验未留证。 | 本机与嵌套进入/返回正确更新；主机信息、配置目标、本机实际 TCP 对端三者区分 |
-| SF-T09 信息卡生命周期 | 卡片事件回归通过；真实外部键鼠事件关闭并继续传递待验。 | 外部输入事件关闭且继续传递；卡片内部复制不关闭；连接字段变化后旧身份卡消失 |
+| SF-T09 信息卡生命周期 | 卡片事件回归通过；2026-10-27 修复内部悬停超时误关，静止/延迟帧/复制/移出/重入回归通过；真实窗口悬停与外部键鼠事件关闭并继续传递待验。 | 外部输入事件关闭且继续传递；卡片内部复制不关闭；连接字段变化后旧身份卡消失 |
 | SF-Y16 本机配置变化 | 多进程锁/冲突与合成激活事件通过；实际切出修改再激活的 UI 联验待补。 | 外部修改不被旧草稿覆盖；本机冲突草稿阻止继续保存/远端同步；解决时再变化拒写，放弃仅删草稿 |
 | SF-I01 常规交互 | 合成组字与取消通过；真实中文 IME、焦点/关闭提交一次待验。 | 中文/组合字符提交一次；焦点切换、关闭及取消不误写目标。原版未显式清理组字的生命周期须实机核验 |
 | SF-I02 选择 | 选择/软换行/失焦事件通过；真实拖选出窗、隐藏和历史裁剪联验待补。 | 软换行/宽字/双击反向拖选正确；失焦/隐藏取消拖动仍是验收要求，原版未见主动取消路径，须记录差异 |
@@ -229,13 +395,13 @@ python3 scripts/terminal_runtime.py --target linux/amd64 -- go test ./internal/c
 | SF-S11 | 快捷连接 | 已通过 | 工厂占位过滤不删数据、引用保留和快捷连接开关回归通过。 | 无；仅具体新证据触发重开 |
 | SF-S12 | `/Links` | 已通过 | 当前/已有资料引用、重复拒绝和实际资料移动回归通过。 | 无；仅具体新证据触发重开 |
 | SF-S13 | 引用完整性 | 已通过 | 源与引用隔离、重复和根目录保护回归通过。 | 无；仅具体新证据触发重开 |
-| SF-S14 | 链接栏 | 待验收（缺环境） | Windows 拖动事件、代次与滚动通过；Linux 原生拖动入口未验。 | Linux 原生 |
+| SF-S14 | 链接栏 | 待验收（缺环境） | Windows 拖动事件、代次与滚动通过；快捷目录复用侧栏树，浅深色、悬停自动展开及防误触、点击/键盘、嵌套拖回根和来源连接回归通过；Linux 原生拖动入口未验。 | Linux 原生 |
 
 ### 密码与本机保护
 
 | 固定编号 | 细分功能 | 最终状态 | 当前证据 / 剩余问题 | 收尾批次 |
 | --- | --- | --- | --- | --- |
-| SF-P01 | 主密码 | 待验收（缺环境） | 本机主密码事务通过；真实 Swift 凭据转换与重开互通待验。 | 真实双端互通 |
+| SF-P01 | 主密码 | 待验收（缺环境） | 本机主密码事务及回车提交 UI 回归通过：解锁/设置/移除、错误提示、忙碌防重入、输入法确认隔离；真实 Swift 凭据转换与重开互通待验。 | 真实双端互通 |
 | SF-P02 | 本机加密保存 | 待验收（缺环境） | 本机缺/坏密钥保护及合成迁移通过；真实原版密钥/密码互通待验。 | 真实双端互通 |
 | SF-P03 | 身份绑定 | 待验收（缺环境） | Go 身份重绑及并发保护通过；Swift 生成的密码/代理身份双向重绑待验。 | 真实双端互通 |
 | SF-P04 | 认证队列 | 已通过 | 认证队列、关闭/迁移清理、代理与目标隔离回归通过。 | 无；仅具体新证据触发重开 |
@@ -251,7 +417,7 @@ python3 scripts/terminal_runtime.py --target linux/amd64 -- go test ./internal/c
 | 固定编号 | 细分功能 | 最终状态 | 当前证据 / 剩余问题 | 收尾批次 |
 | --- | --- | --- | --- | --- |
 | SF-C01 | SSH 连接 | 已通过 | Windows 合成 Agent 正确密钥成功、错误密钥/空 Agent 拒绝；生产重连取消保留原连接和终端，后续输入仍送达原连接。 | 无；仅具体新证据触发重开 |
-| SF-C02 | 主机身份 | 已通过 | 真实回环 SSH 握手首次批准写 known_hosts、同钥免询问、换钥拒绝不覆盖及拒绝/取消不写入均通过。 | 无；仅具体新证据触发重开 |
+| SF-C02 | 主机身份 | 待验收（新增入口实窗） | 原信任/换钥拒绝及新增单地址清理自动回归通过；备份、其他主机保留和重新确认新指纹通过；人工窗口按用户要求待验。 | Windows 交互 |
 | SF-C03 | 旧 SSH 兼容 | 已通过 | aes192-cbc/aes256-cbc 已补齐；默认拒绝、显式开启、固定白名单/RSA/RC4 拒绝及原生 OpenSSH 的 8 组 CBC/MAC 双向数据用例通过。 | 无；仅具体新证据触发重开 |
 | SF-C04 | 本地终端 | 待验收（缺环境） | Windows ConPTY 输入/尺寸/退出通过；Unix PTY 原生用例跳过。 | Linux 原生 |
 | SF-C05 | 共享代理管理 | 已通过 | 共享代理链、依赖检查及编辑认证/保护回归通过；跨端合同统一受 Y17 门槛约束。 | 无；仅具体新证据触发重开 |
@@ -269,7 +435,7 @@ python3 scripts/terminal_runtime.py --target linux/amd64 -- go test ./internal/c
 
 | 固定编号 | 细分功能 | 最终状态 | 当前证据 / 剩余问题 | 收尾批次 |
 | --- | --- | --- | --- | --- |
-| SF-W01 | 多窗口 | 待验收（缺环境） | Windows 原生零窗口/恢复及固定 EXE 通过；Linux 生命周期待验。 | Linux 原生 |
+| SF-W01 | 多窗口 | 待验收（缺环境） | Windows 多窗口/最后窗口退出通过；新增默认生命周期日志、资源/UI 心跳及脱敏崩溃证据，模拟异常退出通过。用户长时间自行退出根因未确认，需新包日志；Linux 原生生命周期待验。 | 用户异常复现与日志；Linux 原生 |
 | SF-W02 | 标签导航 | 已通过 | 跨可见组导航、编号和稳定选择回归通过。 | 无；仅具体新证据触发重开 |
 | SF-W03 | 标签操作 | 已通过 | 独立/复用复制、结束页门控、空闲复用和输入生命周期通过。 | 无；仅具体新证据触发重开 |
 | SF-W04 | 终端分屏 | 已通过 | 分屏比例、放大恢复、关闭捕获及连接保持回归通过。 | 无；仅具体新证据触发重开 |
@@ -294,7 +460,7 @@ python3 scripts/terminal_runtime.py --target linux/amd64 -- go test ./internal/c
 | SF-T06 | 本机与嵌套主机 | 待验收（缺证据） | 本机/嵌套及对端区分通过；真实网卡来源选择、进入/返回显示联验未留证。 本轮未完成真实窗口有限用例：捕获/激活失败，用户确认目前无法保持会话；维持待验收，原步骤不变。 | Windows 交互 |
 | SF-T07 | 分屏聚合标题 | 待验收（缺环境） | 字素边界/去重/顺序通过；原版 macOS 显示对照待验。 | 原版显示对照 |
 | SF-T08 | 悬停信息卡 | 已通过 | 详情信息、缺失字段及复制不抢焦点事件回归通过。 | 无；仅具体新证据触发重开 |
-| SF-T09 | 信息卡生命周期 | 待验收（缺证据） | 卡片事件回归通过；真实外部键鼠事件关闭并继续传递待验。 本轮未完成真实窗口有限用例：捕获/激活失败，用户确认目前无法保持会话；维持待验收，原步骤不变。 | Windows 交互 |
+| SF-T09 | 信息卡生命周期 | 待验收（缺证据） | 卡片事件回归通过；2026-10-27 修复内部悬停超时误关，静止/延迟帧/复制/移出/重入回归通过；真实窗口悬停与外部键鼠事件关闭并继续传递待验。 本轮未完成真实窗口有限用例：捕获/激活失败，用户确认目前无法保持会话；维持待验收，原步骤不变。 | Windows 交互 |
 
 ### 配置与同步
 
@@ -380,7 +546,7 @@ python3 scripts/terminal_runtime.py --target linux/amd64 -- go test ./internal/c
 | SF-F11 | 传输记录 | 已通过 | 记录裁剪/详情/身份变化、暂停与重连回归通过。 | 无；仅具体新证据触发重开 |
 | SF-F12 | SFTP 续传 | 已通过 | 续传内容、源/片段变化、文件类型、取消和不覆盖回归通过。 | 无；仅具体新证据触发重开 |
 | SF-F13 | 续传范围 | 已通过 | 续传状态/记录与不可用入口范围回归通过；不加入 FTP/SCP/跨进程续传。 | 无；仅具体新证据触发重开 |
-| SF-F14 | ZMODEM | 待验收（缺环境） | 五项审查缺陷已修复；Windows 真实 rz/sz 及原生取消窗口通过。用户下载目录加载问题仍需复验，Linux/macOS 原生窗口与完整 SSH 联验待环境。 | 原目录复验、跨平台窗口及 SSH 联验 |
+| SF-F14 | ZMODEM | 待验收（缺环境） | Windows rz/sz、取消/恢复回归通过；本轮原下载目录独立选择器显示、切换、取消正常，持续卡顿未复现、根因未定位。Desktop/SSH 可见窗口联验受启动工具超时限制。 | 原目录真实 Desktop/SSH、真鼠标拖放、跨平台窗口联验 |
 | SF-F15 | 资源归属 | 已通过 | 文件租约、原终端关闭、迁移及过期回调隔离通过。 | 无；仅具体新证据触发重开 |
 
 ### 快捷操作
@@ -393,7 +559,7 @@ python3 scripts/terminal_runtime.py --target linux/amd64 -- go test ./internal/c
 | SF-O04 | 七种发送范围 | 待验收（缺证据） | 七范围/空选择与本机偏好回归通过；真实最小化/遮挡/放大时可见范围联验待补。 本轮未完成真实窗口有限用例：捕获/激活失败，用户确认目前无法保持会话；维持待验收，原步骤不变。 | Windows 交互 |
 | SF-O05 | 范围动态更新 | 已通过 | 成员变化、迁移与不可输入目标门禁回归通过。 | 无；仅具体新证据触发重开 |
 | SF-O06 | 同步输入 | 已通过 | 目标逐次编码、快照、不可用停止与再校验通过。 | 无；仅具体新证据触发重开 |
-| SF-O07 | 高亮规则 | 待验收（缺环境） | 33 条保留/32 条渲染、重叠/UTF-16 和显示不改文本通过；Swift 字段往返待验。 | 真实双端互通 |
+| SF-O07 | 高亮规则 | 待验收（缺环境） | 前 32 条渲染/其余仍可保存文案已修正；33 条往返、渲染上限、重叠/UTF-16、编辑保存重开/取消与 UI 截图通过；Swift 字段往返待验。 | 真实双端互通 |
 | SF-O08 | 快捷键配置 | 待验收（缺环境） | Windows 冲突及不可读提示通过；Linux 系统读取/录入原生待验。 | Linux 原生 |
 | SF-O09 | 焦点与弹窗 | 待验收（缺证据） | 菜单/弹窗与组字合成事件通过；真实菜单跟踪、IME 和一次按键仅消费一次待验。 本轮未完成真实窗口有限用例：捕获/激活失败，用户确认目前无法保持会话；维持待验收，原步骤不变。 | Windows 交互 |
 
@@ -440,6 +606,60 @@ python3 scripts/terminal_runtime.py --target linux/amd64 -- go test ./internal/c
 
 ## 便携包与范围校验
 
-最新固定便携包按用户“先本地编译”要求，从提交 b3bdae0 本机构建更新，版本仍为 0.3.3；详见[本地编译及 CI 优化记录](ci-build-optimization.md)。EXE SHA256：`61eef77672ac337f69977a08b0fb130d20c478c6886f7a771b24c226aaaf73e2`；ZIP：`ecf8cd136accf6a49627980b0120f88174afaad3413dd8855b8b97458e9a93f6`。ZIP 内容、内嵌资源、签名准备及独立进程/数据锁启动通过，原 11 个数据/配置文件集合和摘要不变。**本轮没有真实窗口显示、正常退出或交互通过证据。** 详细结果和首次回归失败/复验记录见 [CI 修复报告](oshell-desktop-ci-repair-validation.md)。
+最新固定便携包为 0.3.4，基于提交 `61c8e2a` 加本地 SF-S14 快捷目录树/悬停展开、SF-W01 Windows 退出及 SF-P01 主密码回车提交及 SF-F14 终端拖放 rz、SF-W01 异常退出诊断改动构建；尚未提交、推送或发布本次 UI 改动。固定 EXE 与 ZIP 均已更新。EXE SHA256：`2f762c4a9b45f2325b709dc4703cee33d28a0a2c88dfa35f03e08cc1d3caea5b`；ZIP：`324dc73547a9484e052477f2fe4a15399b8427e4a2df4ac20863407fc182af29`。ZIP CRC、仅含单 EXE、内嵌资源、独立进程/数据锁启动通过；原 11 个数据/配置文件集合和摘要不变。最终 EXE 已接收原生 WM_CLOSE 并正常退出（退出码 0），无需强制结束；该证据不等同手工鼠标或画面验收。构建与包验证证据位于 `validation/exit-diagnostics/build.log`、`package-integrity.json`、`portable-smoke.json` 和 `dist-replacement.json`。
 
-固定基线 SHA256：`0fe41373faccf99453302fa6242ab5aaa27e7e084d03462eae3683ae810a30b1`；历史差异 CSV：`b580dc8b3071f60c5d0f1ba30d42f5d8c527777cb9de76ac904f4f4d1d345edc`。161 个 ID/名称/域/基线验收要求和当前状态不变；相对提交 9b0c875，全量 CSV 仅补充 I18/I22 证据，其他 159 行不变。历史行为清单只同步移动后的测试源路径。43 项处置分类/优先级仍保持 P1/P2/P3=9/18/3、保留项 13。核对见 `validation/ci-fix/checklist-verification.json`。
+固定基线（含用户授权的 Windows SF-W01 与终端拖放 SF-F14 调整记录）SHA256：`5c6c90b85be196f4b018ddf656cfa926e84bed5dc0076abff6211d9475d38c82`；历史差异 CSV：`b580dc8b3071f60c5d0f1ba30d42f5d8c527777cb9de76ac904f4f4d1d345edc`。161 个 ID/名称/域/基线验收要求和当前状态不变；相对提交 9b0c875，全量 CSV 仅补充 I18/I22 证据，其他 159 行不变。历史行为清单只同步移动后的测试源路径。43 项处置分类/优先级仍保持 P1/P2/P3=9/18/3、保留项 13。核对见 `validation/ci-fix/checklist-verification.json`。
+
+## 2026-10-27 快捷目录树展示（SF-S14）
+
+按用户反馈，将链接栏目录与“所有快捷链接”弹层从逐层按钮列表改为树状结构，复用左侧会话栏的 `sessionTreeItem`：紧凑左对齐、层级缩进、展开箭头、目录图标、协议标识和快捷引用角标。目录原地展开/收缩，移除“返回上级”按钮；保留根级排序、引用/实际会话连接、项目拖回根、目录管理和 Esc 关闭。展开状态只在弹层运行期保存，不改变共享字段或数据。归属原 SF-S14，161 项范围与状态统计不变。
+
+Windows 软件 UI 回归 `TestLinkFolderTreeInteraction` 在浅色/深色分别验证多分支和三级目录、箭头单次切换、键盘左右键、空目录、嵌套拖回根、管理目标不漂移、引用读取源资料最新配置；既有 `TestLinkBarAndMenuFollowPersistedRootOrder`、`TestLinkFolderDragDoesNotOpenMenuAndBlankAreaAppends` 和 `TestP2S14*` 通过。浅深色快照已检查：`validation/link-tree/link-tree-light.png`、`link-tree-dark.png`。这些是合成配置的软件 UI 证据，未将真实窗口或 Linux 原生拖动标成通过。
+
+### 同日补充：鼠标悬停自动展开
+
+按用户要求，链接栏目录、“所有快捷链接”入口及树中子目录停留 250 毫秒后自动展开；离开后取消待触发展开，悬停其他链接栏目录可切换弹层。仍为原 SF-S14：保持树状展示与点击连接、键盘展开及拖动；鼠标按住/拖动、窗口失焦或存在模态窗口时不触发；手动折叠或 Esc 关闭后，同一次鼠标停留不重新展开。
+
+Windows 软件 UI 回归 `TestLinkDirectoryHoverExpansion` 覆盖快速划过、离开取消、顶层与多级子目录、手动折叠保持、移出再悬停、跨根目录切换、Esc 保持关闭、全部入口、按住和拖动防误触、配置不变；与树形/排序/代次/拖动回归组合通过，`go vet ./internal/desktop` 通过。此次未补真实窗口和 Linux 原生交互证据，原待验收状态不变。
+
+## 2026-10-27 Windows 最后窗口关闭即退出（SF-W01）
+
+根因：`runDesktop` 无条件注册空的 `OnWindowAllClosed` 监听器，明确禁用了 MyGo 的最后窗口退出行为。按用户本次授权，Windows 不再注册该监听器，正常执行 `OnBeforeQuit` / `OnQuit`，关闭外部启动服务、更新服务并锁定存储/密码库；其他平台保留原行为。此次是用户授权的 Windows 生命周期调整，已记录到固定基线的范围变更记录，仍归入 SF-W01；原 macOS 源码事实不改写，161 项数量不变。
+
+真实 Windows 子进程 `TestP2W01NativeProductionLifecycle` 两组通过：两窗口关闭其一继续运行；外部启动请求正常接收；仅剩独立文件窗口继续运行；最后一个会话窗口或文件窗口关闭后，应用事件循环和子进程均正常退出。成功路径没有额外调用 Quit 或强制结束。日志：`validation/window-exit/native-lifecycle.log`。关闭确认/取消、同步提交保护、多窗迁移回归及静态检查通过，见 `validation/window-exit/close-regression.log`。Linux 原生生命周期仍待验收。
+
+## 2026-10-27 主密码回车提交（SF-P01，关联 SF-O09）
+
+用户报告输入主密码按回车无响应。通过真实工作区软件 UI 事件复现：密码输入框没有提交事件绑定，仅按钮调用密码操作。已为解锁、设置/修改和移除表单绑定 `OnSubmit`，回车调用与主按钮相同的 `runVaultAction`；校验、错误提示与事务忙碌保护不变。输入法候选确认与最终提交区分，保留原密码全选处理。未修改共享字段、加密、配置格式或身份绑定。
+
+`TestEncryptedStartupUnlockLoadsConfigurationAndRelocks` 已改从实际输入框输入并回车，验证错误提示可见、失败不改配置、正确解锁恢复会话、连续回车不重入及输入法候选确认不误提交；`TestLegacyMasterUnlockProtectsExistingPlainConfig` 保留按钮路径；设置和移除通过 UI Enter 验证。修复前失败与修复后通过日志：`validation/master-enter/before.log`、`after.log`。仍归原 161 条；真实 macOS / Swift 互通状态不变。
+
+## 2026-10-27 文件拖入终端默认 rz 上传（SF-F14，关联 SF-F02）
+
+用户明确要求拖入文件后直接默认 rz 上传。终端视图区接收外部文件，按落点绑定目标分屏，不受快捷发送/广播范围影响；先检查整批为普通文件，再清除未完成的 shell 输入行并发送固定 rz 命令。文件路径不拼入 shell。收到 CRC 有效的上传握手后复用既有发送器，直接使用本次文件列表，不弹选择框；明确拖放不受自动检测偏好关闭影响，且不修改该偏好。文件管理窗口保留原上传确认流程。
+
+等待握手期间暂停键盘/广播/闲置输入，10 秒无响应报失败并中断等待命令；取消/断开释放此次批次，后续自动传输不会复用旧文件。忙碌时拒绝第二批，目录/不存在文件整批拒绝；锁定、模态或本机终端不发 rz。要求目标处于远端 shell 提示符且已安装 rz，上传到该 shell 当前目录；未新增目录上传或共享字段。
+
+本机 Windows 回归：`TestTerminalDropRealRzMultiFile` 使用真实 rz 接收器和命令门控的合成终端连接，验证中文文件名、空文件、二进制多文件内容、无选择器、重复拖入及其他会话无写入；取消/超时/分块握手、错误可见、输入恢复、忙碌保护及后续自动选择不带旧路径通过。既有 rz/sz 连续传输、缺 OO、延迟选择、SFTP 上传及文件行拖入回归通过；`go vet ./internal/terminal ./internal/desktop` 通过。证据：`validation/terminal-drop/regression.log`、`final-regression.log`。
+
+资源管理器真鼠标拖放到实际 SSH 窗口尚未执行，仍待验收：在 shell 提示符拖入单/多文件，核对远端当前目录内容；分屏落点与活动焦点不同、快速重复拖入、传输中取消、缺 rz、断开/锁定分别确认目标和恢复结果。Linux 原生与既有原下载目录问题仍待环境。上述合成连接及真实 rz 协议证据不冒充实际 SSH 窗口联验；161 个条目与状态数量保持不变。
+
+## 2026-10-27 异常退出日志（SF-W01，关联 SF-W12 / SF-U04）
+
+用户报告程序运行一段时间后自行退出。本轮增加默认本机生命周期和崩溃取证，不声称已确认或修复退出根因。日志覆盖原生窗口创建/关闭请求/实际关闭、关闭确认与阻止原因、退出请求调用链、事件循环返回、更新退出、终端/传输结束和空闲回收；30 秒进程资源与 UI 心跳记录响应延迟和 Windows 内存/句柄数量。Go runtime 崩溃由独立同 EXE 无界面助手写脱敏栈；主进程未写结束标记时补异常结束记录和可取得的退出码。不会通过 recover 吞掉 panic 后继续运行。
+
+独立进程正常退出、主线程/后台 panic、直接退出 17、强制终止、脱敏、轮转/保留回归通过；Windows 原生多窗关闭/最后会话或文件窗口退出、关闭确认/取消、同步关闭保护和空闲回收通过；静态检查通过。日志和测试位于 `validation/exit-diagnostics/diagnostics-tests.log`、`lifecycle-tests.log`、`final-tests.log`。原配置与共享合同未修改，仍归原 161 条；用户异常需使用新包捕获，Linux/macOS 实机缺环境保持待验。说明和后续步骤见 [运行诊断](runtime-diagnostics.md)。
+
+最终诊断便携包已验证 ZIP CRC/唯一 EXE/内嵌 DLL、独立空目录连续运行超过 30 秒的进程与 UI 心跳、17 类关键生命周期事件及 Windows 原生消息循环退出记录；WM_CLOSE 后主程序退出码 0，日志助手无残留。固定 dist EXE/ZIP 已替换，原 11 个数据/配置文件集合和 SHA256 不变。证据：`validation/exit-diagnostics/package-integrity.json`、`portable-smoke.json`、`diagnostic-smoke.json`、`dist-replacement.json`。未提交、推送或触发流水线。
+
+## 2026-10-29 F14 下载目录复验与 O07 文案修正
+
+**SF-F14（V060-F14）：仍待验收，根因未定位。** 2026-10-29：资源管理器显示下载目录 343 项；独立原生选择器直接进入、桌面→下载切换及取消正常，切换时短暂“正在处理”后恢复。持续卡顿未复现。Desktop 隔离探针进入真实 IFileDialog.Show，但隐藏父窗口不可见；可见启动工具返回 Computer Use app approval timed out，不能作为真实窗口验收。原生取消及真实 rz/sz/终端取消回归通过。 选择器调用链为 `chooseTransferPaths → Dialog.OpenContext → IFileOpenDialog.Show`；应用在选择返回后才打开待上传文件，未发现由应用预读下载目录全部文件造成卡顿的证据。文件数量/体积、系统扩展或线程问题均不能据此定为原因。隔离探针超时和不可见窗口不算产品卡顿复现，未修改 F14 产品代码。
+
+剩余有限步骤：保持 Windows 已连接且可交互，在实际 SSH 会话输入 rz，进入同一下载目录并记录加载耗时；切到桌面再返回，选择合成单/多文件并核对远端内容；取消、重开、远端取消后确认终端输入恢复。若仅长期会话失败，记录会话运行时长、应用版本和对应诊断时间，不通过清空目录、改注册表或替换选择器掩盖问题。跨平台及真实拖放待验照旧。
+
+**SF-O07（V060-O07）：文案缺陷已闭合。** 2026-10-29：文案改为“每集仅前 32 条规则参与渲染，其余规则仍可保存”，主机名说明单独一行；模型、保存及渲染上限不变。既有 33 条序列化往返、前 32 条渲染、真实编辑保存/重开/取消回归通过，软件 UI 截图已核对。 既有 33 条测试验证配置序列化往返，编辑界面保存/重开由现有 UI 用例验证；不将两者描述成新增的 33 条原生窗口端到端验收。原 SF-O07 的真实 Swift 双端互通仍待验收。
+
+证据：`validation/f14-o07/regression-native.log`（4 包通过，无跳过）、`native-picker-cancel.log`（文件/目录/文件 3 轮原生取消）、`ui/highlight-sets.png`（提示分两行，无截断）、`results.json`。未更改共享字段、176/161 个条目身份或待验总状态，不提交、不推送、不触发 Actions。
+
+固定便携包 0.3.4 已更新：EXE SHA256 `267fdee2ed4b256fc9a62ed2484f8634245248ed524687dba7b7204b5e39d837`；ZIP SHA256 `f0783a34a2b635d271f2190dae854d27a2cb38c4d7ef07dd816a6848843baa40`。ZIP CRC/唯一 EXE/内容一致、内嵌资源及独立空目录进程与运行库启动通过，固定 dist 原 11 个数据/配置文件集合及摘要不变。本轮可见窗口启动工具超时，未取得最终包的交互窗口关闭证据；启动验证中的隐藏空配置进程仅作测试清理，不能记为正常退出验收。用户安装目录和活动连接未操作。

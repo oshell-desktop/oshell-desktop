@@ -3,6 +3,8 @@
 package desktop
 
 import (
+	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -26,10 +28,10 @@ func TestUnifiedHeaderFitsMinimumWindowAndRoutesMenus(t *testing.T) {
 			snapshot(t, tt, "unified-header-light.png")
 		}
 		header, ok := tt.Find("主工具栏")
-		if !ok || header.H != 38 {
+		if !ok || header.H != 32 {
 			t.Fatalf("unexpected header: %+v", header)
 		}
-		for _, label := range []string{"OShell", "会话", "快捷连接", "编辑", "视图", "窗口", "快速命令", "工具", "标签组", "排列", "会话管理", "文件管理", "会话侧栏", "多设备同步", "设置"} {
+		for _, label := range []string{"快捷连接", "新建会话", "本地终端", "编辑", "更多", "工具", "标签组", "排列", "会话管理", "文件管理", "会话侧栏", "多设备同步", "搜索终端", "记录终端日志", "设置"} {
 			r, ok := tt.Find(label)
 			if !ok || r.X < 0 || r.X+r.W > 880 || r.Y < header.Y || r.Y+r.H > header.Y+header.H {
 				t.Fatalf("header entry %q clipped: %+v", label, r)
@@ -48,10 +50,10 @@ func TestUnifiedHeaderFitsMinimumWindowAndRoutesMenus(t *testing.T) {
 				t.Fatal("sidebar button disappeared with the sidebar")
 			}
 		}
-		if err := tt.Click("会话"); err != nil {
+		if err := tt.Click("更多"); err != nil {
 			t.Fatal(err)
 		}
-		if err := tt.ChooseMenuItem("默认会话属性"); err != nil {
+		if err := tt.ChooseMenuItem("会话", "默认会话属性"); err != nil {
 			t.Fatal(err)
 		}
 		if !a.features.defaultsOpen {
@@ -78,14 +80,122 @@ func TestUnifiedHeaderCommandMenuRefreshesSavedCommands(t *testing.T) {
 	q := core.NewQuickCommand()
 	q.Name, q.Group, q.Text = "新增命令", "运维", "echo refreshed"
 	a.config.QuickCommands = []core.QuickCommand{q}
-	if err := tt.Click("快速命令"); err != nil {
+	if err := tt.Click("更多"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tt.ChooseMenuItem("运维", "新增命令"); err != nil {
+	if err := tt.ChooseMenuItem("快速命令", "运维", "新增命令"); err != nil {
 		t.Fatal(err)
 	}
 	if !a.features.operators.composerOpen || a.features.operators.composerText != q.Text {
 		t.Fatal("command menu was stale or bypassed composer")
+	}
+}
+
+func TestUnifiedHeaderResponsiveActions(t *testing.T) {
+	for _, width := range []float32{880, 999, 1000, 1199, 1200, 1440} {
+		for _, theme := range []string{"light", "dark"} {
+			t.Run(fmt.Sprintf("%s-%g", theme, width), func(t *testing.T) {
+				cfg := core.DefaultConfig()
+				cfg.Settings.InterfaceTheme = theme
+				a := newApp(&core.Store{Dir: t.TempDir()}, cfg)
+				tt := ui.NewTester(a.view, int(width), 560)
+				tt.Frame()
+				labels := []string{"会话侧栏", "会话管理", "快捷连接", "新建会话", "本地终端", "文件管理", "工具", "标签组"}
+				if width < 1200 {
+					labels = append(labels, "排列")
+				} else {
+					labels = append(labels, "分组排列", "分屏排列")
+				}
+				labels = append(labels, "编辑", "更多", "MCP 控制中心", "多设备同步", "更新", "搜索终端", "记录终端日志", "设置")
+				var end float32
+				for _, label := range labels {
+					r, ok := tt.Find(label)
+					if !ok || r.X < end || r.X+r.W > width || r.W <= 0 {
+						t.Fatalf("toolbar action %q missing, overlapping or clipped: %+v (previous end %g)", label, r, end)
+					}
+					end = r.X + r.W
+				}
+				snapshot(t, tt, fmt.Sprintf("toolbar-%s-%g.png", theme, width))
+				// No terminal: search/logging must not create sessions or dialogs.
+				for _, label := range []string{"搜索终端", "记录终端日志"} {
+					_ = tt.Click(label)
+				}
+				if len(a.tabs) != 0 || a.modalActive() {
+					t.Fatal("inactive terminal actions changed the workspace")
+				}
+				if err := tt.Click("新建会话"); err != nil {
+					t.Fatal(err)
+				}
+				if !a.modalActive() {
+					t.Fatal("new session action did not open the editor")
+				}
+			})
+		}
+	}
+}
+
+func TestUnifiedHeaderActiveTerminalActions(t *testing.T) {
+	for _, width := range []int{880, 1200} {
+		t.Run(fmt.Sprint(width), func(t *testing.T) {
+			cfg := core.DefaultConfig()
+			cfg.Settings.InterfaceTheme = "dark"
+			a := newApp(&core.Store{Dir: t.TempDir()}, cfg)
+			p, _ := operatorPane(t, a, "develop")
+			operatorPane(t, a, "staging")
+			active := a.tabs[0]
+			active.root = &node{id: core.NewID(), first: active.root, second: a.tabs[1].root}
+			splitRoot := active.root
+			a.tabs = a.tabs[:1]
+			operatorPane(t, a, "test")
+			a.ensureGroups()
+			a.selectTab(active)
+			p.term.Feed([]byte("Ready for commands\r\n$ "))
+			if err := p.term.StartLog(filepath.Join(t.TempDir(), "session.log")); err != nil {
+				t.Fatal(err)
+			}
+			tt := ui.NewTester(a.view, width, 560)
+			tt.Frame()
+			snapshot(t, tt, fmt.Sprintf("toolbar-active-%d.png", width))
+			if err := tt.Click("搜索终端"); err != nil {
+				t.Fatal(err)
+			}
+			if !p.search.open {
+				t.Fatal("toolbar search did not target the active terminal")
+			}
+			a.closeTerminalSearch(p)
+			tt.Frame()
+			if err := tt.Click("记录终端日志"); err != nil {
+				t.Fatal(err)
+			}
+			if _, logging, _ := p.term.LogState(); logging {
+				t.Fatal("toolbar could not stop active logging")
+			}
+			choose := func(section, item string) {
+				t.Helper()
+				button, path := section, []string{item}
+				if width < 1200 {
+					button, path = "排列", []string{section, item}
+				}
+				if err := tt.Click(button); err != nil {
+					t.Fatal(err)
+				}
+				if err := tt.ChooseMenuItem(path...); err != nil {
+					t.Fatal(err)
+				}
+			}
+			choose("分屏排列", "放大 / 还原当前分屏")
+			if active.zoomed != p {
+				t.Fatal("pane menu did not zoom active pane")
+			}
+			choose("分屏排列", "放大 / 还原当前分屏")
+			if active.zoomed != nil || active.root != splitRoot {
+				t.Fatal("pane menu did not restore split layout")
+			}
+			choose("分组排列", "标签左右排列")
+			if len(a.groups.root.leaves()) != 2 || active.root != splitRoot || active.active != p {
+				t.Fatal("group arrangement lost tabs or changed pane contents")
+			}
+		})
 	}
 }
 

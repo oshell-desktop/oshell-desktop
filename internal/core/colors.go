@@ -18,7 +18,7 @@ type ColorScheme struct {
 	Foreground    string   `json:"foreground"`
 	Cursor        string   `json:"cursor"`
 	CursorText    string   `json:"cursorText"`
-	AutoCursor    bool     `json:"autoCursor"`
+	AutoCursor    bool     `json:"autoCursor"` // Preserved for shared configuration round trips.
 	Selection     string   `json:"selection"`
 	SelectionText string   `json:"selectionText"`
 	ANSI          []string `json:"ansi"`
@@ -30,9 +30,6 @@ var presetJSON []byte
 func ColorPresets() []ColorScheme {
 	var out []ColorScheme
 	json.Unmarshal(presetJSON, &out)
-	for i := range out {
-		out[i].AutoCursor = true
-	}
 	return out
 }
 func (s ColorScheme) Validate() error {

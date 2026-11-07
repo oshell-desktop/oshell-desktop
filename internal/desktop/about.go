@@ -81,7 +81,10 @@ func (a *App) aboutSettings(c *ui.Context) {
 		a.features.about = &value
 	}
 	info := a.features.about
-	ui.Text(c, "OShell Desktop").FontSize(26).Bold()
+	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+		ui.Image(c, brandImage()).Size(28, 28).Label("OShell Desktop 图标")
+		windowHeading(c, "OShell Desktop")
+	})
 	ui.Text(c, fmt.Sprintf("版本：%s\n构建：%s\n架构：%s / %s\n最低系统要求：%s", info.version, info.build, runtime.GOOS, runtime.GOARCH, info.minimum)).Wrap()
 	ui.Text(c, "源码核对基准：OShell 0.2.92；Windows / Linux 平台适配。").TextColor(c.Theme().TextMuted)
 	ui.Row(c).Gap(8).Children(func() {

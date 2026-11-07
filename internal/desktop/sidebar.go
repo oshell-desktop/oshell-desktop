@@ -18,6 +18,7 @@ import (
 
 // These preferences are deliberately outside Config and the shared contract.
 type localPreferences struct {
+	MCPShortcut       *core.KeyboardShortcut    `json:"mcpShortcut"`
 	Version           int                       `json:"version,omitempty"`
 	DeepFocusShortcut core.KeyboardShortcut     `json:"deepFocusShortcut"`
 	ImagePasteLocal   bool                      `json:"imagePasteLocal"`
@@ -45,9 +46,13 @@ func defaultLocalPreferences() localPreferences {
 			code = k
 		}
 	}
-	return localPreferences{DeepFocusShortcut: core.KeyboardShortcut{KeyCode: focusCode, Modifiers: 1 | 2 | 8}, DefaultTitleMode: "sessionName", ConfirmTabClose: true, SidebarVisible: true, SidebarShortcut: core.KeyboardShortcut{KeyCode: code, Modifiers: 1 | 8}, WordSeparators: defaultWordSeparators, ShiftWhitespace: true}
+	return localPreferences{MCPShortcut: &core.KeyboardShortcut{KeyCode: 0, Modifiers: 6}, DeepFocusShortcut: core.KeyboardShortcut{KeyCode: focusCode, Modifiers: 1 | 2 | 8}, DefaultTitleMode: "sessionName", ConfirmTabClose: true, SidebarVisible: true, SidebarShortcut: core.KeyboardShortcut{KeyCode: code, Modifiers: 1 | 8}, WordSeparators: defaultWordSeparators, ShiftWhitespace: true}
 }
 func (p localPreferences) clone() localPreferences {
+	if p.MCPShortcut != nil {
+		key := *p.MCPShortcut
+		p.MCPShortcut = &key
+	}
 	p.ImagePasteSSH = maps.Clone(p.ImagePasteSSH)
 	p.TitleModes = maps.Clone(p.TitleModes)
 	p.Pins = maps.Clone(p.Pins)
@@ -77,6 +82,9 @@ func readLocalPreferences(dir string) (localPreferences, error) {
 	}
 	if !json.Valid(b) || next.Version < 0 || next.Version > 1 {
 		return p, fmt.Errorf("本机设置格式或版本不受支持")
+	}
+	if next.MCPShortcut != nil && !next.MCPShortcut.Valid() {
+		return p, fmt.Errorf("MCP 本机快捷键无效")
 	}
 	if !next.DeepFocusShortcut.Valid() {
 		next.DeepFocusShortcut = p.DeepFocusShortcut
@@ -185,7 +193,7 @@ func (a *App) setSidebarExpanded(expanded bool) {
 
 func (a *App) localSelectionSettings(c *ui.Context) {
 	p := &a.localUIDraft
-	ui.Text(c, "选择").Bold()
+	sectionTitle(c, "选择")
 	ui.TextInput(c, &p.WordSeparators).Label("双击选词分隔符").FillWidth()
 	ui.Text(c, "首次双击按分隔符选词；同一位置再次双击按空白扩大选择。三击仍选整行。").TextColor(c.Theme().TextMuted).Wrap()
 	ui.Button(c, "重置分隔符").OnClick(func() { p.WordSeparators = defaultWordSeparators })
@@ -287,17 +295,19 @@ func (a *App) sidebarView(c *ui.Context) {
 	if s.open == nil {
 		s.open = map[string]*bool{}
 	}
-	ui.Column(c).Width(235).MinWidth(150).MinHeight(0).BorderWidth(0, 1, 0, 0).BorderColor(c.Theme().Border).Children(func() {
-		ui.Row(c).Padding(6, 8).Gap(2).AlignItems(ui.Center).Children(func() {
+	ui.Column(c).Width(235).Shrink(0).MinWidth(150).MinHeight(0).Background(panelColor(c)).TextColor(c.Theme().Text).BorderWidth(0, 1, 0, 0).BorderColor(c.Theme().Border).Children(func() {
+		ui.Row(c).Padding(2, 8, 2, 10).Gap(2).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "会话").FontSize(13).Bold().Grow(1)
-			rowIconButton(c, "管理会话", settingsIcon, c.Theme().Accent).Tooltip("打开会话管理").OnClick(a.openManager)
+			rowIconButton(c, "管理会话", settingsIcon, c.Theme().TextMuted).Tooltip("打开会话管理").OnClick(a.openManager)
 			rowIconButton(c, "隐藏会话侧栏", collapseSidebarIcon, c.Theme().TextMuted).Tooltip("收起会话侧栏").OnClick(a.toggleSidebar)
 		})
-		ui.TextInput(c, &s.query).Label("搜索会话侧栏").Placeholder("名称 / 主机 / 用户 / 端口 / 目录").FillWidth()
-		ui.Row(c).Padding(4, 8).Gap(4).Children(func() {
-			ui.Button(c, "全部展开").Height(24).FontSize(11).Padding(2, 6).BorderWidth(0).Tooltip("展开所有目录；搜索时仅操作当前结果").OnClick(func() { a.setSidebarExpanded(true) })
-			ui.Button(c, "全部收缩").Height(24).FontSize(11).Padding(2, 6).BorderWidth(0).Tooltip("收缩所有目录；搜索时仅操作当前结果").OnClick(func() { a.setSidebarExpanded(false) })
+		ui.Column(c).Padding(4, 10).Children(func() {
+			ui.TextInput(c, &s.query).Label("搜索会话侧栏").Placeholder("搜索名称、主机、目录…").Tooltip("搜索名称 / 主机 / 用户 / 端口 / 目录").Height(28).Padding(3, 6).Radius(3).Background(c.Theme().Surface).FillWidth()
 		})
+		ui.Toolbar(c, func() {
+			ui.Button(c, "全部展开").Height(24).FontSize(11).Padding(2, 6).TextColor(c.Theme().TextMuted).Tooltip("展开所有目录；搜索时仅操作当前结果").OnClick(func() { a.setSidebarExpanded(true) })
+			ui.Button(c, "全部收缩").Height(24).FontSize(11).Padding(2, 6).TextColor(c.Theme().TextMuted).Tooltip("收缩所有目录；搜索时仅操作当前结果").OnClick(func() { a.setSidebarExpanded(false) })
+		}).Padding(2, 6, 6, 6).Gap(2).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border)
 		if !core.NewSessionQuery(s.query).Valid {
 			ui.Text(c, "搜索内容不能超过 4096 UTF-8 字节或 32 个关键词").Wrap().TextColor(c.Theme().Danger)
 			return
@@ -324,7 +334,7 @@ func (a *App) sidebarView(c *ui.Context) {
 				return l < r
 			})
 		}
-		ui.Scroll(c).Label("会话侧栏列表").Grow(1).MinHeight(0).ContextMenu(func(m *ui.Menu) {
+		ui.Scroll(c).Label("会话侧栏列表").Padding(6).Grow(1).MinHeight(0).ContextMenu(func(m *ui.Menu) {
 			a.sidebarContextMenu(c, m, "")
 		}).Children(func() {
 			s.visible = nil
@@ -351,6 +361,9 @@ func (a *App) sidebarView(c *ui.Context) {
 							}
 							item := sessionTreeItem(c.Key("dir:"+child), name, open, func() { draw(child) }, s.selection.Has(id), sessionIconFor("", child == "Links", true, false)).Tooltip("/" + child)
 							a.sidebarItemActions(c, item, id)
+							if item.DoubleClicked() {
+								*open = !*open
+							}
 						}
 						for _, entry := range entries {
 							if entry.group != group {
@@ -375,7 +388,10 @@ func (a *App) sidebarView(c *ui.Context) {
 					}
 				}
 				draw("")
-			})
+			}).Gap(0)
+			if len(entries) == 0 && len(folders) <= 1 {
+				ui.Text(c, "暂无匹配会话").Padding(12, 6).TextColor(c.Theme().TextMuted).FontSize(12)
+			}
 		})
 	})
 }

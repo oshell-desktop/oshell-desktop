@@ -1,9 +1,12 @@
 package desktop
 
 import (
+	"runtime"
+	"testing"
+
 	"github.com/egoist/mygo/ui"
 	"oshell-desktop/internal/core"
-	"testing"
+	"oshell-desktop/internal/terminal"
 )
 
 func TestColorSettingsPickerPreviewAndDraft(t *testing.T) {
@@ -53,21 +56,15 @@ func TestColorInputRejectsInvalidHexWithoutPanic(t *testing.T) {
 	}
 }
 
-func TestCursorColorModeApplyAndCancel(t *testing.T) {
+func TestCursorColorApplyAndCancel(t *testing.T) {
 	store := &core.Store{Dir: t.TempDir()}
 	a := newApp(store, core.DefaultConfig())
+	legacy := a.config.Settings.Scheme().Copy()
+	legacy.AutoCursor = true
+	a.config.Settings.CustomSchemes = append(a.config.Settings.CustomSchemes, legacy)
+	a.config.Settings.ColorSchemeID = legacy.ID
 	a.prepareSettings()
-	if !a.features.colorDraft.AutoCursor {
-		t.Fatal("built-in theme should use automatic cursor contrast")
-	}
 	tt := ui.NewTester(a.colorSettings, 900, 1100)
-	if err := tt.Click("光标颜色自动对比背景"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	if a.features.colorDraft.AutoCursor {
-		t.Fatal("automatic mode did not turn off")
-	}
 	if err := tt.Click("光标颜色选择器"); err != nil {
 		t.Fatal(err)
 	}
@@ -85,20 +82,49 @@ func TestCursorColorModeApplyAndCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	scheme := saved.Settings.Scheme()
-	if scheme.AutoCursor || scheme.Cursor != "#EF4444" || terminalTheme(scheme).AutoCursor {
+	if !scheme.AutoCursor || scheme.Cursor != "#EF4444" || terminalTheme(scheme).Cursor != ui.Hex("#EF4444") {
 		t.Fatal("custom mode was not persisted")
 	}
 	a.prepareSettings()
-	a.features.colorDraft.AutoCursor = true
+	a.features.colorDraft.Cursor = "#000000"
 	a.closeSettings()
 	a.prepareSettings()
-	if a.features.colorDraft.AutoCursor {
-		t.Fatal("cancel persisted draft mode")
+	if a.features.colorDraft.Cursor != "#EF4444" {
+		t.Fatal("cancel persisted draft cursor color")
 	}
-	a.features.colorDraft.AutoCursor = true
-	a.applySettings()
-	saved, err = store.Load()
-	if err != nil || !saved.Settings.Scheme().AutoCursor {
-		t.Fatal("automatic mode was not persisted", err)
+}
+
+func TestWindowsPresetCursorOnHighlightedBrace(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows preset behavior")
 	}
+	for _, scheme := range core.ColorPresets() {
+		if scheme.AutoCursor {
+			t.Fatalf("%s overrides its preset cursor", scheme.ID)
+		}
+	}
+	a := parityApp(t)
+	p, _ := operatorPane(t, a, "cursor")
+	th := terminalTheme(a.config.Settings.Scheme())
+	p.term.SetTheme(th, nil)
+	// Two matched braces, black on white, with the caret on the first.
+	p.term.Feed([]byte("\x1b[30;48;2;255;255;255m{}\x1b[0m\r"))
+	tt := ui.NewTester(func(c *ui.Context) { terminal.View(c, p.term).Fill().AutoFocus() }, 300, 100)
+	before := tt.Image()
+	for y := 0; y < before.Rect.Max.Y; y++ {
+		for x := 0; x < before.Rect.Max.X; x++ {
+			pixel := before.RGBAAt(x, y)
+			if pixel.R != 0x55 || pixel.G != 0xe5 || pixel.B != 0xcc {
+				continue
+			}
+			p.term.Feed([]byte("\x1b[?25l"))
+			tt.Frame()
+			under := tt.Image().RGBAAt(x, y)
+			if under.R != 255 || under.G != 255 || under.B != 255 {
+				t.Fatalf("lost underlying match background: %v", under)
+			}
+			return
+		}
+	}
+	t.Fatal("macOS OShell dark preset cursor not drawn over highlighted brace")
 }

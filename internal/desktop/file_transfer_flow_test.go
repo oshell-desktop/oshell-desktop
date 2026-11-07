@@ -49,17 +49,20 @@ func TestSFTPTransferContentNoOverwriteAndCancelRecovery(t *testing.T) {
 		}
 		return false
 	})
-	// A UI upload uses the original app's numeric suffix, preserving remote data.
+	// Answer the native conflict dialog with "keep both" for this upload.
 	if err := os.WriteFile(source, []byte("do-not-overwrite"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	a.uploadDropped(pane, []string{source})
-	if a.features.uploadDraft == nil {
-		t.Fatal("upload confirmation missing")
-	}
-	if err := ui.NewTester(a.fileWindowView, 1080, 720).Click("确认上传"); err != nil {
-		t.Fatal(err)
-	}
+	a.withTransfer(pane, func(ctx context.Context, client core.RemoteFileSystem) error {
+		rec := client.(*recordedFileSystem)
+		rec.chooseConflict = func(target string) (bool, error) {
+			if target != "/payload.bin" {
+				t.Errorf("unexpected conflict %q", target)
+			}
+			return false, nil
+		}
+		return uploadUnique(ctx, client, []string{source}, "/", a.transferProgress(pane, ctx))
+	})
 	waitOperator(t, a, func() bool {
 		if pane.files.busy {
 			return false

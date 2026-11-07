@@ -32,11 +32,14 @@ type XshellPassword struct{ encoded string }
 func (p XshellPassword) String() string   { return "<Xshell encrypted password>" }
 func (p XshellPassword) GoString() string { return p.String() }
 func (p XshellPassword) Decrypt(master string) (string, error) {
+	return p.decrypt([]byte(master), func(plain []byte) ([]byte, error) { return plain, nil })
+}
+func (p XshellPassword) decrypt(master []byte, checksumBytes func([]byte) ([]byte, error)) (string, error) {
 	packet, e := base64.StdEncoding.DecodeString(p.encoded)
 	if e != nil || len(master) == 0 || len(master) > 4096 || len(p.encoded) > 8192 || len(packet) <= 32 || len(packet) > 4128 {
 		return "", fmt.Errorf("Xshell 密码记录无效或格式不受支持")
 	}
-	key := sha256.Sum256([]byte(master))
+	key := sha256.Sum256(master)
 	defer clear(key[:])
 	cipher, e := rc4.NewCipher(key[:])
 	if e != nil {
@@ -46,7 +49,12 @@ func (p XshellPassword) Decrypt(master string) (string, error) {
 	defer clear(plain)
 	cipher.XORKeyStream(plain, packet[:len(plain)])
 	cipher.Reset()
-	actual := sha256.Sum256(plain)
+	encoded, e := checksumBytes(plain)
+	if e != nil {
+		return "", e
+	}
+	defer clear(encoded)
+	actual := sha256.Sum256(encoded)
 	if subtle.ConstantTimeCompare(actual[:], packet[len(plain):]) != 1 || !utf8.Valid(plain) || bytes.ContainsAny(plain, "\x00\r\n") || len(plain) == 0 {
 		return "", fmt.Errorf("Xshell 主密码不正确、文件损坏或密码格式不受支持；未保存导入结果")
 	}

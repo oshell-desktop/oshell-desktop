@@ -3,7 +3,6 @@ package desktop
 import (
 	"fmt"
 	"github.com/egoist/mygo/ui"
-	"oshell-desktop/internal/terminal"
 	"strconv"
 )
 
@@ -63,10 +62,6 @@ func (a *App) colorSchemePreview(c *ui.Context) {
 		return
 	}
 	cursor, cursorText := ui.Hex(scheme.Cursor), ui.Hex(scheme.CursorText)
-	if scheme.AutoCursor {
-		cursor = terminal.CursorContrast(ui.Hex(scheme.Background))
-		cursorText = terminal.CursorContrast(cursor)
-	}
 	ui.Column(c).Padding(12).Gap(8).Radius(5).Background(ui.Hex(scheme.Background)).Children(func() {
 		ui.Text(c, "user@server:~$ ls -la").Font(terminalFamily(a.features.settingsDraft.FontFamily)).FontSize(14).TextColor(ui.Hex(scheme.Foreground))
 		ui.Row(c).Gap(8).Children(func() {

@@ -35,6 +35,11 @@ func TestTransferMultiplexerDownloadThenShellThenUpload(t *testing.T) {
 	defer term.Close()
 	remoteDone := make(chan error, 1)
 	go func() {
+		// Act as sz: request a receiver before entering the file sender.
+		if _, err := remote.Write(zmodem.BuildZhexHeader(zmodem.FrameZRQINIT, 0)); err != nil {
+			remoteDone <- err
+			return
+		}
 		remoteDone <- zmodem.SendFiles(remote, []zmodem.SendFile{{Name: "in.bin", Size: int64(len(payload)), Reader: bytes.NewReader(payload)}}, nil)
 	}()
 	wait := func(ch <-chan error) {

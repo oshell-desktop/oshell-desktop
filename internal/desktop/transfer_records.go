@@ -91,11 +91,16 @@ type transferPlan struct {
 }
 type recordedFileSystem struct {
 	core.RemoteFileSystem
-	log      *transferLog
-	task     *fileTransfer
-	protocol string
-	batch    []*transferRecord
-	retry    *transferRecord
+	log            *transferLog
+	task           *fileTransfer
+	protocol       string
+	batch          []*transferRecord
+	retry          *transferRecord
+	stateDir       string
+	identity       core.SSHIdentity
+	chooseConflict func(string) (bool, error)
+	resumeTargets  map[string]bool
+	fragment       string
 }
 
 func (f *recordedFileSystem) prepare(plans []transferPlan) {
@@ -140,15 +145,20 @@ func (f *recordedFileSystem) run(ctx context.Context, source, target string, upl
 	var statErr error
 	if upload {
 		info, statErr = os.Lstat(source)
-	} else if _, standalone := f.RemoteFileSystem.(*standaloneSCPFileSystem); !standalone {
-		info, statErr = f.RemoteFileSystem.Lstat(source)
+	} else {
+		switch f.RemoteFileSystem.(type) {
+		case *standaloneSCPFileSystem, *standaloneRsyncFileSystem:
+		default:
+			info, statErr = f.RemoteFileSystem.Lstat(source)
+		}
 	}
 	total := int64(-1)
 	if statErr == nil && core.RemoteFileTypeKnown(info) && info.Mode().IsRegular() {
 		total = info.Size()
-		if canResume && r.checkpoint == nil {
-			f.log.update(r, func() { r.checkpoint = &core.SFTPCheckpoint{Source: source, Target: target, Upload: upload} })
-		}
+	}
+	if canResume && r.checkpoint == nil && statErr == nil && core.RemoteFileTypeKnown(info) && (info.Mode().IsRegular() || info.IsDir()) {
+		cp := &core.SFTPCheckpoint{Source: source, Target: target, Upload: upload, Directory: info.IsDir(), StateDir: f.stateDir, Identity: f.identity, ResumeExisting: f.resumeTargets[target], Fragment: f.fragment}
+		f.log.update(r, func() { r.checkpoint = cp })
 	}
 	// Directories and standalone SCP downloads have no trustworthy total;
 	// display activity and transferred bytes without inventing a percentage.
@@ -260,44 +270,53 @@ func (a *App) transferRecordsView(c *ui.Context, p *pane) {
 		return
 	}
 	records := f.records.snapshot()
+	var anchor ui.Element
 	ui.Row(c).Gap(6).Children(func() {
-		ui.Button(c, fmt.Sprintf("传输记录 (%d)", len(records))).OnClick(func() { f.recordsOpen = !f.recordsOpen })
+		anchor = ui.Button(c, fmt.Sprintf("传输记录 (%d)", len(records))).OnClick(func() { f.recordsOpen = !f.recordsOpen })
 		if f.recordsOpen {
 			ui.Button(c, "清除已结束记录").Disabled(f.busy).OnClick(func() { f.records.mu.Lock(); f.records.pruneLocked(true); f.records.mu.Unlock(); f.recordDetail = "" })
 		}
 	})
-	if !f.recordsOpen {
-		return
-	}
-	f.recordList.Key = func(i int) any { return records[len(records)-1-i].ID }
-	ui.List(c, &f.recordList, len(records), func(index int) {
-		r := records[len(records)-1-index]
-		direction := "下载"
-		if r.Upload {
-			direction = "上传"
-		}
-		ui.Row(c.Key(r.ID)).Gap(6).Children(func() {
-			label := fmt.Sprintf("%s · %s · %s · %s · %s · %s", r.Started.Format("15:04:05"), direction, r.Protocol, r.Status, bytesLabel(r.Bytes), r.Target)
-			item := ui.Button(c, label).Grow(1).MinWidth(0).Justify(ui.Start).Background(ui.Transparent).BorderWidth(0).Tooltip(label + "\n双击查看详情")
-			if item.DoubleClicked() {
-				f.recordDetail = r.ID
+	render := func() {
+		f.recordList.Key = func(i int) any { return records[len(records)-1-i].ID }
+		ui.List(c, &f.recordList, len(records), func(index int) {
+			r := records[len(records)-1-index]
+			direction := "下载"
+			if r.Upload {
+				direction = "上传"
 			}
-			if r.Resume && r.Status != "传输中" {
-				title := "重试"
-				if r.Status == "已暂停" {
-					title = "继续"
+			ui.Row(c.Key(r.ID)).Gap(6).Children(func() {
+				label := fmt.Sprintf("%s · %s · %s · %s · %s · %s", r.Started.Format("15:04:05"), direction, r.Protocol, r.Status, bytesLabel(r.Bytes), r.Target)
+				item := ui.Button(c, label).Grow(1).MinWidth(0).Justify(ui.Start).Background(ui.Transparent).BorderWidth(0).Tooltip(label + "\n双击查看详情")
+				if item.DoubleClicked() {
+					f.recordDetail = r.ID
 				}
-				ui.Button(c, title).Disabled(f.busy).OnClick(func() { a.resumeTransfer(p, r.ID) })
+				if r.Resume && r.Status != "传输中" {
+					title := "重试"
+					if r.Status == "已暂停" {
+						title = "继续"
+					}
+					ui.Button(c, title).Disabled(f.busy).OnClick(func() { a.resumeTransfer(p, r.ID) })
+				}
+			})
+		}).Height(170).FillWidth()
+		for _, r := range records {
+			if f.recordDetail == r.ID {
+				for _, line := range []string{"时间：" + r.Started.Format(time.DateTime), "来源：" + r.Source, "目标：" + r.Target, "结果：" + r.Status + " " + r.Error} {
+					ui.Text(c, line).SingleLine().Tooltip(line).FontSize(11)
+				}
+				break
 			}
-		})
-	}).Height(170).FillWidth()
-	for _, r := range records {
-		if f.recordDetail == r.ID {
-			for _, line := range []string{"时间：" + r.Started.Format(time.DateTime), "来源：" + r.Source, "目标：" + r.Target, "结果：" + r.Status + " " + r.Error} {
-				ui.Text(c, line).SingleLine().Tooltip(line).FontSize(11)
-			}
-			break
 		}
+		ui.Text(c, "SFTP 断点保存在本机。关闭标签或重启后，重新传输相同路径即可继续；已有目录请选择续传。").FontSize(11).TextColor(c.Theme().TextMuted)
 	}
-	ui.Text(c, "续传仅支持 SFTP 普通文件；暂停后未开始的项目需重新选择。关闭标签或清除失败记录后不能恢复，临时片段保留。").FontSize(11).TextColor(c.Theme().TextMuted)
+	if a.filePresentation.owner.Load() != nil {
+		ui.Popover(c, anchor, &f.recordsOpen, func() {
+			width, _ := c.Size()
+			ui.Column(c).Width(min(float32(560), width-32)).Padding(10).Gap(6).Children(render)
+		})
+	} else if f.recordsOpen {
+		render()
+	}
+
 }

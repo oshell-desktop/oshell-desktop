@@ -49,7 +49,11 @@ func (a *App) configureTerminalTransferWithPicker(p *pane, opts *terminal.Option
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-		paths, err := choose(ctx, parent, upload)
+		paths := terminal.UploadPaths(ctx)
+		var err error
+		if len(paths) == 0 || !upload {
+			paths, err = choose(ctx, parent, upload)
+		}
 		if err != nil {
 			return err
 		}
@@ -90,11 +94,17 @@ func (a *App) configureTerminalTransferWithPicker(p *pane, opts *terminal.Option
 			}
 			return zmodem.SendFiles(conn, files, progress)
 		}
-		var rejected []string
+		var rejected, renamed []string
 		err = zmodem.ReceiveFiles(conn, func(file zmodem.ReceiveFile) (io.WriteCloser, error) {
 			writer, e := newTransferFile(paths[0], file.Name)
 			if e != nil {
 				rejected = append(rejected, file.Name+"："+e.Error())
+			} else {
+				writer.onPublished = func(actual string) {
+					if actual != transferBaseName(file.Name) {
+						renamed = append(renamed, actual)
+					}
+				}
 			}
 			return writer, e
 		}, progress)
@@ -102,6 +112,12 @@ func (a *App) configureTerminalTransferWithPicker(p *pane, opts *terminal.Option
 			postPane(p, func(*App) {
 				p.transfer.status = "ZMODEM · 已结束，跳过 " + strings.Join(rejected, "；")
 				p.transfer.active = false
+			})
+		} else if len(renamed) > 0 && err == nil {
+			postPane(p, func(*App) {
+				p.transfer.status = "ZMODEM · 传输完成，另存为 " + strings.Join(renamed, "、")
+				p.transfer.active = false
+				p.transfer.dismissAt = time.Now().Add(transferNoticeDismissDelay)
 			})
 		}
 		return err
@@ -128,7 +144,7 @@ func (a *App) configureTerminalTransferWithPicker(p *pane, opts *terminal.Option
 }
 
 func chooseTransferPaths(ctx context.Context, parent *mygo.Window, upload bool) ([]string, error) {
-	title := "选择 ZMODEM 下载目录（同名文件将跳过）"
+	title := "选择 ZMODEM 下载目录（同名文件自动改名）"
 	if upload {
 		title = "选择 ZMODEM 上传文件"
 	}
@@ -145,20 +161,25 @@ func chooseTransferPaths(ctx context.Context, parent *mygo.Window, upload bool) 
 // Complete downloads become visible in one operation without replacing an
 // existing file. Failed/cancelled transfers leave no partial destination.
 type transferFile struct {
-	file    *os.File
-	target  string
-	aborted error
-	closed  bool
+	file        *os.File
+	target      string
+	aborted     error
+	closed      bool
+	onPublished func(string)
+}
+
+// Match lrz --junk-path for POSIX and Windows senders. Only the final name
+// is validated/used locally; no remote directory is ever created or followed.
+func transferBaseName(name string) string {
+	return name[strings.LastIndexAny(name, "/\\")+1:]
 }
 
 func newTransferFile(dir, name string) (*transferFile, error) {
+	name = transferBaseName(name)
 	if !core.SafeTransferName(name) {
 		return nil, fmt.Errorf("无效的文件名")
 	}
 	target := filepath.Join(dir, name)
-	if _, e := os.Lstat(target); !os.IsNotExist(e) {
-		return nil, fmt.Errorf("目标已存在或无法访问")
-	}
 	f, e := os.CreateTemp(dir, ".oshell-zmodem-*")
 	if e != nil {
 		return nil, e
@@ -184,5 +205,31 @@ func (f *transferFile) Close() error {
 	if e := f.file.Close(); e != nil {
 		return e
 	}
-	return core.PublishDownloadedFile(f.file.Name(), f.target)
+	// lrz -E appends .0, .1, ... on collision. Retry publication itself,
+	// so even a file created while receiving is never overwritten.
+	base := f.target
+	for suffix := -1; suffix < 1000; suffix++ {
+		target := base
+		if suffix >= 0 {
+			target = fmt.Sprintf("%s.%d", base, suffix)
+		}
+		// Directories/symlinks are collisions too; never follow them.
+		if _, err := os.Lstat(target); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if err := core.PublishDownloadedFile(f.file.Name(), target); err != nil {
+			if os.IsExist(err) {
+				continue
+			}
+			return err
+		}
+		f.target = target
+		if f.onPublished != nil {
+			f.onPublished(filepath.Base(target))
+		}
+		return nil
+	}
+	return fmt.Errorf("同名文件过多，无法自动改名")
 }

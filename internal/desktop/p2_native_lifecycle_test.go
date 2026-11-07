@@ -17,6 +17,7 @@ import (
 func runP2NativeLifecycle() int {
 	results := map[string]bool{}
 	var failure error
+	done := make(chan struct{})
 	main := func(fn func()) { done := make(chan struct{}); mygo.RunOnMain(func() { fn(); close(done) }); <-done }
 	count := func() int { n := 0; main(func() { n = len(mygo.Windows()) }); return n }
 	wait := func(want int) error {
@@ -31,7 +32,13 @@ func runP2NativeLifecycle() int {
 	}
 	mygo.App.WhenReady(func() {
 		go func() {
-			defer func() { mygo.App.Quit() }()
+			defer func() {
+				// Success must exit solely from closing the last window.
+				if failure != nil {
+					mygo.App.Quit()
+				}
+				close(done)
+			}()
 			if failure = wait(1); failure != nil {
 				return
 			}
@@ -40,17 +47,17 @@ func runP2NativeLifecycle() int {
 				return
 			}
 			results["TwoWindows"] = true
-			main(func() {
-				for _, w := range mygo.Windows() {
-					w.Close()
-				}
-			})
-			if failure = wait(0); failure != nil {
+			main(func() { mygo.Windows()[0].Close() })
+			if failure = wait(1); failure != nil {
 				return
 			}
 			time.Sleep(200 * time.Millisecond)
-			main(func() { results["ZeroWindowAlive"] = true })
+			main(func() { results["OtherWindowKeptAlive"] = len(mygo.Windows()) == 1 })
 			request, err := core.ParseExternalLauncher("OShell-ZOC", []string{"/SSH:fixture@127.0.0.1:1"})
+			files := os.Getenv("OSHELL_P2_NATIVE_LAST_FILE") == "1"
+			if files {
+				request, err = core.ParseExternalLauncher("FileZilla", []string{"sftp://fixture@127.0.0.1:1/"})
+			}
 			if err != nil {
 				failure = err
 				return
@@ -60,14 +67,31 @@ func runP2NativeLifecycle() int {
 			if failure = core.SendExternalLaunch(ctx, os.Getenv("OSHELL_DATA_DIR"), request); failure != nil {
 				return
 			}
-			if failure = wait(1); failure != nil {
+			wanted := 1
+			if files {
+				wanted = 2
+			}
+			if failure = wait(wanted); failure != nil {
 				return
 			}
-			results["ExternalRestoreOneWindow"] = true
+			results["ExternalLaunchAccepted"] = true
+			if files {
+				main(func() {
+					for _, w := range mygo.Windows() {
+						if w.Title() != "文件管理" {
+							w.Close()
+						}
+					}
+				})
+				if failure = wait(1); failure != nil {
+					return
+				}
+				main(func() { results["FileWindowKeptAlive"] = mygo.Windows()[0].Title() == "文件管理" })
+			}
 			time.Sleep(500 * time.Millisecond)
 			main(func() {
-				mygo.App.Quit()
-				results["ExplicitQuitRequested"] = true
+				results["LastWindowCloseRequested"] = true
+				mygo.Windows()[0].Close()
 			})
 		}()
 	})
@@ -75,11 +99,12 @@ func runP2NativeLifecycle() int {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	<-done
 	if failure != nil {
 		fmt.Fprintln(os.Stderr, failure)
 		return 1
 	}
-	results["ExplicitQuitCompleted"] = true
+	results["LastWindowQuitCompleted"] = true
 	data, _ := json.Marshal(results)
 	fmt.Println(string(data))
 	if err := os.WriteFile(os.Getenv("OSHELL_P2_NATIVE_RESULT"), data, 0600); err != nil {
@@ -91,10 +116,21 @@ func TestP2W01NativeProductionLifecycle(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows native lifecycle fixture")
 	}
+	for _, last := range []string{"terminal", "file"} {
+		t.Run(last, func(t *testing.T) { testNativeLastWindowExit(t, last == "file") })
+	}
+}
+
+func testNativeLastWindowExit(t *testing.T, files bool) {
 	dir := t.TempDir()
 	result := filepath.Join(dir, "lifecycle.json")
-	cmd := exec.Command(os.Args[0], "-test.run=^$")
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^$")
 	cmd.Env = append(os.Environ(), "OSHELL_P2_NATIVE_LIFECYCLE=1", "OSHELL_DATA_DIR="+dir, "OSHELL_P2_NATIVE_RESULT="+result)
+	if files {
+		cmd.Env = append(cmd.Env, "OSHELL_P2_NATIVE_LAST_FILE=1")
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("native lifecycle: %v\n%s", err, out)
 	}
@@ -106,7 +142,11 @@ func TestP2W01NativeProductionLifecycle(t *testing.T) {
 	if err = json.Unmarshal(data, &facts); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"TwoWindows", "ZeroWindowAlive", "ExternalRestoreOneWindow", "ExplicitQuitRequested", "ExplicitQuitCompleted"} {
+	keys := []string{"TwoWindows", "OtherWindowKeptAlive", "ExternalLaunchAccepted", "LastWindowCloseRequested", "LastWindowQuitCompleted"}
+	if files {
+		keys = append(keys, "FileWindowKeptAlive")
+	}
+	for _, key := range keys {
 		if !facts[key] {
 			t.Fatal("missing native fact", key)
 		}

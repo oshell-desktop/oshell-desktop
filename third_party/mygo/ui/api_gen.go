@@ -3223,6 +3223,18 @@ func (_handle Element) HeightPercent(p float32) Element {
 	return wrapElement(_node.HeightPercent(p))
 }
 
+// HideScrollbars hides scroll thumbs and their pointer hit areas while keeping
+// wheel, keyboard, reveal and programmatic scrolling available.
+func (_handle Element) HideScrollbars() Element {
+	_node := _handle.node()
+	if _node == nil {
+		return Element{}
+	}
+	_ctx := _node.c
+	_ = _ctx
+	return wrapElement(_node.HideScrollbars())
+}
+
 // Highlighted reports whether an option of a select is the one the pointer
 // or the arrows are on.
 func (_handle Element) Highlighted() bool {

@@ -46,8 +46,8 @@ func TestTerminalChromeSelectionZoomAndThemeRestoration(t *testing.T) {
 	if a.showPaneFocusStripe(tab, first) {
 		t.Fatal("zoom kept multi-terminal stripe")
 	}
-	if n := longestFlameLine(tt.Image()); n < 120 || n > 280 {
-		t.Fatalf("zoom should retain only the full-width tab underline: %d", n)
+	if n := longestFlameLine(tt.Image()); n != 0 {
+		t.Fatalf("zoom should hide the orange split focus stripe; tabs use the blue application accent: %d", n)
 	}
 	a.togglePaneZoom()
 	a.cyclePane(1)
@@ -75,7 +75,7 @@ func TestTerminalChromeSelectionZoomAndThemeRestoration(t *testing.T) {
 			t.Fatal("split leaked text theme")
 		}
 	}, 400, 200)
-	if windowColor != ui.Hex("#202124") {
+	if windowColor != professionalTheme(true).Background {
 		t.Fatal("split leaked background theme")
 	}
 }

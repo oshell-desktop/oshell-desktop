@@ -169,9 +169,9 @@ func (a *App) removeProxy(id string) {
 }
 func (a *App) proxyManagerDialog(c *ui.Context) {
 	f := &a.features.proxyManager
-	ui.Modal(c, &f.open, func() {
-		ui.Column(c).Width(700).Gap(10).Children(func() {
-			ui.Text(c, "共享代理管理").FontSize(18).Bold()
+	desktopModal(c, &f.open, func() {
+		dialogBody(c, 700).Gap(10).Children(func() {
+			windowHeading(c, "共享代理管理")
 			ui.Text(c, "供 SSH/SFTP 会话共用；上级代理组成最多 8 级链路。修改只影响新连接。").TextColor(c.Theme().TextMuted)
 			if f.editing {
 				ui.Form(c, func() {
@@ -225,7 +225,7 @@ func (a *App) proxyManagerDialog(c *ui.Context) {
 				if f.error != "" {
 					ui.Text(c, f.error).TextColor(c.Theme().Danger)
 				}
-				ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+				dialogActions(c).Children(func() {
 					ui.Button(c, "取消编辑").Disabled(f.busy).OnClick(func() { f.editing = false; f.password = "" })
 					ui.PrimaryButton(c, "保存代理").Disabled(f.busy).OnClick(a.saveProxy)
 				})

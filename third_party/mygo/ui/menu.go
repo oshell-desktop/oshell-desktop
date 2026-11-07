@@ -110,6 +110,10 @@ type Menu struct {
 	text *state
 }
 
+// Chosen reports whether an item in this menu or a submenu has handled
+// the choice. An enclosing popover can then close along with the menu.
+func (m *Menu) Chosen() bool { return m.run.chosen }
+
 // menuRun is a run of a context menu's function: the one collecting what
 // the menu shows, or the one after an item was chosen, which finds it by
 // its place among the items and its label.
@@ -403,6 +407,8 @@ func (rt *engine) openMenu(id uint64, button bool, pm *platform.Menu, labels, co
 	if len(pm.Items) == 0 {
 		return
 	}
+	dark := rt.c.theme.Dark
+	pm.Dark = &dark
 	mr := &rt.menu
 	mr.pending = &shownMenu{id: id, button: button, menu: pm, labels: labels, commands: commands, x: mr.x, y: mr.y, text: mr.text}
 }

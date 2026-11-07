@@ -81,8 +81,8 @@ func (a *App) applyLinkEditor() {
 func (a *App) linkEditorDialog(c *ui.Context) {
 	state := &a.features.linkEditor
 	wasOpen := state.open
-	ui.Modal(c, &state.open, func() {
-		ui.Column(c).Width(480).Gap(12).Children(func() {
+	desktopModal(c, &state.open, func() {
+		dialogBody(c, 480).Gap(12).Children(func() {
 			if state.mode == "addExisting" {
 				a.linkPickerView(c)
 				return
@@ -94,7 +94,7 @@ func (a *App) linkEditorDialog(c *ui.Context) {
 			if state.mode == "renameFolder" {
 				title = "重命名文件夹"
 			}
-			ui.Text(c, title).FontSize(18).Bold()
+			windowHeading(c, title)
 			if state.mode == "link" {
 				if profile, ok := a.currentLinkProfile(state.id); ok {
 					source := "/"
@@ -121,7 +121,7 @@ func (a *App) linkEditorDialog(c *ui.Context) {
 			if state.error != "" {
 				ui.Text(c, state.error).TextColor(c.Theme().Danger)
 			}
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			dialogActions(c).Children(func() {
 				ui.Button(c, "取消").OnClick(func() { state.open = false })
 				ui.PrimaryButton(c, "保存").OnClick(a.applyLinkEditor)
 			})
@@ -165,6 +165,7 @@ func (a *App) showLinksDirectory(folder string) {
 func (a *App) linkContextMenu(menu *ui.Menu, item *core.LinkRootItem) {
 	folder := ""
 	if item != nil {
+		folder = item.Folder
 		switch item.Kind {
 		case "session":
 			if menu.Item("新建连接").Chosen() {
@@ -196,7 +197,6 @@ func (a *App) linkContextMenu(menu *ui.Menu, item *core.LinkRootItem) {
 				a.removeLink(item.ID)
 			}
 		case "folder":
-			folder = item.Folder
 			if menu.Item("重命名文件夹…").Chosen() {
 				a.editLinkFolder(folder, false)
 			}
@@ -265,6 +265,9 @@ func (a *App) linkContextMenu(menu *ui.Menu, item *core.LinkRootItem) {
 	}
 	if menu.Item("隐藏链接栏").Chosen() {
 		a.changeConfig(func(config *core.Config) error { config.Settings.LinksVisible = false; return nil })
+	}
+	if menu.Chosen() {
+		a.linkMenuOpen = false
 	}
 }
 func (a *App) linkMoveMenu(menu *ui.Menu, id string) {

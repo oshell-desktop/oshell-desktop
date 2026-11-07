@@ -661,19 +661,6 @@ func (v *view) cursorRect(ox, oy, cw, ch float32) (r ui.Rect, c, text ui.Color, 
 	if cu.Y >= 0 && cu.Y < len(v.lines) {
 		cw *= lineHorizontalScale(v.lines[cu.Y].mode)
 	}
-	if v.theme.AutoCursor {
-		background := color(v.colors.Background)
-		if cu.Y >= 0 && cu.Y < len(v.lines) {
-			for _, span := range v.lines[cu.Y].bgs {
-				if x >= span.x0 && x < span.x1 {
-					background = span.c
-					break
-				}
-			}
-		}
-		c = CursorContrast(background)
-		text = CursorContrast(c)
-	}
 	w := cw
 	if v.wideAt(cu.Y, x) {
 		w *= 2

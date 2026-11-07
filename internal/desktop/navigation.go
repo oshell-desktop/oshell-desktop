@@ -161,13 +161,13 @@ func (a *App) showQuickSwitch() {
 }
 func (a *App) quickSwitchDialog(c *ui.Context) {
 	f := &a.features.switcher
-	ui.Modal(c, &f.open, func() {
-		ui.Column(c).Width(720).Gap(10).Children(func() {
+	desktopModal(c, &f.open, func() {
+		dialogBody(c, 720).Gap(10).Children(func() {
 			title := "快速切换 / 连接会话"
 			if f.filesOnly {
 				title = "选择文件会话"
 			}
-			ui.Text(c, title).FontSize(18).Bold()
+			windowHeading(c, title)
 			input := ui.TextInput(c, &f.query).Label("快速会话搜索").Placeholder("主机、IP、账号、端口、目录、标签组；空格分隔多个关键词").AutoFocus()
 			if !f.filesOnly {
 				selectValue(c, "搜索范围", &f.scope, [][2]string{{"all", "全部"}, {"opened", "已打开终端"}, {"saved", "已保存"}})
@@ -213,7 +213,7 @@ func (a *App) quickSwitchDialog(c *ui.Context) {
 			f.list.Selected = &f.selected
 			ui.List(c, &f.list, len(entries), func(i int) {
 				entry := entries[i]
-				row := ui.Column(c).Padding(7, 9).Gap(3)
+				row := ui.Column(c).Padding(3, 6).Gap(1)
 				row.Children(func() {
 					ui.Text(c, entry.Title).Bold().SingleLine()
 					ui.Text(c, entry.Detail).FontSize(11).TextColor(c.Theme().TextMuted).SingleLine()

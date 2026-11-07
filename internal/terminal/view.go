@@ -26,13 +26,10 @@ import (
 // elsewhere) to open a hyperlink (OSC 8) on click.
 func View(c *ui.Context, t *Terminal) ui.Element {
 	v := t.viewOf(c)
-	pointer := ui.CursorText
-	if runtime.GOOS == "windows" {
-		// The thin I-beam disappears among terminal glyphs. The system arrow
-		// is easier to locate and respects Windows pointer size/color settings.
-		pointer = ui.CursorDefault
+	if c.Modifiers()&ui.Ctrl == 0 {
+		v.fontWheel = fontWheelState{}
 	}
-	e := ui.Box(c).Focusable().FocusRing(false).Cursor(pointer).Clip().Label("Terminal")
+	e := ui.Box(c).Focusable().FocusRing(false).Cursor(ui.CursorText).Clip().Label("Terminal")
 	v.build(c, e)
 	e.HandleInput(v.handleInput)
 	e.TextCaret(v.caret()).FunctionalInput(true)
@@ -45,6 +42,9 @@ func View(c *ui.Context, t *Terminal) ui.Element {
 // handleInput is the window input route, including availability and local actions.
 func (v *view) handleInput(ev ui.InputEvent) bool {
 	t := v.t
+	if ev.Mods&ui.Ctrl == 0 {
+		v.fontWheel = fontWheelState{}
+	}
 	// Lifecycle cleanup still belongs to this view while a transfer owns
 	// input, or after the connection has closed. It must not be swallowed
 	// by the user-input gate (nor broadcast as keyboard input below).
@@ -61,6 +61,9 @@ func (v *view) handleInput(ev ui.InputEvent) bool {
 	// the queue owns protocol input, without broadcasting rejected keys.
 	open, paused := t.inputStatus()
 	if !open && ev.Kind != ui.InputPointerUp {
+		return true
+	}
+	if ev.Kind == ui.InputScroll && v.zoomFontWithWheel(ev) {
 		return true
 	}
 	if ev.Kind == ui.InputPointerDown && ev.Button == 1 && ev.Mods&ui.Shift == 0 && t.opts.RightClickPaste {
@@ -101,6 +104,7 @@ func (t *Terminal) viewOf(c *ui.Context) *view {
 // thread only.
 type view struct {
 	bidiView
+	fontWheel        fontWheelState
 	preferColorEmoji bool
 	rules            []compiledHighlight
 	highlightVersion uint64
@@ -371,6 +375,7 @@ func (v *view) input(ev ui.InputEvent) bool {
 }
 
 func (v *view) cancelInput() {
+	v.fontWheel = fontWheelState{}
 	v.preedit, v.preeditCaret, v.pending = "", 0, nil
 	v.preeditShape = preeditLayout{}
 	v.pressedAliases = nil

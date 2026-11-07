@@ -111,12 +111,27 @@ func TestIcons(t *testing.T) {
 	if found != 10 {
 		t.Errorf("icns has %d entries", found)
 	}
-	ico, err := pngToICO(src)
+	ico, err := pngToICO(src, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if binary.LittleEndian.Uint16(ico[2:]) != 1 || binary.LittleEndian.Uint16(ico[4:]) != 7 {
 		t.Error("bad ico header")
+	}
+	// Re-render the same source with different framing in the same process.
+	for _, inset := range []int{0, 96, 0} {
+		frames, err := iconImages(src, inset)
+		if err != nil {
+			t.Fatal(err)
+		}
+		small, err := png.Decode(bytes.NewReader(frames[0]))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _, _, alpha := small.At(0, 8).RGBA()
+		if (alpha > 0x7fff) != (inset == 96) {
+			t.Errorf("16px icon with inset %d: left edge alpha = %d", inset, alpha)
+		}
 	}
 }
 

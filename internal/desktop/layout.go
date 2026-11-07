@@ -175,6 +175,11 @@ func (a *App) confirmExit(quit bool) {
 		a.post(func() {
 			a.features.closePending = false
 			if e == nil && r.Button == 1 {
+				a.traceCloseDecision("confirmed")
+			} else {
+				a.traceCloseDecision("cancelled_or_dialog_error")
+			}
+			if e == nil && r.Button == 1 {
 				a.features.allowClose = true
 				if quit {
 					mygo.App.Quit()

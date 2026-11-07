@@ -54,6 +54,9 @@ func (a *App) receiveHostIdentity(p *pane, identity core.HostIdentity) {
 		p.localNames = core.LocalHostnameSnapshot().WithPrevious(p.localNames)
 		identity.Hostname = p.localNames.Canonical(identity.Hostname)
 	}
+	if p.agent != nil && p.hostObservation.Identity.Hostname != "" && p.hostObservation.Identity != identity {
+		p.agent.ContextChanged("主机上下文已改变，请重新确认 Shell")
+	}
 	if p.hostObservation.Integration(identity) {
 		a.cancelHostProbe(p)
 		a.showHostname(p)

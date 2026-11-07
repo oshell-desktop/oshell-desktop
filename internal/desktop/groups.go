@@ -14,6 +14,7 @@ import (
 
 // Groups own existing tabs, never connections. A hidden leaf stays alive.
 type tabGroup struct {
+	lastRevealedTab  string
 	dragOver         bool
 	scroll           ui.ScrollState
 	scrollTime       time.Time
@@ -195,6 +196,9 @@ func (a *App) setCurrentTab(t *tab, focus bool) {
 		}
 	}
 	if g := a.groupByID(t.group); g != nil {
+		if focus || a.groups.active != g.id {
+			g.lastRevealedTab = "" // Explicit selection can reveal the same tab again.
+		}
 		g.hidden = false
 		g.active = t.id
 		a.groups.active = g.id
@@ -341,25 +345,22 @@ func (a *App) arrangeTabs(mode string) {
 		return
 	}
 	var leaves []*groupNode
-	groups := a.groups.root.leaves()
-	preserve := false
-	for _, group := range groups {
-		if group.name != "" {
-			preserve = true
-			break
+	existing := map[string]*tabGroup{}
+	for _, group := range a.groups.root.leaves() {
+		if group.active != "" {
+			existing[group.active] = group
 		}
 	}
-	if preserve {
-		for _, group := range groups {
-			leaves = append(leaves, &groupNode{id: core.NewID(), group: group})
+	for _, t := range a.tabs {
+		leaf := groupLeaf("")
+		// Keep a group's metadata on its active tab, matching OShell 0.6.0.
+		if group := existing[t.id]; group != nil {
+			leaf.group = group
+			group.hidden = false
 		}
-	} else {
-		for _, t := range a.tabs {
-			leaf := groupLeaf("")
-			t.group = leaf.group.id
-			leaf.group.active = t.id
-			leaves = append(leaves, leaf)
-		}
+		t.group = leaf.group.id
+		leaf.group.active = t.id
+		leaves = append(leaves, leaf)
 	}
 	var build func([]*groupNode, int) *groupNode
 	build = func(nodes []*groupNode, depth int) *groupNode {
@@ -453,14 +454,14 @@ func (a *App) promptGroup(g *tabGroup) {
 }
 func (a *App) groupsDialog(c *ui.Context) {
 	s := &a.groups
-	ui.Modal(c, &s.dialog, func() {
-		ui.Column(c).Width(440).Gap(12).Children(func() {
-			ui.Text(c, "标签组名称").FontSize(18).Bold()
+	desktopModal(c, &s.dialog, func() {
+		dialogBody(c, 440).Gap(12).Children(func() {
+			windowHeading(c, "标签组名称")
 			ui.TextInput(c, &s.name).Label("分组名称").AutoFocus()
 			if s.error != "" {
 				ui.Text(c, s.error).TextColor(c.Theme().Danger)
 			}
-			ui.Row(c).Justify(ui.End).Gap(8).Children(func() {
+			dialogActions(c).Children(func() {
 				ui.Button(c, "取消").OnClick(func() { s.dialog = false })
 				ui.PrimaryButton(c, "确定").OnClick(func() {
 					a.confirmGroupDialog()
@@ -468,7 +469,7 @@ func (a *App) groupsDialog(c *ui.Context) {
 			})
 		})
 	})
-	ui.Modal(c, &s.numberOpen, func() {
+	desktopModal(c, &s.numberOpen, func() {
 		ui.Column(c).Width(320).Gap(10).Children(func() {
 			ui.Text(c, "跳到当前分组标签").Bold()
 			input := ui.TextInput(c, &s.number).Label("标签编号").AutoFocus()

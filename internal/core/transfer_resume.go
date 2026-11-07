@@ -16,12 +16,16 @@ import (
 
 var ErrResumeRegularOnly = errors.New("断点续传仅支持 SFTP 普通文件")
 
-// SFTPCheckpoint belongs to one live file tab. It is never serialized or shared.
-// Run must be called serially. Failed/paused fragments remain available until
-// explicitly removed by the user, even when the owning tab is closed.
+// Each Run owns its file handles. Persistent checkpoints are scoped to the
+// resolved SSH identity, direction and source/destination pair.
 type SFTPCheckpoint struct {
 	Upload         bool
 	Source, Target string
+	StateDir       string
+	Identity       SSHIdentity
+	ResumeExisting bool
+	Fragment       string
+	Directory      bool
 	temporary      string
 	size           int64
 	modified       time.Time
@@ -40,6 +44,20 @@ type resumeFile interface {
 }
 
 func (c *SFTPCheckpoint) Run(ctx context.Context, client *sftp.Client, progress func(TransferProgress)) error {
+	if c.Directory {
+		tree := transferState{ctx: ctx, client: client, report: progress, checkpoint: c}
+		if c.Upload {
+			return tree.upload(c.Source, c.Target, 0)
+		}
+		return tree.download(c.Source, c.Target, 0)
+	}
+	if c.StateDir != "" {
+		return c.runPersistent(ctx, client, progress)
+	}
+	return c.runFile(ctx, client, progress, nil)
+}
+
+func (c *SFTPCheckpoint) runFile(ctx context.Context, client *sftp.Client, progress func(TransferProgress), save func() error) error {
 	if c.complete {
 		return errors.New("传输已经完成")
 	}
@@ -48,6 +66,7 @@ func (c *SFTPCheckpoint) Run(ctx context.Context, client *sftp.Client, progress 
 	}
 	var source, destination resumeFile
 	var info os.FileInfo
+	var beforeOpen os.FileInfo
 	var err error
 	if c.Upload {
 		info, err = os.Lstat(c.Source)
@@ -60,7 +79,7 @@ func (c *SFTPCheckpoint) Run(ctx context.Context, client *sftp.Client, progress 
 	if !RemoteFileTypeKnown(info) || !info.Mode().IsRegular() {
 		return ErrResumeRegularOnly
 	}
-	if c.initialized && (info.Size() != c.size || !info.ModTime().Equal(c.modified) || c.Upload && !os.SameFile(c.sourceInfo, info)) {
+	if c.initialized && (info.Size() != c.size || !info.ModTime().Equal(c.modified) || c.Upload && c.sourceInfo != nil && !os.SameFile(c.sourceInfo, info)) {
 		return errors.New("源文件已经变化，拒绝拼接旧片段；请重新选择传输")
 	}
 	if c.Upload {
@@ -79,13 +98,21 @@ func (c *SFTPCheckpoint) Run(ctx context.Context, client *sftp.Client, progress 
 	if !RemoteFileTypeKnown(opened) || !opened.Mode().IsRegular() || opened.Size() != info.Size() || !opened.ModTime().Equal(info.ModTime()) || c.Upload && !os.SameFile(opened, info) {
 		return errors.New("源文件在打开期间发生变化")
 	}
+	c.sourceInfo = info
+	if !c.initialized && c.Fragment != "" {
+		c.temporary = c.Fragment
+		c.size, c.modified = info.Size(), info.ModTime()
+		c.initialized = true
+	}
 	if !c.initialized {
 		c.size, c.modified, c.sourceInfo = info.Size(), info.ModTime(), info
 		if c.Upload {
 			c.temporary = path.Join(path.Dir(c.Target), ".oshell-"+NewID()+".part")
-			destination, err = client.OpenFile(c.temporary, os.O_RDWR|os.O_CREATE|os.O_EXCL)
+			var f *sftp.File
+			f, err = client.OpenFile(c.temporary, os.O_RDWR|os.O_CREATE|os.O_EXCL)
 			if err == nil {
-				err = client.Chmod(c.temporary, 0600)
+				destination = f
+				err = f.Chmod(0600)
 			}
 		} else {
 			var f *os.File
@@ -115,10 +142,28 @@ func (c *SFTPCheckpoint) Run(ctx context.Context, client *sftp.Client, progress 
 		if !RemoteFileTypeKnown(staged) || !staged.Mode().IsRegular() {
 			return errors.New("续传片段不是普通文件")
 		}
+		beforeOpen = staged
+		if c.temporary != c.Target {
+			_, e := c.statTarget(client, c.Target)
+			if !os.IsNotExist(e) {
+				if e == nil {
+					return os.ErrExist
+				}
+				return e
+			}
+		}
+		flags := os.O_RDWR
+		if staged.Size() == c.size {
+			flags = os.O_RDONLY
+		}
 		if c.Upload {
-			destination, err = client.OpenFile(c.temporary, os.O_RDWR)
+			destination, err = client.OpenFile(c.temporary, flags)
 		} else {
-			destination, err = os.OpenFile(c.temporary, os.O_RDWR, 0600)
+			if flags == os.O_RDONLY {
+				destination, err = openImportFile(c.temporary)
+			} else {
+				destination, err = openWritableFragment(c.temporary)
+			}
 		}
 		if err != nil {
 			return err
@@ -131,6 +176,9 @@ func (c *SFTPCheckpoint) Run(ctx context.Context, client *sftp.Client, progress 
 	}
 	if !RemoteFileTypeKnown(staged) || !staged.Mode().IsRegular() || staged.Size() > c.size {
 		return errors.New("续传片段大小无效")
+	}
+	if beforeOpen != nil && (beforeOpen.Size() != staged.Size() || !beforeOpen.ModTime().Equal(staged.ModTime()) || !c.Upload && !os.SameFile(beforeOpen, staged)) {
+		return errors.New("续传片段在打开期间发生变化")
 	}
 	if !c.Upload {
 		if c.temporaryInfo != nil && !os.SameFile(c.temporaryInfo, staged) {
@@ -156,6 +204,20 @@ func (c *SFTPCheckpoint) Run(ctx context.Context, client *sftp.Client, progress 
 			return errors.New("源文件与已传片段不一致，拒绝续传")
 		}
 		remaining -= int64(n)
+	}
+	if offset > 0 {
+		now, e := destination.Stat()
+		if e != nil {
+			return e
+		}
+		if now.Size() != offset || !now.ModTime().Equal(staged.ModTime()) {
+			return errors.New("续传片段在校验期间发生变化")
+		}
+	}
+	if save != nil && (offset < c.size || c.temporary != c.Target) {
+		if err := save(); err != nil {
+			return err
+		}
 	}
 	report := func() {
 		if progress != nil {
@@ -212,7 +274,7 @@ func (c *SFTPCheckpoint) Run(ctx context.Context, client *sftp.Client, progress 
 	if !RemoteFileTypeKnown(current) || !current.Mode().IsRegular() || current.Size() != c.size || !current.ModTime().Equal(c.modified) || c.Upload && !os.SameFile(current, c.sourceInfo) {
 		return errors.New("源路径已变化，未发布目标文件")
 	}
-	if !c.Upload {
+	if !c.Upload && staged.Size() < c.size {
 		if f, ok := destination.(*os.File); ok {
 			if err = f.Sync(); err != nil {
 				return err
@@ -221,6 +283,17 @@ func (c *SFTPCheckpoint) Run(ctx context.Context, client *sftp.Client, progress 
 	}
 	if err = destination.Close(); err != nil {
 		return err
+	}
+	current, err = c.statTarget(client, c.temporary)
+	if err != nil {
+		return err
+	}
+	if !RemoteFileTypeKnown(current) || !current.Mode().IsRegular() || current.Size() != c.size || !c.Upload && !os.SameFile(current, staged) {
+		return errors.New("续传片段在传输期间发生变化")
+	}
+	if c.temporary == c.Target {
+		c.complete = true
+		return nil
 	}
 	if c.Upload {
 		// SFTP v3 RENAME must fail when the destination exists. Do not use

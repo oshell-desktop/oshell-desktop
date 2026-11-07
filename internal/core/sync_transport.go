@@ -124,6 +124,9 @@ func NewWebDAVTransport(address, username, password string, _ bool) (*WebDAVTran
 	return &WebDAVTransport{directory: u, username: username, password: password, client: client}, nil
 }
 func (w *WebDAVTransport) request(ctx context.Context, method string, target *url.URL, body []byte, headers map[string]string) (int, http.Header, []byte, error) {
+	return w.requestLimit(ctx, method, target, body, headers, MaxSharedVault)
+}
+func (w *WebDAVTransport) requestLimit(ctx context.Context, method string, target *url.URL, body []byte, headers map[string]string, limit int) (int, http.Header, []byte, error) {
 	req, e := http.NewRequestWithContext(ctx, method, target.String(), bytes.NewReader(body))
 	if e != nil {
 		return 0, nil, nil, safeSyncFailure("network")
@@ -148,17 +151,17 @@ func (w *WebDAVTransport) request(ctx context.Context, method string, target *ur
 	if response.StatusCode >= 300 && response.StatusCode < 400 {
 		return 0, nil, nil, safeSyncFailure("redirect")
 	}
-	if response.ContentLength > MaxSharedVault {
+	if response.ContentLength > int64(limit) {
 		return 0, nil, nil, safeSyncFailure("size")
 	}
-	data, e := io.ReadAll(io.LimitReader(response.Body, MaxSharedVault+1))
+	data, e := io.ReadAll(io.LimitReader(response.Body, int64(limit)+1))
 	if e != nil {
 		if ctx.Err() != nil {
 			return 0, nil, nil, ctx.Err()
 		}
 		return 0, nil, nil, safeSyncFailure("network")
 	}
-	if len(data) > MaxSharedVault {
+	if len(data) > limit {
 		return 0, nil, nil, safeSyncFailure("size")
 	}
 	return response.StatusCode, response.Header, data, nil

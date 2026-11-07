@@ -139,7 +139,7 @@ func (a *App) refreshSessionTitles() {
 }
 func (a *App) titleSettings(c *ui.Context) {
 	defer a.imagePasteSettings(c)
-	ui.Text(c, "标签（仅本机）").Bold()
+	sectionTitle(c, "标签（仅本机）")
 	selectValue(c, "新建会话默认标题", &a.localUIDraft.DefaultTitleMode, sessionTitleModes)
 	ui.Checkbox(c, &a.titleOverwrite, "同时覆盖已有会话和已打开终端的标题方式")
 	ui.Checkbox(c, &a.localUIDraft.ConfirmTabClose, "关闭标签前确认")

@@ -5,6 +5,13 @@ import (
 	"time"
 )
 
+func (g *tabGroup) revealSelectedTab(row ui.Element, id string) {
+	if g.lastRevealedTab != id {
+		row.ScrollIntoView()
+		g.lastRevealedTab = id
+	}
+}
+
 func (a *App) tabDragScroll(c *ui.Context, scroll ui.Element, g *tabGroup) {
 	// Register the container for drops in trailing space; individual tabs keep priority.
 	if drag, dropped := ui.Drop[tabDrag](scroll); dropped {

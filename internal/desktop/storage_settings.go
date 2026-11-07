@@ -17,7 +17,7 @@ func (a *App) prepareStorageSettings() {
 	a.storagePickerGeneration++
 }
 func (a *App) storageSettings(c *ui.Context) {
-	ui.Text(c, "数据保存位置").Bold()
+	sectionTitle(c, "数据保存位置")
 	ui.Text(c, "当前数据目录").FontSize(12).TextColor(c.Theme().TextMuted)
 	ui.Text(c, a.store.Dir).Selectable().FontSize(12)
 	ui.Button(c, "打开当前数据目录").OnClick(func() {
@@ -30,7 +30,7 @@ func (a *App) storageSettings(c *ui.Context) {
 		return
 	}
 	ui.Divider(c)
-	ui.Text(c, "自定义数据目录").Bold()
+	sectionTitle(c, "自定义数据目录")
 	ui.Row(c).Gap(8).Children(func() {
 		ui.TextInput(c, &a.storageDirectoryDraft).Label("自定义数据目录").Grow(1).Placeholder("输入新的绝对路径，或选择空目录")
 		ui.Button(c, "选择目录…").OnClick(a.chooseStorageDirectory)

@@ -39,6 +39,8 @@ func (a *App) syncPolicySettings(c *ui.Context) {
 	ui.Checkbox(c, &p.Content.ClientSettings, "客户端设置与高亮规则")
 	ui.Checkbox(c, &p.Content.QuickCommands, "快速命令")
 	ui.Checkbox(c, &p.Content.SessionDefaults, "默认会话属性")
+	ui.Checkbox(c, &p.Content.FontFiles, "字体文件（明文附件，默认关闭）")
+	ui.Text(c, "仅同步已导入的活动字体，附件不加密；不上传系统/内置字体，不附带会话归档。").Wrap().FontSize(11).TextColor(c.Theme().TextMuted)
 	ui.Text(c, "未选类别保留本机和远端原值。改变范围后重新确认已有数据；更新来源、安全决定及平台专属设置始终留在本机。").Wrap().TextColor(c.Theme().TextMuted)
 }
 

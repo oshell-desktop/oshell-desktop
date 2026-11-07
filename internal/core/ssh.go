@@ -110,7 +110,18 @@ func (t *TrustStore) checkHostLocked(host string, remote net.Addr, key ssh.Publi
 		return true, nil
 	}
 	var ke *knownhosts.KeyError
-	if !errors.As(err, &ke) || len(ke.Want) > 0 {
+	if errors.As(err, &ke) && len(ke.Want) > 0 {
+		data, readErr := ReadBounded(t.Path)
+		if readErr != nil {
+			return false, readErr
+		}
+		address := host
+		if address == "" {
+			address = remote.String()
+		}
+		return false, &HostKeyMismatch{Address: address, Algorithm: key.Type(), Fingerprint: ssh.FingerprintSHA256(key), path: t.Path, before: data, wanted: ke.Want, cause: err}
+	}
+	if !errors.As(err, &ke) {
 		return false, fmt.Errorf("主机密钥不匹配，连接已阻止。请核实服务器身份后检查 %s: %w", t.Path, err)
 	}
 	return false, nil
