@@ -43,8 +43,8 @@ func TestUnifiedHeaderFitsMinimumWindowAndRoutesMenus(t *testing.T) {
 			}
 			tt.Frame()
 			_, sidebarShown := tt.Find("搜索会话侧栏")
-			if sidebarShown != visible || loadLocalPreferences(a.store.Dir).SidebarVisible != visible {
-				t.Fatal("sidebar button failed to toggle the view or persist its state")
+			if sidebarShown != visible {
+				t.Fatal("sidebar button failed to toggle the current view")
 			}
 			if _, ok := tt.Find("会话侧栏"); !ok {
 				t.Fatal("sidebar button disappeared with the sidebar")

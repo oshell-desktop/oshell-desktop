@@ -93,7 +93,7 @@ func TestTerminalWorkspaceAndClose(t *testing.T) {
 	if err := tt.ChooseMenuItem("左右分屏"); err != nil {
 		t.Fatal(err)
 	}
-	if !a.authOpen || a.pendingSplit != 1 {
+	if !a.authOpen || a.pendingOpen.split != 1 {
 		t.Fatal("split menu did not route to a new connection")
 	}
 	a.authOpen = false

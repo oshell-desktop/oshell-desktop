@@ -1,9 +1,6 @@
 package desktop
 
-import (
-	"github.com/egoist/mygo/ui"
-	"oshell-desktop/internal/core"
-)
+import "github.com/egoist/mygo/ui"
 
 // A title double click duplicates a live session, never a connecting/ended tab
 // or an idle local-tools page. Keep the original pane and saved profile intact.
@@ -34,11 +31,11 @@ func (a *App) duplicateConnectedTab(t *tab) {
 	}
 	if p.externalLaunch {
 		if p.conn != nil && p.conn.Alive() {
-			a.openConnection(p.profile, core.Credentials{OpenTerminal: p.terminalOnly, ExternalLaunch: true}, -2, p.conn)
+			a.cloneActive()
 		}
 		return
 	}
-	a.request(p.profile, -2, p.terminalOnly)
+	a.requestSession(p.profile, sessionOpenOptions{afterTab: t.id}, p.terminalOnly)
 }
 
 // Commit the double-click on release. Otherwise a synchronous local-session

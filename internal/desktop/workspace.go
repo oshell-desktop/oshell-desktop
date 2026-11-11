@@ -68,7 +68,7 @@ func (a *App) view(c *ui.Context) {
 			}
 		}
 		ui.Row(c.Key("workspace-content")).Grow(1).MinHeight(0).AlignItems(ui.Stretch).Children(func() {
-			if a.localUI.SidebarVisible && !a.focusFullscreen.chrome {
+			if a.sidebar.shown && !a.focusFullscreen.chrome {
 				a.sidebarView(c.Key("session-sidebar"))
 			}
 			a.fileDockWorkspace(c)

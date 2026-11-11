@@ -149,7 +149,7 @@ func TestGlobalProxyDesktopNewConnectionsAndReusedChannels(t *testing.T) {
 	if len(a.tabs) != count || accepted.Load() != 2 || !strings.Contains(a.status, "连接已停止") {
 		t.Fatal("new connection bypassed invalid policy")
 	}
-	a.openConnection(p, core.Credentials{}, 0, original.conn)
+	a.openConnection(p, core.Credentials{}, sessionOpenOptions{}, original.conn)
 	waitOperator(t, a, func() bool { return len(a.tabs) == count+1 && a.activePane().conn != nil })
 	_, port = a.activePane().conn.ObservedPeer()
 	if port != p.Port || accepted.Load() != 2 || gatewayAccepted.Load() != 1 {
@@ -158,7 +158,7 @@ func TestGlobalProxyDesktopNewConnectionsAndReusedChannels(t *testing.T) {
 	files := p
 	files.Kind = "sftp"
 	files.InitialDirectory = "/"
-	a.openConnection(files, core.Credentials{}, 0, original.conn)
+	a.openConnection(files, core.Credentials{}, sessionOpenOptions{}, original.conn)
 	waitOperator(t, a, func() bool {
 		return a.activePane().files != nil && !a.activePane().files.busy && len(a.activePane().files.entries) == 1
 	})

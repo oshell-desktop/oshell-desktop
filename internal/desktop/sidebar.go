@@ -28,7 +28,7 @@ type localPreferences struct {
 	ConfirmTabClose   bool                      `json:"confirmTabClose"`
 	ReduceMotion      bool                      `json:"reduceMotion"`
 	Pins              map[string]bool           `json:"pins,omitempty"`
-	SidebarVisible    bool                      `json:"sidebarVisible"`
+	SidebarVisible    bool                      `json:"sidebarVisible"` // Existing installations use this as the initial window state.
 	SidebarShortcut   core.KeyboardShortcut     `json:"sidebarShortcut"`
 	WordSeparators    string                    `json:"wordSeparators"`
 	ShiftWhitespace   bool                      `json:"shiftWhitespace"`
@@ -142,12 +142,18 @@ func (a *App) toggleSidebar() {
 	if a.passwordLocked() || a.modalActive() {
 		return
 	}
-	p := a.localUI.clone()
-	p.SidebarVisible = !p.SidebarVisible
-	a.saveLocalPreferences(p)
+	a.sidebar.shown = !a.sidebar.shown
+	a.sidebar.draftShown = a.sidebar.shown
+	if a.win != nil {
+		a.win.Invalidate()
+	}
+	if a.preferencesWindow != nil {
+		a.preferencesWindow.Invalidate()
+	}
 }
 
 type sidebarState struct {
+	shown, draftShown    bool
 	selection            ui.Selection[string]
 	visible              []string
 	capture, deepCapture bool
@@ -203,7 +209,7 @@ func (a *App) localSelectionSettings(c *ui.Context) {
 	ui.Checkbox(c, &s.TrimLeading, "复制时清理头部空白")
 	ui.Checkbox(c, &s.TrimTrailing, "复制时清理尾部空白")
 	ui.Divider(c)
-	ui.Checkbox(c, &p.SidebarVisible, "显示会话侧栏")
+	ui.Checkbox(c, &a.sidebar.draftShown, "在当前窗口显示会话侧栏")
 	ui.Button(c, "全心专注："+p.DeepFocusShortcut.Display(runtime.GOOS)).OnClick(func() { a.sidebar.capture = true; a.sidebar.deepCapture = true })
 	ui.Button(c, "切换侧栏："+p.SidebarShortcut.Display(runtime.GOOS)).OnClick(func() { a.sidebar.capture = true; a.sidebar.deepCapture = false })
 	if a.sidebar.capture {
@@ -242,7 +248,7 @@ func (a *App) localSelectionSettings(c *ui.Context) {
 			return true
 		}).Children(func() { ui.Text(c, "按下快捷键；Esc 取消") })
 	}
-	ui.Text(c, "侧栏和选词设置仅保存在本机，不参与共享同步。").TextColor(c.Theme().TextMuted)
+	ui.Text(c, "快捷键和选词设置保存在本机。").TextColor(c.Theme().TextMuted)
 }
 
 type sidebarEntry struct {

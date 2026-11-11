@@ -418,7 +418,7 @@ func (a *App) cloneActive() {
 	if p == nil || p.conn == nil {
 		return
 	}
-	a.openConnection(p.profile, core.Credentials{OpenTerminal: p.terminalOnly, ExternalLaunch: p.externalLaunch}, 0, p.conn)
+	a.openConnection(p.profile, core.Credentials{OpenTerminal: p.terminalOnly, ExternalLaunch: p.externalLaunch}, sessionOpenOptions{afterTab: a.activeTab().id}, p.conn)
 }
 func (a *App) toggleLog() {
 	p := a.activePane()
@@ -571,7 +571,7 @@ func (a *App) afterVaultUnlock() {
 	if f.resumeAuth {
 		f.resumeAuth = false
 		f.vaultOpen = false
-		a.request(a.pendingProfile, a.pendingSplit, f.pendingTerminal)
+		a.requestSession(a.pendingProfile, a.pendingOpen, f.pendingTerminal)
 	}
 	if action := f.vaultMenuAfterUnlock; action != "" {
 		f.vaultMenuAfterUnlock = ""

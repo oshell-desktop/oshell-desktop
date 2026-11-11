@@ -454,10 +454,7 @@ func (v *view) scrollPage(up bool) bool {
 	t := v.t
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if t.term == nil || t.term.AltScreen() || t.term.Mode(vt.ModeCursorKeys) {
-		return false
-	}
-	if flags, ok := t.term.KeyboardFlags(); !ok || flags != 0 {
+	if !shellNavigationMode(t.term) {
 		return false
 	}
 	_, rows := t.term.Size()
@@ -473,6 +470,16 @@ func (v *view) scrollPage(up bool) bool {
 		v.scrollingActivity()
 	}
 	return true
+}
+
+// Applications using their own screen, cursor keys or keyboard protocol receive
+// the physical navigation keys. Query the current mode while holding Terminal.mu.
+func shellNavigationMode(term *vt.Terminal) bool {
+	if term == nil || term.AltScreen() || term.Mode(vt.ModeCursorKeys) {
+		return false
+	}
+	flags, ok := term.KeyboardFlags()
+	return ok && flags == 0
 }
 
 func (v *view) keyUp(ev ui.InputEvent) bool {
@@ -599,8 +606,15 @@ func (v *view) encodeKey(k vt.KeyEvent, press bool) bool {
 		}
 	}
 	v.keys.Sync(t.term, t.opts.OptionAsAlt)
-	// Match OShell's desktop event route: physical keys keep their identity
-	// through the encoder, including in RTL paragraphs and mode 1243.
+	// Readline binds Meta-B/F by default, while modified arrow sequences may be unbound.
+	if press && k.Mods == vt.ModAlt && (k.Key == vt.KeyArrowLeft || k.Key == vt.KeyArrowRight) &&
+		(runtime.GOOS != "darwin" || t.opts.OptionAsAlt) && shellNavigationMode(t.term) {
+		if k.Key == vt.KeyArrowLeft {
+			k = vt.KeyEvent{Action: k.Action, Key: vt.KeyB, Mods: vt.ModAlt, Unshifted: 'b', Text: "b"}
+		} else {
+			k = vt.KeyEvent{Action: k.Action, Key: vt.KeyF, Mods: vt.ModAlt, Unshifted: 'f', Text: "f"}
+		}
+	}
 	b := v.keys.Encode(k)
 	if len(b) == 0 {
 		return false

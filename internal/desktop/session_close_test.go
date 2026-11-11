@@ -6,6 +6,49 @@ import (
 	"testing"
 )
 
+func TestCloseTabsFollowsDisplayedOrder(t *testing.T) {
+	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
+	for _, name := range []string{"A", "B", "C", "D", "E"} {
+		a.tabs = append(a.tabs, &tab{id: name, name: name})
+	}
+	first, second, third, fourth, last := a.tabs[0], a.tabs[1], a.tabs[2], a.tabs[3], a.tabs[4]
+	a.selectTab(fourth)
+	a.moveTabRelative(second.id, third.id, true) // A C B D E
+	for _, step := range []struct{ close, want *tab }{
+		{first, fourth}, // Closing a background tab preserves focus.
+		{fourth, second}, {second, third}, {third, last}, {last, nil},
+	} {
+		a.requestSessionClose(step.close, nil)
+		if got := a.activeTab(); got != step.want {
+			t.Fatalf("closing %s selected %v, want %v", step.close.name, got, step.want)
+		}
+	}
+}
+
+func TestCloseTabUsesNeighborsInVisibleGroup(t *testing.T) {
+	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
+	for _, name := range []string{"left", "other-first", "right", "other-last"} {
+		a.tabs = append(a.tabs, &tab{id: name, name: name})
+	}
+	left, otherFirst, right, otherLast := a.tabs[0], a.tabs[1], a.tabs[2], a.tabs[3]
+	a.ensureGroups()
+	other, err := a.createGroup("other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.moveToGroup(otherFirst, other)
+	a.moveToGroup(otherLast, other)
+	a.selectTab(right)
+	a.requestSessionClose(right, nil)
+	if a.activeTab() != left {
+		t.Fatal("selected a tab in the other strip instead of the left neighbor")
+	}
+	a.requestSessionClose(left, nil)
+	if a.activeTab() != otherFirst || a.groupTab(other) != otherFirst {
+		t.Fatal("empty strip did not transfer focus to the first tab of the remaining strip")
+	}
+}
+
 func TestActiveSplitCloseRequiresConfirmationAndKeepsSibling(t *testing.T) {
 	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
 	first, _ := operatorPane(t, a, "first")

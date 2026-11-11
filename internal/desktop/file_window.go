@@ -287,7 +287,7 @@ func (h *applicationHub) openFilesFromPane(source *pane) {
 	if source.files != nil && source.files.dir != "" {
 		profile.InitialDirectory = source.files.dir
 	}
-	target.openConnection(profile, core.Credentials{ExternalLaunch: source.externalLaunch}, 0, source.conn)
+	target.openConnection(profile, core.Credentials{ExternalLaunch: source.externalLaunch}, sessionOpenOptions{}, source.conn)
 }
 
 func observeFileConnection(ctx context.Context, p *pane, conn *core.Connection) {
@@ -325,24 +325,22 @@ func (a *App) reopenSSHFileSession(p *pane, replace bool) {
 		if p.files != nil {
 			profile.InitialDirectory = p.files.dir
 		}
-		split := 0
-		if replace {
-			a.features.reconnectTarget = p
-			split = -1
-		}
-		a.request(profile, split)
+		a.features.reconnectTarget = p
+		a.request(profile, -1)
 		return
 	}
 	profile := p.profile
 	if p.files != nil && p.files.dir != "" {
 		profile.InitialDirectory = p.files.dir
 	}
-	split := 0
+	options := sessionOpenOptions{}
 	if replace {
-		split = -1
+		options.split = -1
 		a.features.reconnectTarget = p
+	} else {
+		options.afterTab = a.ownerTab(p).id
 	}
-	a.openConnection(profile, core.Credentials{ExternalLaunch: p.externalLaunch}, split, p.conn)
+	a.openConnection(profile, core.Credentials{ExternalLaunch: p.externalLaunch}, options, p.conn)
 	if next := a.activePane(); next != nil && next != p && p.fileSource != nil {
 		// Reconnecting or explicitly duplicating the file tab keeps its original
 		// SSH association; p.conn is only the intermediate file-channel wrapper.
@@ -363,6 +361,6 @@ func (a *App) duplicateFileSession() {
 		if p.files != nil && p.files.dir != "" {
 			profile.InitialDirectory = p.files.dir
 		}
-		a.openConnection(profile, core.Credentials{ExternalLaunch: p.externalLaunch}, 0, nil, p.ftp)
+		a.openConnection(profile, core.Credentials{ExternalLaunch: p.externalLaunch}, sessionOpenOptions{afterTab: a.activeTab().id}, nil, p.ftp)
 	}
 }

@@ -28,7 +28,7 @@ func (a *App) toolbar(c *ui.Context) {
 		return text
 	}
 	ui.Toolbar(c, func() {
-		visible := a.localUI.SidebarVisible
+		visible := a.sidebar.shown
 		hint := "显示会话侧栏"
 		if visible {
 			hint = "隐藏会话侧栏"

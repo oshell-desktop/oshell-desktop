@@ -235,7 +235,7 @@ func TestWorkspaceClockRendersOnceAcrossSplitTabs(t *testing.T) {
 	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
 	p, _ := operatorPane(t, a, "first")
 	q, _ := operatorPane(t, a, "second")
-	a.localUI.SidebarVisible = false
+	a.sidebar.shown = false
 	a.arrangeTabs("horizontal")
 	enableTestClock(a)
 	var frame *ui.Context

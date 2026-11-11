@@ -52,6 +52,86 @@ func TestSidebarLocalSettingsStayOutsideSharedConfig(t *testing.T) {
 		t.Fatal("partial corrupt preferences applied", got)
 	}
 }
+
+func TestSidebarTogglesOnlyTheTargetWindow(t *testing.T) {
+	store := &core.Store{Dir: t.TempDir()}
+	cfg := core.DefaultConfig()
+	p := core.NewProfile()
+	p.Name, p.Group = "nested session", "team"
+	cfg.Profiles = []core.Profile{p}
+	a, b := newApp(store, cfg), newApp(store, cfg.Clone())
+	h := &applicationHub{store: store, config: cfg, vault: a.vault, windows: []*App{a, b}}
+	a.hub, b.hub = h, h
+	first, second := ui.NewTester(a.view, 1024, 700), ui.NewTester(b.view, 1024, 700)
+	if err := first.Click("全部展开"); err != nil {
+		t.Fatal(err)
+	}
+	first.Frame()
+	second.Frame()
+	if !first.HasText(p.Name) || second.HasText(p.Name) {
+		t.Fatal("expanding the directory tree should affect only the first window")
+	}
+	if err := first.Click("隐藏会话侧栏"); err != nil {
+		t.Fatal(err)
+	}
+	first.Frame()
+	second.Frame()
+	if _, ok := first.Find("会话侧栏列表"); ok {
+		t.Fatal("first window did not collapse")
+	}
+	if _, ok := second.Find("会话侧栏列表"); !ok {
+		t.Fatal("collapsing the first window hid the second sidebar")
+	}
+	key := b.localUI.SidebarShortcut
+	second.Key(shortcutMods(key), shortcutKey(key.KeyCode))
+	if err := first.Click("会话侧栏"); err != nil {
+		t.Fatal(err)
+	}
+	first.Frame()
+	second.Frame()
+	if _, ok := second.Find("会话侧栏列表"); ok || !first.HasText(p.Name) {
+		t.Fatal("reopening the first sidebar changed the second window or lost its expanded directory")
+	}
+	if _, err := os.Stat(filepath.Join(store.Dir, "desktop-preferences.json")); !os.IsNotExist(err) {
+		t.Fatalf("toggling a window wrote application preferences: %v", err)
+	}
+}
+
+func TestSidebarSettingsApplyOnlyToOwnerAndRetainStartupDefault(t *testing.T) {
+	store := &core.Store{Dir: t.TempDir()}
+	if err := os.WriteFile(filepath.Join(store.Dir, "desktop-preferences.json"), []byte(`{"sidebarVisible":false}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := core.DefaultConfig()
+	a, b := newApp(store, cfg), newApp(store, cfg.Clone())
+	h := &applicationHub{store: store, config: cfg, vault: a.vault, windows: []*App{a, b}}
+	a.hub, b.hub = h, h
+	for _, apply := range []bool{false, true} {
+		a.prepareSettings()
+		controls := ui.NewTester(a.localSelectionSettings, 600, 600)
+		if err := controls.Click("在当前窗口显示会话侧栏"); err != nil {
+			t.Fatal(err)
+		}
+		if apply {
+			a.applySettings()
+		} else {
+			a.closeSettings()
+		}
+		if a.settingsOpen || a.sidebar.shown != apply || b.sidebar.shown {
+			t.Fatalf("apply=%v: owner=%v other=%v error=%s", apply, a.sidebar.shown, b.sidebar.shown, a.features.settingsError)
+		}
+	}
+	prefs := b.localUI.clone()
+	prefs.WordSeparators = "/:"
+	if !b.saveLocalPreferences(prefs) || a.localUI.WordSeparators != "/:" || !a.sidebar.shown || b.sidebar.shown {
+		t.Fatal("saving another preference overwrote a window's sidebar state")
+	}
+	fresh := newApp(store, cfg)
+	if fresh.sidebar.shown {
+		t.Fatal("a new window lost the saved startup default")
+	}
+}
+
 func TestSidebarSearchRestoresExpansionAndHeaderSettings(t *testing.T) {
 	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
 	p := core.NewProfile()

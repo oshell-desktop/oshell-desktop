@@ -19,6 +19,7 @@ func (a *App) prepareSettings() {
 	}
 	a.localUIDraft = a.localUI.clone()
 	a.localUIOriginal = a.localUI.clone()
+	a.sidebar.draftShown = a.sidebar.shown
 	a.titleOverwrite = true
 	a.sidebar.capture = false
 	a.features.sharedSync.logList = ui.ListState{}
@@ -243,6 +244,7 @@ func (a *App) applySettings() {
 			a.applyAppearance()
 			a.applySyncDraft(func() {
 				if a.applyStorageSettings() {
+					a.sidebar.shown = a.sidebar.draftShown
 					a.closeSettings()
 				}
 			})

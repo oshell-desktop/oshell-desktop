@@ -9,11 +9,14 @@ import (
 	"strings"
 )
 
-func (a *App) newBlank() {
+func blankProfile() core.Profile {
 	p := core.NewProfile()
 	p.Kind = "blank"
 	p.Name = "本机网络工具"
-	a.open(p, core.Credentials{}, 0)
+	return p
+}
+func (a *App) newBlank() {
+	a.open(blankProfile(), core.Credentials{}, 0)
 }
 func (a *App) showLiveProperties() {
 	p := a.activePane()

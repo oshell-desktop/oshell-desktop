@@ -51,7 +51,7 @@ func (a *App) openLocalDirectories(values []string, fileURLs bool) error {
 		profile := core.NewProfile()
 		profile.Kind = "local"
 		profile.Name = "本地终端"
-		a.openConnectionAt(profile, core.Credentials{}, -2, nil, directory)
+		a.openConnection(profile, core.Credentials{}, sessionOpenOptions{split: -2, localDirectory: directory}, nil)
 	}
 	return nil
 }

@@ -65,6 +65,11 @@ type tab struct {
 	root     *node
 	active   *pane
 }
+type sessionOpenOptions struct {
+	split          int
+	afterTab       string // Capture the source ID before authentication can change the selected tab.
+	localDirectory string
+}
 type App struct {
 	filePresentation                                filePresentationState
 	mcp                                             mcpPanelState
@@ -131,7 +136,7 @@ type App struct {
 	port, formError, password, keyPassword          string
 	connectAfter                                    bool
 	pendingProfile                                  core.Profile
-	pendingSplit                                    int
+	pendingOpen                                     sessionOpenOptions
 	settingsOpen                                    bool
 	settingsWaitingForSync                          bool
 	filesVisible                                    bool
@@ -149,6 +154,7 @@ func newApp(s *core.Store, c core.Config) *App {
 	a := &App{store: s, config: c, trust: &core.TrustStore{Path: filepath.Join(s.Dir, "known_hosts")}, managerRow: -1, managerList: &ui.ListState{}, status: "就绪", vault: v}
 	a.agent = core.NewAgentCoordinator(s.Dir)
 	a.localUI = loadLocalPreferences(s.Dir)
+	a.sidebar.shown = a.localUI.SidebarVisible
 	if err != nil {
 		a.status = "密码库读取失败：" + err.Error()
 	}
@@ -316,31 +322,53 @@ func (a *App) dispose(p *pane) {
 	}
 }
 func (a *App) closeTab(t *tab) {
+	index := slices.Index(a.tabs, t)
+	if index < 0 {
+		return
+	}
 	active := a.activeTab()
+	closingCurrent := active == t
 	g := a.groupByID(t.group)
-	a.walk(t.root, a.dispose)
-	for i, v := range a.tabs {
-		if v == t {
-			a.tabs = slices.Delete(a.tabs, i, i+1)
-			break
+	if closingCurrent || g != nil && g.active == t.id {
+		strip := a.tabs
+		if g != nil && (a.hub == nil || a.hub.fileWindow != a) {
+			strip = a.groupTabs(g)
+		}
+		var next *tab
+		if i := slices.Index(strip, t); i > 0 {
+			next = strip[i-1]
+		} else if len(strip) > 1 {
+			next = strip[1]
+		}
+		if next != nil && g != nil && next.group == g.id {
+			g.active = next.id
+		}
+		if closingCurrent {
+			active = next
 		}
 	}
-	a.current = -1
-	if active != nil && active != t {
-		for i, v := range a.tabs {
-			if v == active {
-				a.current = i
+	a.walk(t.root, a.dispose)
+	a.tabs = slices.Delete(a.tabs, index, index+1)
+	if closingCurrent && active == nil {
+		// Closing the last tab in a group moves focus to the first remaining visible strip.
+		for _, group := range a.groups.root.leaves() {
+			if group.hidden {
+				continue
+			}
+			if tabs := a.groupTabs(group); len(tabs) > 0 {
+				active = tabs[0]
 				break
 			}
 		}
 	}
+	if closingCurrent {
+		a.current = -1
+		a.setCurrentTab(active, true)
+	} else {
+		a.current = slices.Index(a.tabs, active)
+	}
 	if a.groups.root != nil {
 		a.pruneGroups()
-		if active == t && g != nil && a.groupByID(g.id) != nil && !g.hidden {
-			a.activateGroup(g)
-		}
-	} else {
-		a.current = min(a.current, len(a.tabs)-1)
 	}
 	a.scheduleIdleMemoryReclaim()
 }
@@ -414,7 +442,10 @@ func (a *App) local() {
 	a.open(p, core.Credentials{}, 0)
 }
 func (a *App) request(p core.Profile, split int, terminalMode ...bool) {
-	asTerminal := len(terminalMode) > 0 && terminalMode[0] && p.Kind == "sftp"
+	a.requestSession(p, sessionOpenOptions{split: split}, len(terminalMode) > 0 && terminalMode[0])
+}
+func (a *App) requestSession(p core.Profile, options sessionOpenOptions, terminalMode bool) {
+	asTerminal := terminalMode && p.Kind == "sftp"
 	if a.passwordLocked() {
 		a.features.startupUnlock = true
 		a.showVault()
@@ -436,7 +467,7 @@ func (a *App) request(p core.Profile, split int, terminalMode ...bool) {
 			a.authQueue = nil
 			target.batchTerminalOpened = a.batchTerminalOpened
 			target.batchTerminalOwner = a.batchTerminalOwner
-			target.request(p, split, asTerminal)
+			target.requestSession(p, options, asTerminal)
 			if parent := target.fileParent(); parent != nil {
 				parent.Focus()
 			}
@@ -451,12 +482,12 @@ func (a *App) request(p core.Profile, split int, terminalMode ...bool) {
 	p = resolvedProfile
 	a.closeManager()
 	if p.Kind == "local" || p.Kind == "blank" {
-		a.open(p, core.Credentials{}, split)
+		a.openConnection(p, core.Credentials{}, options, nil)
 		return
 	}
 	a.features.pendingTerminal = asTerminal
 	a.pendingProfile = p
-	a.pendingSplit = split
+	a.pendingOpen = options
 	a.password = ""
 	a.authPasswordRevealed = false
 	a.keyPassword = ""
@@ -516,7 +547,7 @@ func (a *App) request(p core.Profile, split int, terminalMode ...bool) {
 					a.keyPassword = ""
 					a.features.savedPassword = ""
 					a.features.savedIdentity = nil
-					a.open(p, core.Credentials{Password: saved, ExpectedIdentity: &identity, OpenTerminal: asTerminal}, split)
+					a.openConnection(p, core.Credentials{Password: saved, ExpectedIdentity: &identity, OpenTerminal: asTerminal}, options, nil)
 					a.nextAuthentication()
 					return
 				}
@@ -531,7 +562,7 @@ func (a *App) request(p core.Profile, split int, terminalMode ...bool) {
 				a.keyPassword = ""
 				a.features.savedPassword = ""
 				a.features.savedIdentity = nil
-				a.open(p, core.Credentials{ExpectedIdentity: &identity, OpenTerminal: asTerminal}, split)
+				a.openConnection(p, core.Credentials{ExpectedIdentity: &identity, OpenTerminal: asTerminal}, options, nil)
 				a.nextAuthentication()
 			}
 		})
@@ -559,12 +590,9 @@ func (a *App) edit(p core.Profile) {
 }
 
 func (a *App) open(profile core.Profile, cred core.Credentials, split int) {
-	a.openConnection(profile, cred, split, nil)
+	a.openConnection(profile, cred, sessionOpenOptions{split: split}, nil)
 }
-func (a *App) openConnection(profile core.Profile, cred core.Credentials, split int, source *core.Connection, ftpSources ...*core.FTPSession) {
-	a.openConnectionAt(profile, cred, split, source, "", ftpSources...)
-}
-func (a *App) openConnectionAt(profile core.Profile, cred core.Credentials, split int, source *core.Connection, localDirectory string, ftpSources ...*core.FTPSession) {
+func (a *App) openConnection(profile core.Profile, cred core.Credentials, options sessionOpenOptions, source *core.Connection, ftpSources ...*core.FTPSession) {
 	if a.passwordLocked() || a.stopped.Load() || a.hub != nil && a.hub.quitting {
 		return
 	}
@@ -609,7 +637,8 @@ func (a *App) openConnectionAt(profile core.Profile, cred core.Credentials, spli
 	a.initializeHostname(p)
 	n := &node{id: core.NewID(), pane: p}
 	t := a.activeTab()
-	forceNew := split == -2
+	split := options.split
+	forceNew := split == -2 || options.afterTab != ""
 	if forceNew {
 		split = 0
 	}
@@ -670,7 +699,19 @@ func (a *App) openConnectionAt(profile core.Profile, cred core.Credentials, spli
 		t.active = p
 	} else {
 		t = &tab{group: a.groups.active, id: core.NewID(), name: profile.Name, root: n, active: p}
-		a.tabs = append(a.tabs, t)
+		at := len(a.tabs)
+		if options.afterTab != "" {
+			for i, sourceTab := range a.tabs {
+				if sourceTab.id == options.afterTab {
+					at, t.group = i+1, sourceTab.group
+					break
+				}
+			}
+		}
+		a.tabs = slices.Insert(a.tabs, at, t)
+		if at <= a.current {
+			a.current++ // Keep the former selection identifiable until setCurrentTab records it.
+		}
 		a.setCurrentTab(t, true)
 	}
 	post := func(fn func()) bool {
@@ -886,7 +927,7 @@ func (a *App) openConnectionAt(profile core.Profile, cred core.Credentials, spli
 		if profile.Kind == "ssh" || profile.Kind == "local" {
 			agentSession = a.agentCoordinator().Register(p.id, profile.Name)
 		}
-		opts := terminal.Options{Dir: localDirectory, Agent: agentSession, PreferColorEmoji: settings.PreferColorEmoji, ManagedClipboardBindings: true, AmbiguousCharactersAreWide: settings.AmbiguousCharactersAreWide, Font: terminal.Font{Family: terminalFamily(settings.FontFamily), Size: float32(settings.FontSize)}, Scrollback: settings.ScrollbackMB << 20, Theme: terminalTheme(settings.Scheme()), NoBlink: true}
+		opts := terminal.Options{Dir: options.localDirectory, Agent: agentSession, PreferColorEmoji: settings.PreferColorEmoji, ManagedClipboardBindings: true, AmbiguousCharactersAreWide: settings.AmbiguousCharactersAreWide, Font: terminal.Font{Family: terminalFamily(settings.FontFamily), Size: float32(settings.FontSize)}, Scrollback: settings.ScrollbackMB << 20, Theme: terminalTheme(settings.Scheme()), NoBlink: true}
 
 		if conn != nil {
 			opts.Conn = conn

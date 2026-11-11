@@ -57,7 +57,7 @@ func (a *App) dialogs(c *ui.Context) {
 					a.password = ""
 					a.keyPassword = ""
 					a.authOpen = false
-					a.open(a.pendingProfile, cred, a.pendingSplit)
+					a.openConnection(a.pendingProfile, cred, a.pendingOpen, nil)
 					a.nextAuthentication()
 				})
 			})

@@ -3,7 +3,6 @@ package desktop
 import (
 	"fmt"
 	"github.com/egoist/mygo/ui"
-	"oshell-desktop/internal/core"
 )
 
 func (a *App) tabStripMenu(m *ui.Menu, g *tabGroup, t *tab) {
@@ -46,16 +45,16 @@ func (a *App) tabStripMenu(m *ui.Menu, g *tabGroup, t *tab) {
 	p := t.active
 	if m.Item("复制会话").Disabled(p.closed).Chosen() {
 		a.selectTab(t)
-		if p.profile.Kind == "blank" {
-			a.newBlank()
-		} else {
-			a.request(p.profile, -2, p.terminalOnly)
+		profile := p.profile
+		if profile.Kind == "blank" {
+			profile = blankProfile()
 		}
+		a.requestSession(profile, sessionOpenOptions{afterTab: t.id}, p.terminalOnly)
 		return
 	}
 	if m.Item("复制 SSH 渠道").Disabled(p.closed || p.conn == nil || !p.conn.Alive()).Chosen() {
 		a.selectTab(t)
-		a.openConnection(p.profile, core.Credentials{OpenTerminal: p.terminalOnly, ExternalLaunch: p.externalLaunch}, -2, p.conn)
+		a.cloneActive()
 		return
 	}
 	if m.Item("专注全屏 / 退出").Checked(a.focusFullscreen.requested).Chosen() {

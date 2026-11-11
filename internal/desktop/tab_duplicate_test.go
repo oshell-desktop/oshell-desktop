@@ -3,8 +3,44 @@ package desktop
 import (
 	"github.com/egoist/mygo/ui"
 	"oshell-desktop/internal/core"
+	"slices"
 	"testing"
 )
+
+func TestTabMenuDuplicateInsertsEachCopyImmediatelyAfterSource(t *testing.T) {
+	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
+	for _, name := range []string{"left", "source", "right"} {
+		profile := blankProfile()
+		profile.Name = name
+		a.open(profile, core.Credentials{}, 0)
+	}
+	t.Cleanup(func() {
+		for _, tab := range a.tabs {
+			a.dispose(tab.active)
+		}
+	})
+	left, source, right := a.tabs[0], a.tabs[1], a.tabs[2]
+	g := a.groupByID(source.group)
+	tt := ui.NewTester(func(c *ui.Context) { a.groupTabBar(c, g) }, 1100, 60)
+	var copies []*tab
+	for range 2 {
+		if err := tt.RightClick(source.name); err != nil {
+			t.Fatal(err)
+		}
+		if err := tt.ChooseMenuItem("复制会话"); err != nil {
+			t.Fatal(err)
+		}
+		copies = append(copies, a.activeTab())
+	}
+	if !slices.Equal(a.groupTabs(g), []*tab{left, source, copies[1], copies[0], right}) ||
+		copies[0] == copies[1] || copies[1].active.profile.ID == source.active.profile.ID {
+		t.Fatal("repeated menu copies did not occupy the slot immediately after their source")
+	}
+	a.newBlank()
+	if a.tabs[len(a.tabs)-1] != a.activeTab() || a.tabs[len(a.tabs)-2] != right {
+		t.Fatal("ordinary new tab did not append")
+	}
+}
 
 func TestConnectedTabDoubleClickCreatesIndependentSession(t *testing.T) {
 	a, profile, accepted := savedConnectionFixture(t)
@@ -16,19 +52,28 @@ func TestConnectedTabDoubleClickCreatesIndependentSession(t *testing.T) {
 	original := a.tabs[0]
 	connection := original.active.conn
 	term := original.active.term
+	a.newBlank()
+	tail := a.activeTab()
+	other, err := a.createGroup("other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.moveToGroup(tail, other)
 	tt := ui.NewTester(func(c *ui.Context) { a.groupTabBar(c, a.groupByID(original.group)) }, 900, 60)
 	if err := tt.Click(original.name); err != nil {
 		t.Fatal(err)
 	}
-	if len(a.tabs) != 1 {
+	if len(a.tabs) != 2 {
 		t.Fatal("single click duplicated session")
 	}
 	if err := tt.Click(original.name); err != nil {
 		t.Fatal(err)
 	}
-	waitOperator(t, a, func() bool { return len(a.tabs) == 2 && a.tabs[1].active.conn != nil && a.tabs[1].active.term != nil })
+	// Authentication completes asynchronously; the current tab may already have changed.
+	a.selectTab(tail)
+	waitOperator(t, a, func() bool { return len(a.tabs) == 3 && a.tabs[1].active.conn != nil && a.tabs[1].active.term != nil })
 	copy := a.tabs[1]
-	if copy == original || copy.active.conn == connection || copy.active.term == term || copy.group != original.group || a.activeTab() != copy || accepted.Load() != 2 {
+	if a.tabs[2] != tail || copy == original || copy.active.conn == connection || copy.active.term == term || copy.group != original.group || a.activeTab() != copy || a.groups.recent != tail.id || accepted.Load() != 2 {
 		t.Fatal("double click did not create/select one independent session in source group")
 	}
 	if original.active.closed || !connection.Alive() || len(a.config.Profiles) != 1 {
@@ -90,6 +135,9 @@ func TestFileTitleDoubleClickCreatesNewFileTab(t *testing.T) {
 	})
 	original := a.tabs[0]
 	originalClient := original.active.files.client
+	a.newBlank()
+	tail := a.activeTab()
+	a.selectTab(original)
 	tt := ui.NewTester(a.fileWindowView, 1000, 700)
 	if err := tt.Click(profile.Host); err != nil {
 		t.Fatal(err)
@@ -98,12 +146,19 @@ func TestFileTitleDoubleClickCreatesNewFileTab(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitOperator(t, a, func() bool {
-		return len(a.tabs) == 2 && a.tabs[1].active.files != nil && !a.tabs[1].active.files.busy && a.tabs[1].active.files.client != nil
+		return len(a.tabs) == 3 && a.tabs[1].active.files != nil && !a.tabs[1].active.files.busy && a.tabs[1].active.files.client != nil
 	})
 	copy := a.tabs[1]
-	if a.activeTab() != copy || copy.active.files.client == originalClient || original.active.closed {
+	if a.tabs[2] != tail || a.activeTab() != copy || copy.active.files.client == originalClient || original.active.closed {
 		t.Fatal("file tab duplicate failed")
 	}
-	a.dispose(copy.active)
-	a.dispose(original.active)
+	a.localUI.ConfirmTabClose = false
+	a.requestSessionClose(copy, nil)
+	if a.activeTab() != original {
+		t.Fatal("closing a file tab copy did not select its source")
+	}
+	a.requestSessionClose(original, nil)
+	if a.activeTab() != tail {
+		t.Fatal("closing the first file tab did not select the new first tab")
+	}
 }
