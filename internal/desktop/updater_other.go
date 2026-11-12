@@ -286,16 +286,22 @@ func (a *App) installUpdate() {
 		state.status = "更新仓库已变化，请重新检查"
 		return
 	}
-	if state.busy || state.confirming || state.prepared == nil || a.passwordLocked() {
+	if state.busy || state.confirming || state.prepared == nil {
+		return
+	}
+	diagnostics.Event("update_install_requested", nil)
+	if a.passwordLocked() {
+		state.status = "请先解锁 OShell，再安装已下载的更新"
 		return
 	}
 	if a.configurationBusy() {
 		state.status = "请等待配置操作完成后再安装"
 		return
 	}
-	if a.updateDialogsOpen() {
+	if blocker := a.updateInstallBlocker(); blocker != "" {
 		state.pendingInstall = true
-		state.status = "等待其他对话框关闭后继续安装"
+		state.status = blocker
+		diagnostics.Event("update_install_deferred", map[string]any{"reason": blocker})
 		return
 	}
 	count := a.activeConnections()
@@ -308,16 +314,23 @@ func (a *App) installUpdate() {
 		return
 	}
 	state.confirming = true
+	state.status = "请在安装确认窗口中确认关闭活动连接"
 	prepared := state.prepared
+	parent := a.preferencesWindow
+	if parent == nil {
+		parent = a.win
+	}
 	go func() {
-		result, e := showUpdateConfirmation(mygo.MessageOptions{Parent: a.preferencesWindow, Type: mygo.MessageQuestion, Title: "安装更新", Message: fmt.Sprintf("关闭 %d 个活动连接并安装更新？", count), Detail: "文件传输将停止。会话配置和已保存密码会保留，安装后自动重新启动。", Buttons: []string{"稍后安装", "安装并重新启动"}, DefaultButton: 0, CancelButton: 0})
+		result, e := showUpdateConfirmation(mygo.MessageOptions{Parent: parent, Type: mygo.MessageQuestion, Title: "安装更新", Message: fmt.Sprintf("关闭 %d 个活动连接并安装更新？", count), Detail: "文件传输将停止。会话配置和已保存密码会保留，安装后自动重新启动。", Buttons: []string{"稍后安装", "安装并重新启动"}, DefaultButton: 0, CancelButton: 0})
 		a.updateMain(func() {
 			state.confirming = false
+			diagnostics.Event("update_install_confirmation", map[string]any{"confirmed": e == nil && result.Button == 1, "dialog_error": e != nil})
 			if e != nil {
 				state.status = "无法显示安装确认：" + e.Error()
 				return
 			}
-			if result.Button != 1 || a.stopped.Load() || a.hub != nil && a.hub.quitting {
+			if result.Button != 1 {
+				state.status = "已暂缓安装，下载的更新可稍后安装"
 				return
 			}
 			if state.prepared != prepared {
@@ -337,11 +350,16 @@ func (a *App) commitUpdate() {
 		state.status = "更新仓库已变化，请重新检查"
 		return
 	}
-	if a.updateDialogsOpen() {
+	if blocker := a.updateInstallBlocker(); blocker != "" {
 		state.pendingInstall = true
+		state.status = blocker
 		return
 	}
-	if state.busy || state.prepared == nil || a.passwordLocked() || a.configurationBusy() {
+	if a.passwordLocked() || a.configurationBusy() {
+		state.status = "请解锁并等待配置操作完成，再安装已下载的更新"
+		return
+	}
+	if state.busy || state.prepared == nil {
 		return
 	}
 	state.busy = true
@@ -349,10 +367,12 @@ func (a *App) commitUpdate() {
 	state.status = "正在准备后台更新进程…"
 	a.setConfigurationBusy(true)
 	prepared := state.prepared
+	diagnostics.Event("update_helper_starting", nil)
 	go func() {
 		err := startPortableUpdate(prepared)
 		a.updateMain(func() {
 			if err != nil {
+				diagnostics.Event("update_helper_start_failed", map[string]any{"error": err.Error()})
 				state.busy = false
 				state.installing = false
 				a.setConfigurationBusy(false)
@@ -360,6 +380,7 @@ func (a *App) commitUpdate() {
 				return
 			}
 			state.status = "正在关闭会话并安装…"
+			diagnostics.Event("update_helper_ready", nil)
 			apps := []*App{a}
 			if a.hub != nil {
 				a.hub.quitting = true
@@ -499,7 +520,7 @@ func (h *applicationHub) stopUpdates() {
 	}
 }
 
-func (a *App) updateDialogsOpen() bool {
+func (a *App) updateInstallBlocker() string {
 	apps := []*App{a}
 	if a.hub != nil {
 		apps = append([]*App(nil), a.hub.windows...)
@@ -507,13 +528,17 @@ func (a *App) updateDialogsOpen() bool {
 			apps = append(apps, a.hub.fileWindow)
 		}
 	}
-	for _, window := range apps {
+	for i, window := range apps {
 		f := &window.features
-		if window.modalActive() || f.vaultBusy || window.hasOpenTerminalSearch() || f.settingsCapture != "" {
-			return true
+		if window.modalActive() || f.vaultBusy || f.settingsCapture != "" {
+			where := fmt.Sprintf("第 %d 个会话窗口", i+1)
+			if a.hub != nil && window == a.hub.fileWindow {
+				where = "文件管理窗口"
+			}
+			return "请先完成" + where + "中的对话框或操作，随后将继续安装"
 		}
 	}
-	return false
+	return ""
 }
 
 func (a *App) updatesBlockRepositoryReload() bool {
@@ -557,11 +582,15 @@ func (a *App) confirmAvailableUpdate() {
 
 func (a *App) resumeDeferredUpdate() {
 	state := a.updateState()
-	if !state.pendingInstall || state.prepared == nil || state.busy || state.confirming || a.stopped.Load() || a.hub != nil && a.hub.quitting || a.passwordLocked() || a.configurationBusy() || a.updateDialogsOpen() {
+	if !state.pendingInstall || state.prepared == nil || state.busy || state.confirming || a.stopped.Load() || a.hub != nil && a.hub.quitting || a.passwordLocked() || a.configurationBusy() || a.updateInstallBlocker() != "" {
 		return
 	}
 	state.pendingInstall = false
-	a.installUpdate()
+	if a.hub != nil && a.hub.settingsOwner != nil {
+		a.hub.settingsOwner.installUpdate()
+	} else {
+		a.installUpdate()
+	}
 }
 
 var startPortableUpdate = func(update *core.PortableUpdate) error { return update.Start() }

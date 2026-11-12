@@ -286,7 +286,7 @@ func itemPath(item uintptr) (string, error) {
 }
 
 func (d dialogs) ShowMessageBox(parent platform.Window, o *platform.MessageBoxOptions, cb func(platform.MessageBoxResult, error)) {
-	cb(d.b.messageBox(ownerOf(parent), o), nil)
+	cb(d.b.messageBox(ownerOf(parent), o))
 }
 
 var (
@@ -309,7 +309,7 @@ const (
 
 // messageBox shows a task dialog, or a plain message box where task
 // dialogs are unavailable, and blocks until it is answered.
-func (b *Backend) messageBox(owner uintptr, o *platform.MessageBoxOptions) platform.MessageBoxResult {
+func (b *Backend) messageBox(owner uintptr, o *platform.MessageBoxOptions) (platform.MessageBoxResult, error) {
 	taskDialogOnce.Do(func() { taskDialogProc = commonControl("TaskDialogIndirect") })
 	buttons := o.Buttons
 	if len(buttons) == 0 {
@@ -381,14 +381,20 @@ func (b *Backend) messageBox(owner uintptr, o *platform.MessageBoxOptions) platf
 	runtime.KeepAlive(strs)
 	runtime.KeepAlive(btns)
 	runtime.KeepAlive(verification)
+	if failed(r) {
+		if len(buttons) == 2 && o.CheckboxLabel == "" {
+			return legacyMessageBox(owner, o, buttons)
+		}
+		return platform.MessageBoxResult{}, fmt.Errorf("TaskDialogIndirect: HRESULT 0x%08x", uint32(r))
+	}
 	res := platform.MessageBoxResult{Response: o.CancelID, CheckboxChecked: checked != 0}
-	if !failed(r) && pressed >= firstButtonID && int(pressed-firstButtonID) < len(buttons) {
+	if pressed >= firstButtonID && int(pressed-firstButtonID) < len(buttons) {
 		res.Response = int(pressed - firstButtonID)
 	}
-	return res
+	return res, nil
 }
 
-func legacyMessageBox(owner uintptr, o *platform.MessageBoxOptions, buttons []string) platform.MessageBoxResult {
+func legacyMessageBox(owner uintptr, o *platform.MessageBoxOptions, buttons []string) (platform.MessageBoxResult, error) {
 	const (
 		mbOK, mbOKCancel, mbYesNoCancel = 0x0, 0x1, 0x3
 		mbIconError, mbIconWarning      = 0x10, 0x30
@@ -399,6 +405,9 @@ func legacyMessageBox(owner uintptr, o *platform.MessageBoxOptions, buttons []st
 	switch len(buttons) {
 	case 2:
 		style = mbOKCancel
+		if o.DefaultID == o.CancelID {
+			style |= 0x100 // MB_DEFBUTTON2: the native Cancel button.
+		}
 	case 3:
 		style = mbYesNoCancel
 	}
@@ -414,17 +423,23 @@ func legacyMessageBox(owner uintptr, o *platform.MessageBoxOptions, buttons []st
 	if o.Detail != "" {
 		text += "\n\n" + o.Detail
 	}
-	r, _, _ := procMessageBoxW.Call(owner, uintptr(unsafe.Pointer(u16(text))), uintptr(unsafe.Pointer(u16(o.Title))), style)
+	r, _, err := procMessageBoxW.Call(owner, uintptr(unsafe.Pointer(u16(text))), uintptr(unsafe.Pointer(u16(o.Title))), style)
+	if r == 0 {
+		return platform.MessageBoxResult{}, fmt.Errorf("MessageBoxW: %w", err)
+	}
 	res := platform.MessageBoxResult{Response: o.CancelID}
 	switch int(r) {
 	case idOK, idYes:
 		res.Response = 0
+		if len(buttons) == 2 && o.CancelID == 0 {
+			res.Response = 1
+		}
 	case idNo:
 		res.Response = 1
 	case idCancel:
-		if len(buttons) >= 2 {
+		if len(buttons) > 2 {
 			res.Response = len(buttons) - 1
 		}
 	}
-	return res
+	return res, nil
 }

@@ -3,12 +3,46 @@
 package windows
 
 import (
+	"os"
 	"runtime"
 	"strings"
 	"syscall"
 	"testing"
 	"unsafe"
+
+	"github.com/egoist/mygo/internal/platform"
 )
+
+func TestLegacyUpdateConfirmationButtons(t *testing.T) {
+	if os.Getenv("OSHELL_TEST_NATIVE_DIALOGS") == "" {
+		t.Skip("requires Windows desktop")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	thread, _, _ := procGetCurrentThreadId.Call()
+	var command uintptr
+	callback := syscall.NewCallback(func(code, window, data uintptr) uintptr {
+		if code == 5 { // HCBT_ACTIVATE on this test's thread.
+			postMessage(window, wmCommand, command, 0)
+		}
+		result, _, _ := user32.NewProc("CallNextHookEx").Call(0, code, window, data)
+		return result
+	})
+	hook, _, err := user32.NewProc("SetWindowsHookExW").Call(5, callback, 0, thread)
+	if hook == 0 {
+		t.Fatal(err)
+	}
+	defer user32.NewProc("UnhookWindowsHookEx").Call(hook)
+	buttons := []string{"稍后安装", "安装并重新启动"}
+	opts := &platform.MessageBoxOptions{Title: "OShell 更新确认回归", Buttons: buttons, CancelID: 0}
+	for _, tc := range []struct{ native, want int }{{1, 1}, {2, 0}} {
+		command = uintptr(tc.native)
+		result, err := legacyMessageBox(0, opts, buttons)
+		if err != nil || result.Response != tc.want {
+			t.Fatalf("native button %d: got %d, %v", tc.native, result.Response, err)
+		}
+	}
+}
 
 func TestFileDialogShowErrors(t *testing.T) {
 	if err := fileDialogShowError(hrDialogCancelled); err != nil {

@@ -303,10 +303,6 @@ func TestUpdateInstallationWaitsForAllWindowModals(t *testing.T) {
 		{"standalone SCP", func(a *App) { a.features.scpDraft = &standaloneSCPDraft{open: true} }},
 		{"sync diagnostics", func(a *App) { a.features.sharedSync.logsOpen = true }},
 		{"vault operation", func(a *App) { a.features.vaultBusy = true }},
-		{"terminal search", func(a *App) {
-			p := &pane{search: terminalSearchState{open: true}}
-			a.tabs = []*tab{{root: &node{pane: p}, active: p}}
-		}},
 		{"shortcut capture", func(a *App) { a.features.settingsCapture = "copy" }},
 	}
 	for _, item := range cases {
@@ -318,19 +314,16 @@ func TestUpdateInstallationWaitsForAllWindowModals(t *testing.T) {
 			hub := &applicationHub{windows: []*App{owner, other}, fileWindow: files}
 			owner.hub = hub
 			owner.settingsOpen = true // The updater's own preferences window is allowed.
-			if owner.updateDialogsOpen() {
+			if owner.updateInstallBlocker() != "" {
 				t.Fatal("preferences alone blocked updater")
 			}
 			for _, target := range []*App{owner, other, files} {
 				item.open(target)
-				if !owner.updateDialogsOpen() {
+				if owner.updateInstallBlocker() == "" {
 					t.Fatal("pending modal did not block install")
 				}
 				target.features = featureState{}
-				for _, p := range target.allPanes() {
-					p.search.open = false
-				}
-				if owner.updateDialogsOpen() {
+				if owner.updateInstallBlocker() != "" {
 					t.Fatal("dismissed modal kept install blocked")
 				}
 			}
@@ -339,20 +332,28 @@ func TestUpdateInstallationWaitsForAllWindowModals(t *testing.T) {
 }
 
 func TestInstallConfirmationSingleFlightAndRetainsPreparedUpdate(t *testing.T) {
-	for _, mode := range []string{"cancel", "error", "changed", "quitting"} {
+	for _, mode := range []string{"cancel", "error", "changed", "quitting", "accept"} {
 		t.Run(mode, func(t *testing.T) {
 			cfg := core.DefaultConfig()
 			cfg.Settings.UpdateRepository = "owner/repo"
 			a := newApp(&core.Store{Dir: t.TempDir()}, cfg)
-			a.hub = &applicationHub{windows: []*App{a}, config: cfg}
-			operatorPane(t, a, "active update fixture")
+			other := newApp(a.store, cfg)
+			a.hub = &applicationHub{windows: []*App{a, other}, config: cfg}
+			p, _ := operatorPane(t, other, "active update fixture")
+			p.search.open = true
 			prepared := &core.PortableUpdate{}
 			state := a.updateState()
 			state.prepared = prepared
 			state.source = "owner/repo"
 			entered := make(chan struct{}, 2)
 			release := make(chan struct{})
-			old := showUpdateConfirmation
+			old, oldStart := showUpdateConfirmation, startPortableUpdate
+			startPortableUpdate = func(update *core.PortableUpdate) error {
+				if mode != "accept" || update != prepared {
+					t.Error("unexpected installer invocation")
+				}
+				return fmt.Errorf("fixture installer started")
+			}
 			showUpdateConfirmation = func(mygo.MessageOptions) (mygo.MessageResult, error) {
 				entered <- struct{}{}
 				<-release
@@ -360,13 +361,18 @@ func TestInstallConfirmationSingleFlightAndRetainsPreparedUpdate(t *testing.T) {
 					return mygo.MessageResult{}, fmt.Errorf("fixture error")
 				}
 				button := 0
-				if mode == "changed" || mode == "quitting" {
+				if mode == "changed" || mode == "quitting" || mode == "accept" {
 					button = 1
 				}
 				return mygo.MessageResult{Button: button}, nil
 			}
-			t.Cleanup(func() { showUpdateConfirmation = old })
-			a.installUpdate()
+			t.Cleanup(func() { showUpdateConfirmation, startPortableUpdate = old, oldStart })
+			a.prepareSettings()
+			a.features.settingsTab = 4
+			view := ui.NewTester(a.settingsView, 1080, 760)
+			if err := view.Click("安装并重新启动…"); err != nil {
+				t.Fatal(err)
+			}
 			a.installUpdate()
 			select {
 			case <-entered:
@@ -389,7 +395,10 @@ func TestInstallConfirmationSingleFlightAndRetainsPreparedUpdate(t *testing.T) {
 			}
 			kept := state.prepared
 			close(release)
-			waitOperator(t, a, func() bool { return !state.confirming })
+			waitOperator(t, a, func() bool { return !state.confirming && !state.busy })
+			if mode == "accept" && state.status != "fixture installer started" || mode == "cancel" && !strings.Contains(state.status, "已暂缓") {
+				t.Fatal(state.status)
+			}
 			if state.prepared != kept || state.installing || state.busy || a.configurationBusy() {
 				t.Fatal("confirmation lost staged update or started install")
 			}
