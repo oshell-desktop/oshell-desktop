@@ -62,11 +62,17 @@ func recordEnded(s string) bool {
 	return s == "成功" || s == "失败" || s == "取消" || s == "未执行"
 }
 func (l *transferLog) pruneLocked(clear bool) {
+	if !clear && len(l.records) <= 500 {
+		return
+	}
 	count := 0
 	for _, r := range l.records {
 		if recordEnded(r.Status) {
 			count++
 		}
+	}
+	if !clear && count <= 500 {
+		return
 	}
 	kept := l.records[:0]
 	for _, r := range l.records {
@@ -76,12 +82,18 @@ func (l *transferLog) pruneLocked(clear bool) {
 		}
 		kept = append(kept, r)
 	}
+	for i := len(kept); i < len(l.records); i++ {
+		l.records[i] = nil
+	}
 	l.records = kept
 }
 func (l *transferLog) update(r *transferRecord, fn func()) {
 	l.mu.Lock()
+	wasFinished := recordEnded(r.Status)
 	fn()
-	l.pruneLocked(false)
+	if !wasFinished && recordEnded(r.Status) {
+		l.pruneLocked(false)
+	}
 	l.mu.Unlock()
 }
 

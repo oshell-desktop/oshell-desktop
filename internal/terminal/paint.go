@@ -7,6 +7,7 @@ import (
 	"slices"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/egoist/mygo/ui"
 	"oshell-desktop/internal/terminal/internal/vt"
@@ -129,13 +130,18 @@ func (v *view) paint(p *ui.Painter, r ui.Rect) {
 		t.held = false
 	}
 	held := t.held
+	v.scrollbar = t.term.Scrollbar()
+	cell := [2]int{v.cellW, v.cellH}
+	graphicsChanged := !held && (v.graphicRevision != t.revision || v.graphicScroll != v.scrollbar || v.graphicCell != cell)
 	if !held {
 		t.rs.BeginUpdate(t.term)
-		v.graphics = t.term.RenderGraphics(v.cellW, v.cellH)
+		if graphicsChanged {
+			v.graphics = t.term.RenderGraphics(v.cellW, v.cellH)
+			v.graphicRevision, v.graphicScroll, v.graphicCell = t.revision, v.scrollbar, cell
+		}
 		v.refreshBidi()
 		v.bidiFrame = v.bidi
 	}
-	v.scrollbar = t.term.Scrollbar()
 	linksChanged := v.refreshLinkHover(held)
 	if t.term.AltScreen() || v.scrollbar.Total <= v.scrollbar.Len {
 		v.overlay.hide()
@@ -157,8 +163,11 @@ func (v *view) paint(p *ui.Painter, r ui.Rect) {
 		v.lines = append(v.lines[:0], make([]rowCache, rows)...)
 		full = true
 	}
-	rs.Rows()
-	for y := 0; y < rows && rs.NextRow(); y++ {
+	dirty := rs.Dirty() != vt.Clean
+	if full || dirty {
+		rs.Rows()
+	}
+	for y := 0; (full || dirty) && y < rows && rs.NextRow(); y++ {
 		line := &v.lines[y]
 		if full || !line.ok || rs.RowDirty() {
 			var presentation vt.BidiPresentation
@@ -170,7 +179,9 @@ func (v *view) paint(p *ui.Painter, r ui.Rect) {
 	}
 	if !held {
 		v.bidiDirty = false
-		v.prepareGraphics()
+		if graphicsChanged || full || dirty {
+			v.prepareGraphics()
+		}
 	}
 	rs.Clean()
 	v.draw(p, r)
@@ -773,9 +784,10 @@ func (v *view) drawScrollbar(p *ui.Painter, r ui.Rect) {
 
 // lru caches shaped text.
 type lru struct {
-	cap  int
-	m    map[shapeKey]*lruEntry
-	head lruEntry // a ring of the entries, most recent first
+	cap   int
+	bytes int
+	m     map[shapeKey]*lruEntry
+	head  lruEntry // a ring of the entries, most recent first
 }
 
 type shapeKey struct {
@@ -787,6 +799,7 @@ type shapeKey struct {
 type lruEntry struct {
 	k          shapeKey
 	g          []ui.Glyph
+	cost       int
 	prev, next *lruEntry
 }
 
@@ -796,6 +809,7 @@ func (c *lru) init(n int) {
 }
 
 func (c *lru) clear() {
+	c.bytes = 0
 	c.m = map[shapeKey]*lruEntry{}
 	c.head.prev, c.head.next = &c.head, &c.head
 }
@@ -811,12 +825,19 @@ func (c *lru) get(k shapeKey) ([]ui.Glyph, bool) {
 }
 
 func (c *lru) put(k shapeKey, g []ui.Glyph) {
-	if len(c.m) >= c.cap {
+	const budget = 4 << 20
+	cost := len(k.text) + cap(g)*int(unsafe.Sizeof(ui.Glyph{})) + int(unsafe.Sizeof(lruEntry{})+unsafe.Sizeof(shapeKey{}))
+	if c.cap <= 0 || cost > budget {
+		return
+	}
+	for len(c.m) >= c.cap || c.bytes+cost > budget {
 		last := c.head.prev
 		c.unlink(last)
 		delete(c.m, last.k)
+		c.bytes -= last.cost
 	}
-	e := &lruEntry{k: k, g: g}
+	e := &lruEntry{k: k, g: g, cost: cost}
+	c.bytes += cost
 	c.m[k] = e
 	c.front(e)
 }

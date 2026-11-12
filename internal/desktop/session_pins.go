@@ -2,7 +2,6 @@ package desktop
 
 import (
 	"github.com/egoist/mygo/ui"
-	"sort"
 	"strings"
 )
 
@@ -90,10 +89,6 @@ func (a *App) reconcileSessionPins() {
 		a.saveLocalPreferences(next)
 	}
 }
-func (a *App) sortPinnedRows(rows []sessionRow) {
-	sort.SliceStable(rows, func(i, j int) bool { return a.rowPinned(rows[i]) && !a.rowPinned(rows[j]) })
-}
-
 func (a *App) selectSidebar(id string, mods ui.Modifiers) {
 	s := &a.sidebar
 	if mods&ui.Shift != 0 && s.selected != "" {

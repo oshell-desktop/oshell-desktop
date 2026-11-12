@@ -3,14 +3,139 @@
 package desktop
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"io"
+	"net/http"
+	"os"
 	"oshell-desktop/internal/core"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
+
+type updateHTTPFixture func(*http.Request) (*http.Response, error)
+
+func (f updateHTTPFixture) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestToolbarChecksGitHubRelease(t *testing.T) {
+	oldVersion, previous := mygo.App.Version(), http.DefaultTransport
+	defer func() { mygo.App.SetVersion(oldVersion); http.DefaultTransport = previous }()
+	mygo.App.SetVersion("0.4.1")
+	for _, tc := range []struct{ tag, status string }{
+		{"v0.3.2", "没有更高的正式版本"}, {"v0.4.1", "没有更高的正式版本"}, {"v0.4.2", "缺少已签名的 latest.json"},
+	} {
+		t.Run(tc.tag, func(t *testing.T) {
+			http.DefaultTransport = updateHTTPFixture(func(r *http.Request) (*http.Response, error) {
+				if r.URL.String() != "https://api.github.com/repos/"+core.DefaultUpdateRepository+"/releases/latest" {
+					return nil, fmt.Errorf("unexpected request: %s", r.URL)
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"tag_name":"` + tc.tag + `","assets":[]}`))}, nil
+			})
+			a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
+			view := ui.NewTester(a.view, 1280, 800)
+			if err := view.Click("更新"); err != nil {
+				t.Fatal(err)
+			}
+			waitOperator(t, a, func() bool { return !a.updateState().busy })
+			settings := ui.NewTester(a.settingsView, 800, 650)
+			if !a.settingsOpen || !settings.HasText(tc.status) || a.updateState().candidate != nil {
+				t.Fatalf("toolbar result not visible in update settings: %s", a.updateState().status)
+			}
+		})
+	}
+}
+
+func TestToolbarDownloadsAndInstallsApprovedPackage(t *testing.T) {
+	path := os.Getenv("OSHELL_P1_UPDATE_ARCHIVE")
+	if path == "" || runtime.GOOS != "windows" {
+		t.Skip("requires local Windows portable ZIP")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldVersion, oldKey, previous := mygo.App.Version(), core.UpdatePublicKey, http.DefaultTransport
+	oldDialog, oldStart := showUpdateConfirmation, startPortableUpdate
+	defer func() {
+		mygo.App.SetVersion(oldVersion)
+		core.UpdatePublicKey, http.DefaultTransport = oldKey, previous
+		showUpdateConfirmation, startPortableUpdate = oldDialog, oldStart
+	}()
+	mygo.App.SetVersion("0.4.0")
+	core.UpdatePublicKey = base64.StdEncoding.EncodeToString(pub)
+	target := "windows-amd64"
+	name := core.ReleaseAssetName(target)
+	url := "https://github.com/" + core.DefaultUpdateRepository + "/releases/download/v0.4.1/"
+	hash := sha256.Sum256(data)
+	digest := hex.EncodeToString(hash[:])
+	meta, err := core.SignUpdateManifest(core.UpdateManifest{
+		Version: "0.4.1", Build: "100", ApplicationID: "dev.oshell.desktop", Repository: core.DefaultUpdateRepository,
+		Platforms: map[string]core.UpdateArchive{target: {URL: url + name, Size: int64(len(data)), SHA256: digest, Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(key, hash[:]))}},
+	}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	release, err := json.Marshal(map[string]any{"tag_name": "v0.4.1", "assets": []map[string]any{
+		{"id": 1, "state": "uploaded", "name": name, "size": len(data), "browser_download_url": url + name, "digest": "sha256:" + digest},
+		{"id": 2, "state": "uploaded", "name": "latest.json", "size": len(meta), "browser_download_url": url + "latest.json"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	http.DefaultTransport = updateHTTPFixture(func(r *http.Request) (*http.Response, error) {
+		var body []byte
+		switch r.URL.String() {
+		case "https://api.github.com/repos/" + core.DefaultUpdateRepository + "/releases/latest":
+			body = release
+		case "https://api.github.com/repos/" + core.DefaultUpdateRepository + "/releases/assets/2":
+			body = meta
+		case url + name:
+			body = data
+		default:
+			return nil, fmt.Errorf("unexpected URL %s", r.URL)
+		}
+		return &http.Response{StatusCode: 200, ContentLength: int64(len(body)), Body: io.NopCloser(bytes.NewReader(body))}, nil
+	})
+	showUpdateConfirmation = func(o mygo.MessageOptions) (mygo.MessageResult, error) {
+		if len(o.Buttons) != 2 || o.Buttons[1] != "下载并安装" {
+			t.Errorf("unexpected dialog: %s", o.Title)
+		}
+		return mygo.MessageResult{Button: 1}, nil
+	}
+	startPortableUpdate = func(*core.PortableUpdate) error { return fmt.Errorf("test installer received verified package") }
+	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
+	view := ui.NewTester(a.view, 1280, 800)
+	if err := view.Click("更新"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for state := a.updateState(); state.status != "test installer received verified package" && time.Now().Before(deadline); {
+		a.drain()
+		time.Sleep(time.Millisecond)
+	}
+	state := a.updateState()
+	if state.prepared == nil {
+		t.Fatalf("install did not receive package: %s", state.status)
+	}
+	defer state.prepared.Discard()
+	if state.status != "test installer received verified package" {
+		t.Fatal(state.status)
+	}
+}
 
 func TestRetainedU01SourceBindingAndBusyGuard(t *testing.T) {
 	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())

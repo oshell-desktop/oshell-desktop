@@ -133,7 +133,7 @@ func (t *tray) PopUpMenu(m *platform.Menu) {
 	}
 	id := t.b.menus.newOwner()
 	defer t.b.menus.drop(id)
-	menu := t.b.buildMenu(m, false, id, nil)
+	menu := t.b.buildMenu(m, false, id, dpiOf(t.b.appHwnd), nil)
 	defer procDestroyMenu.Call(menu)
 	var pt point
 	procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))

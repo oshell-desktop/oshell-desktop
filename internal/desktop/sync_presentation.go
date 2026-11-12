@@ -82,6 +82,10 @@ func (a *App) syncPresentation(c *ui.Context) syncPresentation {
 			switch f.summary.Failure.Kind {
 			case "authentication":
 				p.guidance = "请检查同步配置中的 WebDAV 账号及密码，应用后重试。"
+			case "occupied", "uncertainWrite":
+				p.guidance = "请等待其他设备完成同步。若标记持续存在，请先在所有设备停止同步，核对远端文件后再处理 .oshell-lock 标记。"
+			case "unsafeVersion":
+				p.guidance = "当前文件可读取。上传修改需要 WebDAV 提供可用于条件写入的版本标记。"
 			case "tls":
 				p.guidance = "请在同步配置中测试连接，核对服务器证书后重试。"
 			case "directoryUnavailable", "cloudConflict":
@@ -125,15 +129,15 @@ func (a *App) syncToolbar(c *ui.Context) {
 	f := &a.syncStatusOwner().features.sharedSync
 	status := map[string]string{"−": "未启用", "◇": "待解锁", "↻": "同步中", "!": "需处理", "Ⅱ": "已取消", "◷": "待同步", "✓": "已同步"}[p.mark]
 	width, _ := c.Size()
-	compact := width < 1120
+	compact := width < 1180
 	color := c.Theme().Accent
 	if p.mark == "!" || p.mark == "✓" {
 		color = p.color
 	}
 	button := ui.ButtonBase(c).Label("多设备同步").Role(ui.RoleButton).
 		Tooltip(p.title+"\n最近成功："+syncDate(f.summary.LastSuccess)+"\n点击查看同步进度").
-		Height(28).Padding(4, 8).Gap(5).Radius(6).Shrink(0).Cursor(ui.CursorPointer).
-		Background(color.Alpha(.10)).Border(1, color.Alpha(.24)).
+		Height(28).MinWidth(28).Padding(2, 6).Gap(4).Radius(4).Shrink(0).Cursor(ui.CursorPointer).
+		Background(ui.Transparent).BorderWidth(0).
 		OnClick(a.showSyncStatus)
 	if button.Pressed() {
 		button.Background(color.Alpha(.22))
@@ -149,11 +153,9 @@ func (a *App) syncToolbar(c *ui.Context) {
 		} else {
 			ui.Icon(c, syncIcon).FontSize(17).TextColor(color)
 		}
-		label := "同步 · " + status
-		if compact {
-			label = "同步"
+		if !compact {
+			ui.Text(c, "同步 · "+status).FontSize(12).TextColor(color).SingleLine()
 		}
-		ui.Text(c, label).FontSize(12).Bold().TextColor(color).SingleLine()
 		if compact {
 			ui.Box(c).Size(5, 5).Radius(3).Background(p.color)
 		}

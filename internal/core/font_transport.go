@@ -114,21 +114,8 @@ func (w *WebDAVTransport) FetchFont(ctx context.Context, name string) (*SharedOb
 	if err != nil {
 		return nil, err
 	}
-	status, headers, data, err := w.requestLimit(ctx, "GET", webDAVChild(directory, "fonts/"+name), nil, nil, limit)
-	if err != nil {
-		return nil, err
-	}
-	if status == 404 {
-		return nil, nil
-	}
-	if status != 200 {
-		return nil, &SyncFailure{Kind: "status", Status: status}
-	}
-	etag := headers.Get("ETag")
-	if !ValidETag(etag) {
-		return nil, safeSyncFailure("etag")
-	}
-	return &SharedObject{Data: data, ETag: etag}, nil
+	obj, _, err := w.readObject(ctx, webDAVChild(directory, "fonts/"+name), limit, "")
+	return obj, err
 }
 func (w *WebDAVTransport) PutFont(ctx context.Context, name string, data []byte, etag string) error {
 	limit, err := fontAttachmentLimit(name)
@@ -138,17 +125,9 @@ func (w *WebDAVTransport) PutFont(ctx context.Context, name string, data []byte,
 	if len(data) > limit {
 		return safeSyncFailure("size")
 	}
-	headers := map[string]string{"Content-Type": "application/octet-stream"}
+	contentType := "application/octet-stream"
 	if name == "library.json" {
-		headers["Content-Type"] = "application/json"
-	}
-	if etag == "" {
-		headers["If-None-Match"] = "*"
-	} else {
-		if !ValidETag(etag) {
-			return safeSyncFailure("etag")
-		}
-		headers["If-Match"] = etag
+		contentType = "application/json"
 	}
 	directory, err := w.SyncDirectory(ctx)
 	if err != nil {
@@ -173,15 +152,5 @@ func (w *WebDAVTransport) PutFont(ctx context.Context, name string, data []byte,
 			return safeSyncFailure("webdav-directory")
 		}
 	}
-	status, _, _, err := w.requestLimit(ctx, "PUT", webDAVChild(folder, name), data, headers, 65536)
-	if err != nil {
-		return err
-	}
-	if status == 412 {
-		return safeSyncFailure("conflict")
-	}
-	if status != 200 && status != 201 && status != 204 {
-		return &SyncFailure{Kind: "status", Status: status}
-	}
-	return nil
+	return w.writeObject(ctx, webDAVChild(folder, name), data, etag, contentType, limit)
 }

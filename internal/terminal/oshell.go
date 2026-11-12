@@ -241,6 +241,22 @@ func (t *Terminal) SetVisible(visible bool) {
 		t.visibilityEpoch.Add(1)
 		// A hidden view will not build another frame to report losing focus.
 		t.mu.Lock()
+		t.resumeSelectionLocked()
+		t.rmu.Lock()
+		// Row shapes and decoded display bitmaps can be rebuilt on return.
+		// During synchronized output the previous complete frame is still needed.
+		if v := t.v; v != nil && !t.held {
+			v.shaped.clear()
+			v.lines = nil
+			v.bidiView = bidiView{}
+			v.graphicBitmaps = nil
+			v.graphics = nil
+			v.graphicCell = [2]int{}
+			if t.term != nil {
+				t.term.ReleaseDisplayCaches()
+			}
+		}
+		t.rmu.Unlock()
 		if t.term != nil {
 			t.term.SetFocus(false)
 		}
@@ -248,6 +264,13 @@ func (t *Terminal) SetVisible(visible bool) {
 	}
 	if visible && was {
 		t.redraw()
+	}
+}
+
+func (t *Terminal) resumeSelectionLocked() {
+	if t.selectionHold != nil {
+		close(t.selectionHold)
+		t.selectionHold = nil
 	}
 }
 

@@ -112,6 +112,28 @@ func graphicColor(t *testing.T, term *Terminal, view *ui.Tester, col, row int, w
 	}
 }
 
+func TestShapeCacheBoundsRetainedArrays(t *testing.T) {
+	var cache lru
+	cache.init(4096)
+	a, b := shapeKey{text: "alpha"}, shapeKey{text: "beta"}
+	cache.put(a, make([]ui.Glyph, 80000))
+	cache.put(b, make([]ui.Glyph, 80000))
+	if _, ok := cache.get(a); ok {
+		t.Fatal("overspent glyph storage budget")
+	}
+	if _, ok := cache.get(b); !ok {
+		t.Fatal("recent shape was lost")
+	}
+	large := shapeKey{text: "oversized"}
+	cache.put(large, make([]ui.Glyph, 200000))
+	if _, ok := cache.get(large); ok {
+		t.Fatal("oversized line retained")
+	}
+	if _, ok := cache.get(b); !ok {
+		t.Fatal("oversized line displaced normal shapes")
+	}
+}
+
 func TestTerminalGraphicsRenderAndSynchronizedUpdate(t *testing.T) {
 	loadLib(t)
 	term, err := New(Options{Conn: newPipe()})
@@ -128,6 +150,13 @@ func TestTerminalGraphicsRenderAndSynchronizedUpdate(t *testing.T) {
 	if len(term.v.graphicBitmaps) != 1 {
 		t.Fatal("missing/shared bitmap cache")
 	}
+	term.SetVisible(false)
+	if len(term.v.graphicBitmaps) != 0 || len(term.v.lines) != 0 || len(term.v.shaped.m) != 0 {
+		t.Fatal("hidden terminal retained display caches")
+	}
+	term.SetVisible(true)
+	view.Frame()
+	graphicColor(t, term, view, 0, 0, imagecolor.RGBA{255, 0, 0, 255})
 	save(t, view, "terminal-kitty-graphics")
 	term.Feed([]byte("\x1b[?2026h"))
 	feedGraphic(term, "a=t,f=24,s=2,v=1,i=11", []byte{0, 0, 255, 0, 0, 255})

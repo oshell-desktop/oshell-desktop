@@ -135,6 +135,13 @@ func (b *Backend) buildItem(it *platform.MenuItem, owner int) id {
 	}
 	send(item, "setTarget:", uintptr(target))
 	send(item, "setTag:", uintptr(it.ID))
+	if icon := it.Icon; icon != nil {
+		img := autorelease(send(send(class("NSImage"), "alloc"), "initWithData:", uintptr(nsData(icon.PNG))))
+		if img != 0 {
+			msgSetSize(img, sel("setSize:"), NSSize{float64(icon.Width), float64(icon.Height)})
+			send(item, "setImage:", uintptr(img))
+		}
+	}
 	applyItemState(item, it)
 	if it.Submenu != nil {
 		sub := b.buildMenu(it.Submenu, it.Label, owner)

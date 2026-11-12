@@ -35,7 +35,7 @@ func View(c *ui.Context, t *Terminal) ui.Element {
 	e.TextCaret(v.caret()).FunctionalInput(true)
 	e.Draw(v.paint)
 	t.progressView(c, e)
-	e.ContextMenu(v.menu)
+	e.ContextMenu(func(m *ui.Menu) { v.menu(m, e) })
 	return e
 }
 
@@ -68,6 +68,7 @@ func (v *view) handleInput(ev ui.InputEvent) bool {
 	}
 	if ev.Kind == ui.InputPointerDown && ev.Button == 1 && ev.Mods&ui.Shift == 0 && t.opts.RightClickPaste {
 		v.wordClicks.seed = nil
+		ev.FocusPointerTarget()
 		v.paste()
 		return true
 	}
@@ -75,6 +76,11 @@ func (v *view) handleInput(ev ui.InputEvent) bool {
 	handled := v.input(ev)
 	if handled && ev.Kind == ui.InputPointerUp && ev.Button == 0 && wasSelecting && t.opts.CopyOnSelect {
 		v.copy()
+	}
+	if ev.Kind == ui.InputPointerUp && ev.Button == 0 {
+		t.mu.Lock()
+		t.resumeSelectionLocked()
+		t.mu.Unlock()
 	}
 	if handled && open && !paused && t.Available() && t.opts.OnUserInput != nil && (ev.Kind == ui.InputKeyDown || ev.Kind == ui.InputKeyUp || ev.Kind == ui.InputText) {
 		t.opts.OnUserInput(ev)
@@ -125,14 +131,17 @@ type view struct {
 	ox, oy                 int
 	cols, rows             int
 
-	colors         vt.Colors
-	cursor         vt.Cursor
-	scrollbar      vt.Scrollbar
-	overlay        overlayScrollbar
-	lines          []rowCache
-	shaped         lru
-	graphics       []vt.Graphic
-	graphicBitmaps map[graphicBitmapKey]*ui.Bitmap
+	colors          vt.Colors
+	cursor          vt.Cursor
+	scrollbar       vt.Scrollbar
+	overlay         overlayScrollbar
+	lines           []rowCache
+	shaped          lru
+	graphics        []vt.Graphic
+	graphicRevision uint64
+	graphicScroll   vt.Scrollbar
+	graphicCell     [2]int
+	graphicBitmaps  map[graphicBitmapKey]*ui.Bitmap
 
 	keys                                        *vt.KeyEncoder
 	mouse                                       *vt.MouseEncoder
@@ -289,7 +298,7 @@ func (v *view) caret() ui.Rect {
 }
 
 // menu is the terminal's context menu.
-func (v *view) menu(m *ui.Menu) {
+func (v *view) menu(m *ui.Menu, e ui.Element) {
 	t := v.t
 	cmd := ui.Cmd
 	if runtime.GOOS != "darwin" {
@@ -313,6 +322,7 @@ func (v *view) menu(m *ui.Menu) {
 		pasteItem.Shortcut(cmd, ui.KeyV)
 	}
 	if pasteItem.Chosen() {
+		e.Focus()
 		v.paste()
 	}
 	if m.Item("Select All").Chosen() {
@@ -375,6 +385,9 @@ func (v *view) input(ev ui.InputEvent) bool {
 }
 
 func (v *view) cancelInput() {
+	v.t.mu.Lock()
+	v.t.resumeSelectionLocked()
+	v.t.mu.Unlock()
 	v.fontWheel = fontWheelState{}
 	v.preedit, v.preeditCaret, v.pending = "", 0, nil
 	v.preeditShape = preeditLayout{}
@@ -606,6 +619,9 @@ func (v *view) encodeKey(k vt.KeyEvent, press bool) bool {
 		}
 	}
 	v.keys.Sync(t.term, t.opts.OptionAsAlt)
+	if (k.Key == vt.KeyEnter || k.Key == vt.KeyNumpadEnter) && (k.Mods == vt.ModShift || k.Mods == vt.ModCtrl) && shellNavigationMode(t.term) {
+		k = vt.KeyEvent{Action: k.Action, Key: vt.KeyEnter, Unshifted: '\r'}
+	}
 	// Readline binds Meta-B/F by default, while modified arrow sequences may be unbound.
 	if press && k.Mods == vt.ModAlt && (k.Key == vt.KeyArrowLeft || k.Key == vt.KeyArrowRight) &&
 		(runtime.GOOS != "darwin" || t.opts.OptionAsAlt) && shellNavigationMode(t.term) {
@@ -707,6 +723,7 @@ func (v *view) pointerEvent(ev ui.InputEvent) bool {
 		ev.Kind = ui.InputPointerCancel
 	}
 	if ev.Kind == ui.InputPointerCancel {
+		t.resumeSelectionLocked()
 		v.cancelSemanticClick()
 		v.semanticPress = semanticPress{}
 		// A valid grid is needed only to encode the remote release. The
@@ -800,6 +817,9 @@ func (v *view) pointerEvent(ev ui.InputEvent) bool {
 			return false
 		}
 		v.selecting = true
+		if t.selectionHold == nil && !t.opts.Replay && (t.transfers == nil || t.transfers.cancellable.Load() == nil) {
+			t.selectionHold = make(chan struct{})
+		}
 		v.semanticPress.eligible = true
 		ns, changedClock := v.pointerTimestamp(ev)
 		var selection vt.Selection

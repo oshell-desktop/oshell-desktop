@@ -359,7 +359,15 @@ func (a *App) composerView(c *ui.Context) {
 			ui.Button(c, "收起").OnClick(func() { o.composerOpen = false })
 		})
 		ui.Row(c).Grow(1).MinHeight(0).Gap(10).Children(func() {
-			ui.TextArea(c, &o.composerText).Label("撰写命令内容").SelectionColor(selection).AutoFocus().Font(terminalFamily(a.config.Settings.FontFamily)).Bind(&o.composerFocus).Grow(1).FillHeight()
+			input := ui.TextArea(c, &o.composerText).Label("撰写命令内容").SelectionColor(selection).AutoFocus().Font(terminalFamily(a.config.Settings.FontFamily)).Bind(&o.composerFocus).Grow(1).FillHeight()
+			composing := input.Composing()
+			input.HandleInput(func(ev ui.InputEvent) bool {
+				if ev.Kind == ui.InputKeyDown && !composing && commandEnter(ev.Mods, ev.Key) {
+					a.sendComposer()
+					return true
+				}
+				return false
+			})
 			ui.Scroll(c).Width(240).Gap(5).Children(func() { a.targetChoices(c, o.composerTargets) })
 		})
 		ui.Row(c).Gap(8).Children(func() {
@@ -369,17 +377,19 @@ func (a *App) composerView(c *ui.Context) {
 				ui.Text(c, "发送前确认内容和目标，缩进与换行会保留。").TextColor(c.Theme().TextMuted).Grow(1)
 			}
 			ui.Button(c, "保存为快速命令").Disabled(o.composerText == "").OnClick(a.saveComposerAsCommand)
-			ui.PrimaryButton(c, "发送撰写内容").OnClick(func() {
-				var targets []*pane
-				for _, p := range a.allPanes() {
-					if o.composerTargets[p.id] {
-						targets = append(targets, p)
-					}
-				}
-				a.prepareDispatch(o.composerText, o.composerReturn, targets, true)
-			})
+			ui.PrimaryButton(c, "发送撰写内容").OnClick(a.sendComposer)
 		})
 	})
+}
+func (a *App) sendComposer() {
+	o := &a.features.operators
+	var targets []*pane
+	for _, p := range a.allPanes() {
+		if o.composerTargets[p.id] {
+			targets = append(targets, p)
+		}
+	}
+	a.prepareDispatch(o.composerText, o.composerReturn, targets, true)
 }
 func (a *App) toggleQuickSend() {
 	a.changeConfig(func(c *core.Config) error { c.Settings.QuickSendVisible = !c.Settings.QuickSendVisible; return nil })

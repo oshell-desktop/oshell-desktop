@@ -523,7 +523,15 @@ type MenuItem struct {
 	Visible     bool
 	Checked     bool
 	ToolTip     string
+	Icon        *MenuIcon
 	Submenu     *Menu
+}
+
+// MenuIcon is an immutable PNG with its display size in DIPs. Multiple menu
+// entries may share one icon, including on high-density displays.
+type MenuIcon struct {
+	PNG           []byte
+	Width, Height int
 }
 
 // FileFilter restricts the files shown in file dialogs.

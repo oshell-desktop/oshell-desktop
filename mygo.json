@@ -1,7 +1,7 @@
 {
   "name": "OShell Desktop",
   "identifier": "dev.oshell.desktop",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "out": "dist",
   "windows": {
     "originalFilename": "OShell Desktop (PuTTY Xshell SecureCRT MobaXterm).exe",

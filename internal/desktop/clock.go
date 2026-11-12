@@ -66,7 +66,7 @@ func (h *applicationHub) refreshClock() {
 	members := map[*App]bool{}
 	if clockVisible(h.config.Settings) {
 		for _, a := range h.windows {
-			if a.win != nil && !a.stopped.Load() && a.win.IsVisible() && !a.win.IsMinimized() {
+			if a.windowClockVisible() && a.win != nil && !a.stopped.Load() && a.win.IsVisible() && !a.win.IsMinimized() {
 				for _, p := range a.visiblePanes() {
 					if p.term != nil && !p.closed {
 						members[a] = true
@@ -78,8 +78,12 @@ func (h *applicationHub) refreshClock() {
 	}
 	h.clock.update(members)
 }
+func (a *App) windowClockVisible() bool {
+	return clockVisible(a.config.Settings) && (!a.localUI.ClockFullscreenOnly || a.focusFullscreen.fullscreen)
+}
+
 func (a *App) clockOverlay(c *ui.Context, element ui.Element) {
-	if !clockVisible(a.config.Settings) {
+	if !a.windowClockVisible() {
 		return
 	}
 	text := a.clockText

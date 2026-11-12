@@ -171,6 +171,14 @@ func (t *Terminal) RenderGraphics(cellWidth, cellHeight int) []Graphic {
 	return t.graphics(cellWidth, cellHeight, true)
 }
 
+// ReleaseDisplayCaches drops derived pixels and layout. The emulator keeps
+// protocol images, placements, screen cells and scrollback for the next paint.
+func (t *Terminal) ReleaseDisplayCaches() {
+	t.graphicsCache = nil
+	t.bidiCache = nil
+	t.bidiCacheColumns = 0
+}
+
 func (t *Terminal) graphics(cellWidth, cellHeight int, includeVirtual bool) []Graphic {
 	var storage, iterator uintptr
 	if t.h == 0 || t.get(30, unsafe.Pointer(&storage)) != nil || storage == 0 {

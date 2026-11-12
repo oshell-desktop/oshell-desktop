@@ -29,6 +29,7 @@ func TestCompactWorkspacePresentation(t *testing.T) {
 					cfg.Profiles = append(cfg.Profiles, p)
 				}
 				a := newApp(&core.Store{Dir: t.TempDir()}, cfg)
+				a.toggleSidebar()
 				a.setSidebarExpanded(true)
 				p, _ := operatorPane(t, a, "production")
 				operatorPane(t, a, "staging")

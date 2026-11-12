@@ -25,3 +25,6 @@ export OSHELL_CI_TEST_BUNDLE=1
 python3 scripts/build.py --target windows/amd64 --single-file --archive
 python3 scripts/build.py --target linux/amd64 --archive
 python3 scripts/ci-test-bundle.py stage
+if [[ "${GITHUB_REF_TYPE:-}" == tag ]]; then
+  go build -trimpath -o validation/oshell-release ./cmd/oshell-release
+fi

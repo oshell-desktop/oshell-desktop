@@ -44,7 +44,8 @@ type githubRelease struct {
 
 func (u *ReleaseUpdate) Size() int64 { return u.asset.Size }
 
-func releaseAssetName(target string) string {
+// ReleaseAssetName is the portable archive name used by the publisher and updater.
+func ReleaseAssetName(target string) string {
 	switch target {
 	case "windows-amd64":
 		return "OShell-Desktop-windows-amd64-single-file.zip"
@@ -69,7 +70,7 @@ func decodeRelease(data []byte, source UpdateSource, target, current string) (*R
 	if comparison <= 0 {
 		return nil, nil
 	}
-	name := releaseAssetName(target)
+	name := ReleaseAssetName(target)
 	if name == "" {
 		return nil, fmt.Errorf("当前系统或架构不支持自更新")
 	}

@@ -103,7 +103,9 @@ func (a *App) livePropertiesDialog(c *ui.Context) {
 	})
 }
 func (a *App) reconnectActive() {
-	p := a.activePane()
+	a.reconnectPane(a.activePane())
+}
+func (a *App) reconnectPane(p *pane) {
 	if p == nil {
 		return
 	}

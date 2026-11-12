@@ -31,6 +31,12 @@ func TestNewDefaultsPreserveExistingOverrides(t *testing.T) {
 
 func TestWindowsTerminalEditingDefaults(t *testing.T) {
 	k := KeyboardShortcuts{}
+	for _, platform := range []string{"windows", "linux"} {
+		keys := k.Bindings("focusFullscreen", platform)
+		if len(keys) != 2 || keys[0] != (KeyboardShortcut{KeyCode: 103}) || keys[1] != (KeyboardShortcut{KeyCode: 36, Modifiers: 2}) {
+			t.Fatalf("%s focus mode bindings: %v", platform, keys)
+		}
+	}
 	for action, want := range map[string]KeyboardShortcut{
 		"selectAll":          {KeyCode: 0, Modifiers: 9},
 		"closePane":          {KeyCode: 13, Modifiers: 3},

@@ -27,7 +27,7 @@ func TestGlobalProxyLocalPolicyAndSharedIsolation(t *testing.T) {
 	cfg.Proxies = []ProxyProfile{first, last}
 	p := NewProfile()
 	p.Host = "target.example"
-	p.ProxyID = first.ID()
+	p.ProxyID = last.ID()
 	cfg.Profiles = []Profile{p}
 	before, _ := json.Marshal(cfg)
 	s.Enabled, s.ProxyID = true, last.ID()
@@ -38,7 +38,7 @@ func TestGlobalProxyLocalPolicyAndSharedIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	routed, err := s.ConnectionProfile(cfg, p)
+	routed, err := s.ConnectionProfile(cfg, p, nil)
 	if err != nil || len(routed.RuntimeProxyRoute) != 2 {
 		t.Fatal(routed, err)
 	}
@@ -54,14 +54,14 @@ func TestGlobalProxyLocalPolicyAndSharedIsolation(t *testing.T) {
 		t.Fatal("system SSH route overrode runtime route")
 	}
 	s.Enabled = false
-	restored, err := s.ConnectionProfile(cfg, routed)
-	if err != nil || len(restored.RuntimeProxyRoute) != 1 || restored.RuntimeProxyRoute[0].ID != first.ID() {
+	restored, err := s.ConnectionProfile(cfg, routed, nil)
+	if err != nil || len(restored.RuntimeProxyRoute) != 2 || restored.RuntimeProxyRoute[0].ID != first.ID() {
 		t.Fatal("did not restore session route", err)
 	}
 	for _, kind := range []string{"ftp", "local", "blank"} {
 		p.Kind, p.ProxyID = kind, ""
 		s.Enabled, s.ProxyID = true, ""
-		got, err := s.ConnectionProfile(cfg, p)
+		got, err := s.ConnectionProfile(cfg, p, nil)
 		if err != nil || !reflect.DeepEqual(got, p) {
 			t.Fatal("affected excluded kind", kind, err)
 		}
@@ -86,11 +86,11 @@ func TestGlobalProxyInvalidPolicyFailsClosed(t *testing.T) {
 	p := NewProfile()
 	p.Host = "target.example"
 	s := GlobalProxySettings{Version: 1, Enabled: true}
-	if _, err := s.ConnectionProfile(cfg, p); err == nil {
+	if _, err := s.ConnectionProfile(cfg, p, nil); err == nil {
 		t.Fatal("empty selection fell back")
 	}
 	s.ProxyID = NewID()
-	if _, err := s.ConnectionProfile(cfg, p); err == nil {
+	if _, err := s.ConnectionProfile(cfg, p, nil); err == nil {
 		t.Fatal("deleted selection fell back")
 	}
 	hop := NewProxyProfile()
@@ -98,13 +98,65 @@ func TestGlobalProxyInvalidPolicyFailsClosed(t *testing.T) {
 	hop.UpstreamID = hop.ID()
 	cfg.Proxies = []ProxyProfile{hop}
 	s.ProxyID = hop.ID()
-	if _, err := s.ConnectionProfile(cfg, p); err == nil {
+	if _, err := s.ConnectionProfile(cfg, p, nil); err == nil {
 		t.Fatal("cycle accepted")
 	}
 	cfg.Proxies[0].UpstreamID = ""
 	cfg.Proxies[0].Settings.Kind = "none"
-	if _, err := s.ConnectionProfile(cfg, p); err == nil {
+	if _, err := s.ConnectionProfile(cfg, p, nil); err == nil {
 		t.Fatal("empty hop accepted")
+	}
+}
+
+func TestGlobalProxyComposesMixedSessionRoutes(t *testing.T) {
+	c := DefaultConfig()
+	a, b := NewProxyProfile(), NewProxyProfile()
+	a.Settings.Host, b.Settings.Host = "gateway.example", "edge.example"
+	b.UpstreamID = a.ID()
+	c.Proxies = []ProxyProfile{a, b}
+	p := NewProfile()
+	policy := GlobalProxySettings{Enabled: true, ProxyID: b.ID()}
+	// A legacy hop with an explicit port requires no SSH config lookup.
+	p.JumpHost = "alice@jump.example:2202"
+	joined, err := policy.ConnectionProfile(c, p, nil)
+	if err != nil || len(joined.RuntimeProxyRoute) != 3 {
+		t.Fatal(joined.RuntimeProxyRoute, err)
+	}
+	hop := joined.RuntimeProxyRoute[2]
+	if hop.Kind != "jump" || hop.Port != 2202 || hop.Host != "jump.example" || hop.Username != "alice" {
+		t.Fatal(hop)
+	}
+	p.JumpHost = ""
+	p.Proxy = a.Settings
+	if _, err = policy.ConnectionProfile(c, p, nil); err == nil {
+		t.Fatal("reordered repeat accepted")
+	}
+	p.Proxy = b.Settings
+	p.Proxy.Port++
+	if _, err = policy.ConnectionProfile(c, p, nil); err == nil {
+		t.Fatal("conflicting ID accepted")
+	}
+	p.Proxy = b.Settings
+	p.Proxy.ID = NewID()
+	v, err := OpenVault(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined, err = policy.ConnectionProfile(c, p, v)
+	if err != nil || len(joined.RuntimeProxyRoute) != 2 {
+		t.Fatal("equivalent boundary hops", err)
+	}
+	if err = v.Put(ProxyCredentialProfile(p.Proxy), "synthetic"); err != nil {
+		t.Fatal(err)
+	}
+	joined, err = policy.ConnectionProfile(c, p, v)
+	if err != nil || len(joined.RuntimeProxyRoute) != 3 || joined.RuntimeProxyRoute[2].ID != p.Proxy.ID {
+		t.Fatal("credentials lost", err)
+	}
+	p.Proxy = ProxySettings{}
+	p.JumpHost = "u@a:22,u@b:22,u@c:22,u@d:22,u@e:22,u@f:22,u@g:22"
+	if _, err = policy.ConnectionProfile(c, p, nil); err == nil {
+		t.Fatal("accepted nine hops")
 	}
 }
 
@@ -129,7 +181,7 @@ func TestGlobalProxySSHFilesSCPAndRouteRetention(t *testing.T) {
 			t.Run(kind+map[bool]string{true: "-enabled", false: "-disabled"}[enabled], func(t *testing.T) {
 				s.Enabled = enabled
 				p.Kind = kind
-				route, err := s.ConnectionProfile(cfg, p)
+				route, err := s.ConnectionProfile(cfg, p, nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -196,7 +248,7 @@ func TestGlobalProxySSHFilesSCPAndRouteRetention(t *testing.T) {
 	cfg.Proxies[0].Settings.Port = unusedPort(t)
 	s.Enabled = true
 	p.Kind = "ssh"
-	route, err := s.ConnectionProfile(cfg, p)
+	route, err := s.ConnectionProfile(cfg, p, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

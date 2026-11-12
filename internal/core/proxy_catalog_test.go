@@ -66,6 +66,11 @@ func TestProxyCatalogCyclesDepthAndPortableReferences(t *testing.T) {
 	}
 }
 func TestMixedSSHAndSOCKSRoute(t *testing.T) {
+	t.Run("session chain", func(t *testing.T) { testMixedSSHAndSOCKSRoute(t, false) })
+	t.Run("global prefix and session proxy", func(t *testing.T) { testMixedSSHAndSOCKSRoute(t, true) })
+}
+
+func testMixedSSHAndSOCKSRoute(t *testing.T, global bool) {
 	target := startSSH(t, "target-password")
 	gateway := startSSH(t, "gateway-password")
 	listener, e := net.Listen("tcp", "127.0.0.1:0")
@@ -104,12 +109,15 @@ func TestMixedSSHAndSOCKSRoute(t *testing.T) {
 	second := NewProxyProfile()
 	second.Settings.Host = socksProfile.Host
 	second.Settings.Port = socksProfile.Port
-	second.UpstreamID = first.ID()
+	if !global {
+		second.UpstreamID = first.ID()
+	}
 	p := testProfile(target.address)
 	p.ProxyID = second.ID()
 	cfg := DefaultConfig()
 	cfg.Proxies = []ProxyProfile{first, second}
-	p, e = cfg.ConnectionProfile(p)
+	s := GlobalProxySettings{Enabled: global, ProxyID: first.ID()}
+	p, e = s.ConnectionProfile(cfg, p, nil)
 	if e != nil {
 		t.Fatal(e)
 	}

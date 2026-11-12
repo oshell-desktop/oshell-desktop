@@ -19,6 +19,7 @@ func (a *App) prepareSettings() {
 	}
 	a.localUIDraft = a.localUI.clone()
 	a.localUIOriginal = a.localUI.clone()
+	a.windowDraft.prepare(a.localUI.StartupWindow)
 	a.sidebar.draftShown = a.sidebar.shown
 	a.titleOverwrite = true
 	a.sidebar.capture = false
@@ -168,6 +169,12 @@ func (a *App) applySettings() {
 		f.settingsError = err.Error()
 		return
 	}
+	size, err := a.windowDraft.value()
+	if err != nil {
+		f.settingsError = err.Error()
+		return
+	}
+	a.localUIDraft.StartupWindow = size
 	if err := a.validateClockDraft(); err != nil {
 		f.settingsError = err.Error()
 		return
@@ -391,6 +398,7 @@ var settingsPages = []struct {
 	{"时钟", "调整终端浮动时钟的位置与显示样式。", clockIcon},
 	{"选择与侧栏", "设置文本选择、复制行为和会话侧栏。", sidebarIcon},
 	{"文件", "文件管理打开方式、命令与停靠位置。", folderIcon},
+	{"窗口", "设置启动和新建窗口时的内容区尺寸。", propertiesIcon},
 }
 
 func (a *App) settingsPage(c *ui.Context) {
@@ -428,6 +436,9 @@ func (a *App) settingsPage(c *ui.Context) {
 		ui.Checkbox(c, &s.AmbiguousCharactersAreWide, "将歧义宽度字符视为双宽（新建连接生效）")
 		ui.Divider(c)
 
+		if ui.Checkbox(c, &a.localUIDraft.SidebarVisible, "展开左侧会话栏").Tooltip("应用到当前窗口，并作为新窗口和下次启动的默认值").Changed() {
+			a.sidebar.draftShown = a.localUIDraft.SidebarVisible
+		}
 		sectionTitle(c, "输入与粘贴")
 		ui.Checkbox(c, &s.Input.RightClickPaste, "右键粘贴；Shift+右键保留终端菜单")
 		ui.Checkbox(c, &s.Input.ConfirmMultiline, "多行粘贴前预览")
@@ -462,6 +473,8 @@ func (a *App) settingsPage(c *ui.Context) {
 		a.localSelectionSettings(c)
 	case 9:
 		a.fileManagementSettings(c)
+	case 10:
+		a.windowSizeSettings(c)
 	}
 }
 

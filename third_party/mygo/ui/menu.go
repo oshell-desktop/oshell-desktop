@@ -177,6 +177,26 @@ func (m *Menu) EditItems() {
 // Item adds an item showing label.
 func (m *Menu) Item(label string) *MenuItem { return m.add(label, platform.MenuItemNormal) }
 
+// ItemWithID identifies the action independently of its displayed name when
+// the menu is rebuilt after selection. Siblings may have equal labels.
+func (m *Menu) ItemWithID(id, label string) *MenuItem {
+	it := m.Item(id)
+	if it.p != nil {
+		it.p.Label = label
+	}
+	return it
+}
+
+// MenuIcon is an image displayed before a native menu item's label.
+type MenuIcon = platform.MenuIcon
+
+func (it *MenuItem) Icon(icon *MenuIcon) *MenuItem {
+	if it.p != nil {
+		it.p.Icon = icon
+	}
+	return it
+}
+
 // Separator adds a line between groups of items.
 func (m *Menu) Separator() { m.add("", platform.MenuItemSeparator) }
 

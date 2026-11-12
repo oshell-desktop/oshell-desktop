@@ -161,10 +161,7 @@ func (a *App) agentReplayView(c *ui.Context, r *agentReplayState) {
 	if r.timer != nil {
 		r.timer.Stop()
 	}
-	if !r.ended && r.window != nil {
-		window := r.window
-		r.timer = time.AfterFunc(30*time.Millisecond, window.Invalidate)
-	}
+	r.timer = nil
 	ui.Column(c).Fill().Gap(4).Padding(6).Children(func() {
 		ui.Row(c).Gap(8).Children(func() {
 			ui.Text(c, "只读回放 · 无终端连接").Bold()
@@ -206,4 +203,7 @@ func (a *App) agentReplayView(c *ui.Context, r *agentReplayState) {
 		}
 		terminal.View(c, r.term).Fill()
 	})
+	if !r.ended && (!r.paused || r.seeking) && r.window != nil {
+		r.timer = time.AfterFunc(30*time.Millisecond, r.window.Invalidate)
+	}
 }

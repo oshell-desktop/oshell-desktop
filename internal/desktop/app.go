@@ -101,6 +101,9 @@ type App struct {
 	lastInputFocus                                  ui.Handle
 	clockPending                                    atomic.Bool
 	clockText                                       string
+	normalWindowSize                                windowSize
+	toolbarMinimal                                  bool
+	windowDraft                                     windowSizeDraft
 	clockSizeDraft                                  string
 	clockFollowsText                                bool
 	configBusy                                      bool
@@ -154,6 +157,7 @@ func newApp(s *core.Store, c core.Config) *App {
 	a := &App{store: s, config: c, trust: &core.TrustStore{Path: filepath.Join(s.Dir, "known_hosts")}, managerRow: -1, managerList: &ui.ListState{}, status: "就绪", vault: v}
 	a.agent = core.NewAgentCoordinator(s.Dir)
 	a.localUI = loadLocalPreferences(s.Dir)
+	a.features.globalProxy.saved, a.features.globalProxy.loadError = core.LoadGlobalProxy(s.Dir)
 	a.sidebar.shown = a.localUI.SidebarVisible
 	if err != nil {
 		a.status = "密码库读取失败：" + err.Error()

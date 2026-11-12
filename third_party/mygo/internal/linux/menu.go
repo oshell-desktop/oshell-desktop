@@ -179,7 +179,20 @@ func buildItem(it *platform.MenuItem, accel ptr, owner, windowID int) ptr {
 		gtkCheckMenuItemSetDrawAsRadio(item, it.Type == platform.MenuItemRadio)
 		check = true
 	default:
-		item = gtkMenuItemNewWithLabel(cs(it.Label))
+		if icon := it.Icon; icon != nil {
+			item = gtkImageMenuItemNewWithLabel(cs(it.Label))
+			if pix, err := pixbufFromPNG(icon.PNG); err == nil {
+				scaled := gdkPixbufScaleSimple(pix, int32(icon.Width), int32(icon.Height), 2) // GDK_INTERP_BILINEAR
+				if scaled != 0 {
+					gtkImageMenuItemSetImage(item, gtkImageNewFromPixbuf(scaled))
+					gtkImageMenuItemSetAlwaysShowImage(item, true)
+					gObjectUnref(scaled)
+				}
+				gObjectUnref(pix)
+			}
+		} else {
+			item = gtkMenuItemNewWithLabel(cs(it.Label))
+		}
 	}
 	if it.Submenu != nil {
 		sub := gtkMenuNew()

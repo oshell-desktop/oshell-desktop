@@ -3,12 +3,16 @@
 package windows
 
 import (
+	"bytes"
 	"encoding/json"
+	"image"
+	"image/png"
 	"strings"
 	"unsafe"
 
 	"github.com/egoist/mygo/internal/accelerator"
 	"github.com/egoist/mygo/internal/platform"
+	"golang.org/x/image/draw"
 )
 
 // menuEntry is a native menu item: WM_COMMAND reports 16-bit command ids,
@@ -24,11 +28,14 @@ type menuEntry struct {
 
 type menuTable struct {
 	entries   map[uint16]*menuEntry
+	bitmaps   map[int]map[*platform.MenuIcon]uintptr
 	next      uint16
 	nextOwner int
 }
 
-func newMenuTable() menuTable { return menuTable{entries: map[uint16]*menuEntry{}} }
+func newMenuTable() menuTable {
+	return menuTable{entries: map[uint16]*menuEntry{}, bitmaps: map[int]map[*platform.MenuIcon]uintptr{}}
+}
 
 func (t *menuTable) newOwner() int {
 	t.nextOwner++
@@ -58,20 +65,26 @@ func (t *menuTable) drop(owner int) {
 			delete(t.entries, id)
 		}
 	}
+	for _, bmp := range t.bitmaps[owner] {
+		procDeleteObject.Call(bmp)
+	}
+	delete(t.bitmaps, owner)
 }
 
 // buildMenu creates a native menu bar or popup menu.
-func (b *Backend) buildMenu(m *platform.Menu, bar bool, owner int, accels map[accelKey]uint16) uintptr {
+func (b *Backend) buildMenu(m *platform.Menu, bar bool, owner, dpi int, accels map[accelKey]uint16) uintptr {
 	var h uintptr
 	if bar {
 		h, _, _ = procCreateMenu.Call()
 	} else {
 		h, _, _ = procCreatePopupMenu.Call()
 	}
+	pos := -1
 	for _, it := range m.Items {
 		if !it.Visible {
 			continue
 		}
+		pos++
 		if it.Type == platform.MenuItemSeparator {
 			procAppendMenuW.Call(h, mfSeparator, 0, 0)
 			continue
@@ -81,8 +94,9 @@ func (b *Backend) buildMenu(m *platform.Menu, bar bool, owner int, accels map[ac
 			flags |= mfGrayed
 		}
 		if it.Submenu != nil {
-			sub := b.buildMenu(it.Submenu, false, owner, accels)
+			sub := b.buildMenu(it.Submenu, false, owner, dpi, accels)
 			procAppendMenuW.Call(h, flags|mfPopup, sub, uintptr(unsafe.Pointer(u16(it.Label))))
+			b.menus.setIcon(h, pos, owner, dpi, it.Icon)
 			continue
 		}
 		if it.Checked {
@@ -99,6 +113,7 @@ func (b *Backend) buildMenu(m *platform.Menu, bar bool, owner int, accels map[ac
 			}
 		}
 		procAppendMenuW.Call(h, flags, uintptr(cmd), uintptr(unsafe.Pointer(u16(label))))
+		b.menus.setIcon(h, pos, owner, dpi, it.Icon)
 		if e.radio {
 			setItemInfo(h, cmd, label, it.Enabled, it.Checked, true)
 		}
@@ -106,21 +121,60 @@ func (b *Backend) buildMenu(m *platform.Menu, bar bool, owner int, accels map[ac
 	return h
 }
 
-func setItemInfo(menu uintptr, cmd uint16, label string, enabled, checked, radio bool) {
-	type menuItemInfo struct {
-		Size         uint32
-		Mask         uint32
-		Type         uint32
-		State        uint32
-		ID           uint32
-		SubMenu      uintptr
-		BmpChecked   uintptr
-		BmpUnchecked uintptr
-		ItemData     uintptr
-		TypeData     *uint16
-		Cch          uint32
-		BmpItem      uintptr
+type menuItemInfo struct {
+	Size         uint32
+	Mask         uint32
+	Type         uint32
+	State        uint32
+	ID           uint32
+	SubMenu      uintptr
+	BmpChecked   uintptr
+	BmpUnchecked uintptr
+	ItemData     uintptr
+	TypeData     *uint16
+	Cch          uint32
+	BmpItem      uintptr
+}
+
+// HMENU borrows each HBITMAP until the menu is destroyed. All submenus of
+// this owner share a bitmap for each distinct image at the window's DPI.
+func (t *menuTable) setIcon(menu uintptr, pos, owner, dpi int, icon *platform.MenuIcon) {
+	if icon == nil {
+		return
 	}
+	icons := t.bitmaps[owner]
+	if icons == nil {
+		icons = make(map[*platform.MenuIcon]uintptr)
+		t.bitmaps[owner] = icons
+	}
+	bmp := icons[icon]
+	if bmp == 0 {
+		src, err := png.Decode(bytes.NewReader(icon.PNG))
+		w, h := toPx(icon.Width, dpi), toPx(icon.Height, dpi)
+		if err != nil || w <= 0 || h <= 0 {
+			return
+		}
+		header := bitmapInfoHeader{Width: w, Height: -h, Planes: 1, BitCount: 32}
+		header.Size = uint32(unsafe.Sizeof(header))
+		var bits unsafe.Pointer
+		bmp, _, _ = procCreateDIBSection.Call(0, uintptr(unsafe.Pointer(&header)), 0, uintptr(unsafe.Pointer(&bits)), 0, 0)
+		if bmp == 0 {
+			return
+		}
+		pixels := unsafe.Slice((*byte)(bits), int(w)*int(h)*4)
+		dst := &image.RGBA{Pix: pixels, Stride: int(w) * 4, Rect: image.Rect(0, 0, int(w), int(h))}
+		draw.BiLinear.Scale(dst, dst.Rect, src, src.Bounds(), draw.Src, nil)
+		for i := 0; i < len(pixels); i += 4 {
+			pixels[i], pixels[i+2] = pixels[i+2], pixels[i] // Win32 uses premultiplied BGRA.
+		}
+		icons[icon] = bmp
+	}
+	info := menuItemInfo{Mask: 0x80, BmpItem: bmp} // MIIM_BITMAP
+	info.Size = uint32(unsafe.Sizeof(info))
+	procSetMenuItemInfoW.Call(menu, uintptr(pos), 1, uintptr(unsafe.Pointer(&info)))
+}
+
+func setItemInfo(menu uintptr, cmd uint16, label string, enabled, checked, radio bool) {
 	mi := menuItemInfo{Mask: miimState | miimFType | miimString, TypeData: u16(label)}
 	mi.Size = uint32(unsafe.Sizeof(mi))
 	if radio {
@@ -137,17 +191,17 @@ func setItemInfo(menu uintptr, cmd uint16, label string, enabled, checked, radio
 
 // installMenu shows m as the window's menu bar (nil removes it).
 func (w *window) installMenu(m *platform.Menu) {
-	old := w.hmenu
-	w.b.menus.drop(w.owner)
+	old, oldOwner := w.hmenu, w.owner
 	w.menu, w.hmenu, w.owner, w.accels = m, 0, 0, map[accelKey]uint16{}
 	if m != nil && len(m.Items) > 0 {
 		w.owner = w.b.menus.newOwner()
-		w.hmenu = w.b.buildMenu(m, true, w.owner, w.accels)
+		w.hmenu = w.b.buildMenu(m, true, w.owner, dpiOf(w.hwnd), w.accels)
 	}
 	w.attachMenu()
 	if old != 0 {
 		procDestroyMenu.Call(old)
 	}
+	w.b.menus.drop(oldOwner)
 }
 
 // menuShown reports whether the menu bar is on the window. One that hides
@@ -345,7 +399,7 @@ func (b *Backend) PopupMenu(m *platform.Menu, pw platform.Window, pos *platform.
 	}
 	id := b.menus.newOwner()
 	defer b.menus.drop(id)
-	menu := b.buildMenu(m, false, id, nil)
+	menu := b.buildMenu(m, false, id, dpiOf(owner), nil)
 	defer procDestroyMenu.Call(menu)
 
 	var pt point

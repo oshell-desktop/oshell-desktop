@@ -32,5 +32,5 @@ docker run --rm --init --name "$container_name" \
   --mount "type=bind,source=$toolchain,target=/opt/go,readonly" \
   --mount "type=bind,source=$cache_root,target=/cache" \
   --env "OSHELL_WORKSPACE_OWNER=$owner" \
-  --env GITHUB_SHA --env GITHUB_RUN_ID --env OSHELL_CI_SHARD \
+  --env GITHUB_SHA --env GITHUB_RUN_ID --env GITHUB_REF_TYPE --env OSHELL_CI_SHARD \
   "$image" bash scripts/build-container.sh "$mode"

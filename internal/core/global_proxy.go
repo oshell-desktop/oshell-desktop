@@ -2,12 +2,14 @@ package core
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // GlobalProxySettings is local connection policy, never part of shared Config.
@@ -53,7 +55,7 @@ func (s GlobalProxySettings) Save(dir string) error {
 	return AtomicWrite(filepath.Join(dir, "global-proxy.json"), data)
 }
 
-func (s GlobalProxySettings) ConnectionProfile(c Config, p Profile) (Profile, error) {
+func (s GlobalProxySettings) ConnectionProfile(c Config, p Profile, vault *Vault) (Profile, error) {
 	if !s.Enabled || p.Kind != "ssh" && p.Kind != "sftp" {
 		return c.ConnectionProfile(p)
 	}
@@ -64,15 +66,88 @@ func (s GlobalProxySettings) ConnectionProfile(c Config, p Profile) (Profile, er
 	if err != nil {
 		return p, fmt.Errorf("全局代理不可用：%w", err)
 	}
-	p.RuntimeProxyRoute = nil
-	for _, hop := range route {
-		if hop.Settings.Kind == "" || hop.Settings.Kind == "none" {
-			return p, fmt.Errorf("全局代理链包含无效代理")
+	p, err = c.ConnectionProfile(p)
+	if err != nil {
+		return p, err
+	}
+	session := p.RuntimeProxyRoute
+	if len(session) == 0 {
+		if p.Proxy.Kind != "" && p.Proxy.Kind != "none" {
+			session = []ProxySettings{p.Proxy}
+		} else if p.JumpHost != "" && !strings.EqualFold(p.JumpHost, "none") {
+			tokens := strings.Split(p.JumpHost, ",")
+			if len(tokens) > 8 {
+				return p, fmt.Errorf("代理链最多支持 8 级")
+			}
+			for _, token := range tokens {
+				hop, err := parseConfiguredJump(token)
+				if err != nil {
+					return p, err
+				}
+				if hop.Port == 0 || hop.Username == "" {
+					resolved, err := ResolveSSH(context.Background(), hop)
+					if err != nil {
+						return p, err
+					}
+					hop.Port, hop.Username = resolved.Profile.Port, resolved.Profile.Username
+				}
+				session = append(session, ProxySettings{ID: hop.ID, Kind: "jump", Host: hop.Host, Port: hop.Port, Username: hop.Username, SSHAuthentication: "automatic"})
+			}
 		}
-		if err := hop.Settings.Validate(); err != nil {
+	}
+	prefix := make([]ProxySettings, 0, len(route))
+	for _, hop := range route {
+		prefix = append(prefix, hop.Settings)
+	}
+	sameHop := func(a, b ProxySettings) bool {
+		if strings.EqualFold(a.ID, b.ID) {
+			return true
+		}
+		if vault != nil && (vault.HasStoredCredential(a.ID) || vault.HasStoredCredential(b.ID)) {
+			return false
+		}
+		a.ID = b.ID
+		return a == b
+	}
+	// Only a suffix of the prefix can overlap the start of the session route.
+	// Removing a repeated hop anywhere else would change its upstream connection.
+	overlap := min(len(prefix), len(session))
+	for ; overlap > 0; overlap-- {
+		matches := true
+		for i, a := range prefix[len(prefix)-overlap:] {
+			if !sameHop(a, session[i]) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			break
+		}
+	}
+	for i, a := range prefix[len(prefix)-overlap:] {
+		b := session[i]
+		a.ID = b.ID
+		if a != b {
+			return p, fmt.Errorf("同一代理 ID 的连接或认证配置不一致")
+		}
+	}
+	combined := append(prefix, session[overlap:]...)
+	if len(combined) > 8 {
+		return p, fmt.Errorf("组合后的代理链最多支持 8 级")
+	}
+	for i, hop := range combined {
+		if hop.Kind == "" || hop.Kind == "none" {
+			return p, fmt.Errorf("代理链包含无效代理")
+		}
+		if err := hop.Validate(); err != nil {
 			return p, fmt.Errorf("全局代理不可用：%w", err)
 		}
-		p.RuntimeProxyRoute = append(p.RuntimeProxyRoute, hop.Settings)
+		for _, previous := range combined[:i] {
+			if sameHop(previous, hop) {
+				return p, fmt.Errorf("代理链存在重复或顺序冲突，请调整代理链")
+			}
+		}
 	}
+	p.RuntimeProxyRoute = combined
 	return p, nil
 }

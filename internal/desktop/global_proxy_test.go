@@ -66,9 +66,20 @@ func TestGlobalProxyDialogPersistsOnlyLocalPolicy(t *testing.T) {
 	if err != nil || !settings.Enabled {
 		t.Fatal("cancel changed policy")
 	}
-	a.showGlobalProxy()
-	a.features.globalProxy.draft.Enabled = false
-	a.saveGlobalProxy()
+	tt.SetSize(1280, 720)
+	tt.Frame()
+	if err := tt.RightClick("全局代理"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem("全局代理设置…"); err != nil || !a.features.globalProxy.open {
+		t.Fatal("settings menu", err)
+	}
+	if err := tt.Click("取消"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("全局代理"); err != nil {
+		t.Fatal(err)
+	}
 	route, err = other.connectionProfile(p)
 	if err != nil || len(route.RuntimeProxyRoute) != 0 {
 		t.Fatal("other window retained disabled override")

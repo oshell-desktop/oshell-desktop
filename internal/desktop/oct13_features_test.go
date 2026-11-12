@@ -104,7 +104,8 @@ func TestTabPlusFollowsContentAndBackgroundMenu(t *testing.T) {
 	}
 	tt.Frame()
 	plus, _ = tt.Find("新建标签")
-	if plus.X < 800 || plus.X > 900 {
+	menu, _ := tt.Find("所有标签")
+	if plus.X < 700 || plus.X+plus.W > menu.X || menu.X+menu.W > 900 {
 		t.Fatal("overflow plus not pinned", plus)
 	}
 	a.tabs = a.tabs[:1]
@@ -136,10 +137,29 @@ func TestClockFollowColorAndApply(t *testing.T) {
 	a.features.settingsDraft.TerminalClockEnabled = true
 	a.features.settingsDraft.TerminalClockOpacity = .75
 	tt.Frame()
+	if err := tt.Click("仅全屏时显示（含专注全屏）"); err != nil {
+		t.Fatal(err)
+	}
 	snapshot(t, tt, "clock-settings-oct13.png")
 	a.applySettings()
 	if a.config.Settings.TerminalClockColor != "#FF0000" || a.config.Settings.TerminalClockFontSize != 96 || a.config.Settings.TerminalClockOpacity != .75 {
 		t.Fatal("clock style not applied", a.features.settingsError)
+	}
+	disk, err := readLocalPreferences(a.store.Dir)
+	if err != nil || !disk.ClockFullscreenOnly || a.windowClockVisible() {
+		t.Fatal("normal window clock", err)
+	}
+	a.fullscreenSettled(true)
+	if !a.windowClockVisible() {
+		t.Fatal("clock missing in native fullscreen")
+	}
+	a.focusFullscreen.deep = true
+	if !a.windowClockVisible() {
+		t.Fatal("clock missing in deep fullscreen")
+	}
+	a.fullscreenSettled(false)
+	if a.windowClockVisible() {
+		t.Fatal("clock remained after exit")
 	}
 }
 func TestEmptyGroupBackgroundMenuNewTabStaysInGroup(t *testing.T) {

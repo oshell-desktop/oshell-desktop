@@ -1,12 +1,16 @@
 package desktop
 
 import (
+	"bytes"
+	"image/png"
 	"path"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
 	"oshell-desktop/internal/core"
 )
+
+const sessionIconWidth, sessionIconHeight = 36, 20
 
 // Presentation only: shared session types and configuration stay unchanged.
 var (
@@ -57,7 +61,7 @@ func (s sessionIconStyle) draw(c *ui.Context) {
 	}
 	if s.badge != "" {
 		// An opaque theme base keeps the badge legible on selected rows too.
-		ui.Box(c).Size(36, 20).Shrink(0).Radius(5).Background(c.Theme().Background).Label(s.label).Children(func() {
+		ui.Box(c).Size(sessionIconWidth, sessionIconHeight).Shrink(0).Radius(5).Background(c.Theme().Background).Label(s.label).Children(func() {
 			ui.Row(c).Fill().AlignItems(ui.Center).Justify(ui.Center).Radius(5).
 				Background(color.Alpha(0.10)).Border(1, color.Alpha(0.30)).Children(func() {
 				ui.Text(c, s.badge).FontSize(10).FontWeight(600).SingleLine().TextColor(color)
@@ -66,10 +70,39 @@ func (s sessionIconStyle) draw(c *ui.Context) {
 		})
 		return
 	}
-	ui.Row(c).Size(36, 20).Shrink(0).AlignItems(ui.Center).Justify(ui.Center).Label(s.label).Children(func() {
+	ui.Row(c).Size(sessionIconWidth, sessionIconHeight).Shrink(0).AlignItems(ui.Center).Justify(ui.Center).Label(s.label).Children(func() {
 		ui.Icon(c, s.image).FontSize(20).Size(20, 20).Shrink(0).TextColor(color)
 		corner()
 	})
+}
+
+type menuIconKey struct {
+	style sessionIconStyle
+	dark  bool
+}
+
+// Native menus need bitmaps. Rasterize each sidebar style once per appearance;
+// the transparent surround lets native selection and hover show through.
+var sessionMenuIcons = map[menuIconKey]*ui.MenuIcon{}
+
+func (s sessionIconStyle) menuIcon(dark bool) *ui.MenuIcon {
+	key := menuIconKey{s, dark}
+	if icon := sessionMenuIcons[key]; icon != nil {
+		return icon
+	}
+	theme := professionalTheme(dark)
+	theme.Background = ui.Transparent
+	pixels := ui.Render(func(c *ui.Context) {
+		c.SetTheme(theme)
+		s.draw(c)
+	}, sessionIconWidth, sessionIconHeight, 2)
+	var data bytes.Buffer
+	if err := png.Encode(&data, pixels); err != nil {
+		return nil
+	}
+	icon := &ui.MenuIcon{PNG: data.Bytes(), Width: sessionIconWidth, Height: sessionIconHeight}
+	sessionMenuIcons[key] = icon
+	return icon
 }
 
 func sessionListTooltip(p core.Profile, shortcut bool) string {

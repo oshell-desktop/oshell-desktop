@@ -175,12 +175,13 @@ type Terminal struct {
 	in   inputQueue
 
 	// mu guards the emulator, which the reader changes and frames read.
-	mu      sync.Mutex
-	term    *vt.Terminal
-	size    gridSize
-	events  events
-	closed  bool
-	clipOut []string // what programs copied, for the view to write
+	mu            sync.Mutex
+	term          *vt.Terminal
+	size          gridSize
+	events        events
+	closed        bool
+	selectionHold chan struct{} // protected by mu; only the live output reader waits
+	clipOut       []string      // what programs copied, for the view to write
 	// src is the program's pseudo-terminal, or Conn: nil until the
 	// program starts, from launch, its options.
 	src    io.ReadWriteCloser
@@ -480,7 +481,7 @@ func (t *Terminal) read() {
 			if t.transfers != nil {
 				t.transfers.feed(buf[:n])
 			} else {
-				t.write(buf[:n])
+				t.writeOutput(buf[:n], true)
 			}
 		}
 		if err != nil {
@@ -495,10 +496,20 @@ func (t *Terminal) read() {
 
 // write processes output, then runs the callbacks of what it did.
 func (t *Terminal) write(p []byte) {
+	t.writeOutput(p, false)
+}
+
+func (t *Terminal) writeOutput(p []byte, fromReader bool) {
 	if t.opts.Agent != nil {
 		t.opts.Agent.Observe(p)
 	}
 	t.mu.Lock()
+	for fromReader && t.selectionHold != nil {
+		resume := t.selectionHold
+		t.mu.Unlock()
+		<-resume
+		t.mu.Lock()
+	}
 	var ev events
 	if t.probeEcho != nil {
 		p = t.probeEcho.Consume(p)
@@ -763,6 +774,7 @@ func (t *Terminal) Close() error {
 		return nil
 	}
 	t.closed = true
+	t.resumeSelectionLocked()
 	if t.v != nil {
 		t.v.cancelSemanticClick()
 	}

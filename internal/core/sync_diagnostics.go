@@ -44,7 +44,10 @@ type SyncSafeFailure struct {
 	Code int    `json:"code,omitempty"`
 }
 
-var syncFailureTitles = map[string]string{"tls": "TLS 证书校验失败", "authentication": "认证失败", "remoteChanged": "共享版本已变化", "network": "网络请求失败或超时", "http": "HTTP 响应异常", "invalidData": "配置、密码或加密数据校验失败", "storage": "本地或同步目录读写失败", "cancelled": "请求已取消", "directoryUnavailable": "同步目录暂不可用", "cloudConflict": "存在文件级冲突", "remoteDeleted": "共享同步文件已删除", "encryption": "主密码或加密数据校验失败"}
+var syncFailureTitles = map[string]string{
+	"tls": "TLS 证书校验失败", "authentication": "认证失败", "remoteChanged": "共享版本已变化", "network": "网络请求失败或超时", "http": "HTTP 响应异常", "invalidData": "配置、密码或加密数据校验失败", "storage": "本地或同步目录读写失败", "cancelled": "请求已取消", "directoryUnavailable": "同步目录暂不可用", "cloudConflict": "存在文件级冲突", "remoteDeleted": "共享同步文件已删除", "encryption": "主密码或加密数据校验失败",
+	"occupied": "坚果云写入标记已被占用", "uncertainWrite": "坚果云写入结果待确认", "unsafeVersion": "远端文件缺少安全更新所需的版本标记",
+}
 
 func (f SyncSafeFailure) Title() string { return syncFailureTitles[f.Kind] }
 func safeDiagnosticFailure(err error) *SyncSafeFailure {
@@ -69,6 +72,12 @@ func safeDiagnosticFailure(err error) *SyncSafeFailure {
 			failure.Kind = "authentication"
 		case "conflict":
 			failure.Kind = "remoteChanged"
+		case "occupied":
+			failure.Kind = "occupied"
+		case "uncertain-write":
+			failure.Kind = "uncertainWrite"
+		case "etag":
+			failure.Kind = "unsafeVersion"
 		case "network":
 			failure.Kind = "network"
 		case "directory", "webdav-directory":

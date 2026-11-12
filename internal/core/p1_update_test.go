@@ -23,7 +23,7 @@ func signedPortableFixture(t *testing.T, target, version string, body []byte) (*
 	digest := sha256.Sum256(body)
 	m.Version = version
 	m.Build = "100"
-	m.Platforms = map[string]UpdateArchive{target: {URL: "https://github.com/owner/repo/releases/download/v" + version + "/" + releaseAssetName(target), Size: int64(len(body)), SHA256: hex.EncodeToString(digest[:]), Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(key, digest[:]))}}
+	m.Platforms = map[string]UpdateArchive{target: {URL: "https://github.com/owner/repo/releases/download/v" + version + "/" + ReleaseAssetName(target), Size: int64(len(body)), SHA256: hex.EncodeToString(digest[:]), Signature: base64.StdEncoding.EncodeToString(ed25519.Sign(key, digest[:]))}}
 	data, err := SignUpdateManifest(m, key)
 	if err != nil {
 		t.Fatal(err)
@@ -42,18 +42,40 @@ func setPortableSigningKey(t *testing.T, key string) {
 	t.Cleanup(func() { UpdatePublicKey, UpdateBuild = oldKey, oldBuild })
 }
 
-func TestP1PublicUpdateUsesStaticSignedMetadataAndCoalesces(t *testing.T) {
-	_, data, pub := signedPortableFixture(t, "windows-amd64", "0.3.2", []byte("fixture-package"))
+func signedReleaseFixture(u *ReleaseUpdate, data []byte) githubRelease {
+	archive := u.asset
+	archive.Name, archive.State, archive.ID = ReleaseAssetName(u.target), "uploaded", 7
+	manifest := releaseAsset{ID: 8, Name: "latest.json", State: "uploaded", Size: int64(len(data)), URL: strings.TrimSuffix(archive.URL, archive.Name) + "latest.json"}
+	return githubRelease{Tag: "v" + u.Version, Assets: []releaseAsset{archive, manifest}}
+}
+
+func TestPublicUpdateUsesLatestReleaseAndCoalesces(t *testing.T) {
+	u, data, pub := signedPortableFixture(t, "windows-amd64", "0.3.2", []byte("fixture-package"))
+	release, _ := json.Marshal(signedReleaseFixture(u, data))
 	setPortableSigningKey(t, pub)
 	previous := http.DefaultTransport
 	t.Cleanup(func() { http.DefaultTransport = previous })
 	var calls atomic.Int32
 	http.DefaultTransport = updateRoundTrip(func(r *http.Request) (*http.Response, error) {
 		calls.Add(1)
-		if r.URL.String() != "https://owner.github.io/repo/updates/latest.json" || r.Header.Get("Authorization") != "" {
-			t.Error("public check called API or leaked credentials", r.URL)
+		if r.Header.Get("Authorization") != "" {
+			t.Error("unexpected public authorization header")
 		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(data)), ContentLength: int64(len(data)), Header: make(http.Header)}, nil
+		var body []byte
+		switch r.URL.String() {
+		case "https://api.github.com/repos/owner/repo/releases/latest":
+			body = release
+		case "https://api.github.com/repos/owner/repo/releases/assets/8":
+			if r.Header.Get("Accept") != "application/octet-stream" {
+				t.Error("manifest request did not ask for asset bytes")
+			}
+			return &http.Response{StatusCode: 302, Body: http.NoBody, Header: http.Header{"Location": {"https://release-assets.githubusercontent.com/fixture"}}}, nil
+		case "https://release-assets.githubusercontent.com/fixture":
+			body = data
+		default:
+			t.Errorf("unexpected request %s", r.URL)
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(body)), ContentLength: int64(len(body)), Header: make(http.Header)}, nil
 	})
 	cache := &UpdateMetadataCache{}
 	var wg sync.WaitGroup
@@ -68,7 +90,7 @@ func TestP1PublicUpdateUsesStaticSignedMetadataAndCoalesces(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	if calls.Load() != 1 {
+	if calls.Load() != 3 {
 		t.Fatal("duplicate prefetch", calls.Load())
 	}
 	if u, err := checkSignedPortableUpdate(context.Background(), cache, UpdateSource{"owner/repo"}, "windows-amd64", "0.3.2", "100", pub, ""); err != nil || u != nil {
@@ -77,7 +99,8 @@ func TestP1PublicUpdateUsesStaticSignedMetadataAndCoalesces(t *testing.T) {
 }
 
 func TestP1PortableUpdateRejectsUnsignedAndMismatchedMetadata(t *testing.T) {
-	_, data, pub := signedPortableFixture(t, "windows-amd64", "0.3.2", []byte("fixture"))
+	u, data, pub := signedPortableFixture(t, "windows-amd64", "0.3.2", []byte("fixture"))
+	release := signedReleaseFixture(u, data)
 	setPortableSigningKey(t, pub)
 	for _, tc := range []struct {
 		name        string
@@ -91,7 +114,8 @@ func TestP1PortableUpdateRejectsUnsignedAndMismatchedMetadata(t *testing.T) {
 		{"oversize JSON", bytes.Repeat([]byte{'x'}, UpdateMetadataLimit+1), pub, "windows-amd64"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cache := &UpdateMetadataCache{data: tc.data, expires: time.Now().Add(time.Minute)}
+			bundle, _ := json.Marshal(signedReleaseMetadata{Release: release, Signed: tc.data})
+			cache := &UpdateMetadataCache{data: bundle, expires: time.Now().Add(time.Minute)}
 			if _, err := checkSignedPortableUpdate(context.Background(), cache, UpdateSource{"owner/repo"}, tc.target, "0.3.1", "1", tc.key, ""); err == nil {
 				t.Fatal("invalid metadata accepted")
 			}
@@ -104,8 +128,8 @@ func TestP1PortableUpdateRejectsUnsignedAndMismatchedMetadata(t *testing.T) {
 	if _, err := DecodeSignedUpdate(oversize, UpdateSource{"owner/repo"}, "windows-amd64", "dev.oshell.desktop", "0.3.1", "1", pub); err == nil {
 		t.Fatal("oversized feed accepted")
 	}
-	u := &ReleaseUpdate{Version: "0.3.2"}
-	if _, err := u.Prepare(context.Background(), "must-not-be-touched", nil); err == nil || !strings.Contains(err.Error(), "签名") {
+	unsigned := &ReleaseUpdate{Version: "0.3.2"}
+	if _, err := unsigned.Prepare(context.Background(), "must-not-be-touched", nil); err == nil || !strings.Contains(err.Error(), "签名") {
 		t.Fatal("unsigned prepare reached filesystem", err)
 	}
 }
@@ -140,9 +164,9 @@ func TestP1PrivateReleaseRequiresSignedAttachment(t *testing.T) {
 	setPortableSigningKey(t, pub)
 	asset := u.asset
 	asset.ID = 7
-	asset.Name = releaseAssetName("windows-amd64")
+	asset.Name = ReleaseAssetName("windows-amd64")
 	asset.State = "uploaded"
-	m := privateSignedMetadata{Release: githubRelease{Tag: "v0.3.2", Assets: []releaseAsset{asset}}, Signed: signed}
+	m := signedReleaseMetadata{Release: githubRelease{Tag: "v0.3.2", Assets: []releaseAsset{asset}}, Signed: signed}
 	for _, kind := range []string{"valid", "missing signature", "wrong asset", "duplicate"} {
 		copy := m
 		copy.Release.Assets = append([]releaseAsset(nil), m.Release.Assets...)

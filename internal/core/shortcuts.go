@@ -90,7 +90,7 @@ func (k KeyboardShortcuts) rawBindings(action, platform string) []KeyboardShortc
 				out = nil
 			}
 			if platform != "darwin" && action == "focusFullscreen" {
-				out = []KeyboardShortcut{{KeyCode: 103}}
+				out = []KeyboardShortcut{{KeyCode: 103}, {KeyCode: 36, Modifiers: 2}}
 			}
 			if platform != "darwin" && (action == "copy" || action == "paste" || action == "selectAll") {
 				for i := range out {

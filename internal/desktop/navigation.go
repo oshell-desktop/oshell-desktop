@@ -125,7 +125,13 @@ func (a *App) switchEntries() []switchEntry {
 		})
 	}
 	saved := a.presentationConfig().Profiles
-	sort.SliceStable(saved, func(i, j int) bool { return strings.ToLower(saved[i].Name) < strings.ToLower(saved[j].Name) })
+	if a.features.switcher.filesOnly {
+		sort.SliceStable(saved, func(i, j int) bool { return strings.ToLower(saved[i].Name) < strings.ToLower(saved[j].Name) })
+	} else {
+		sortSessionList(saved, func(p core.Profile) sessionSortKey {
+			return sessionSortKey{name: p.Name, pinned: a.rowPinned(sessionRow{profile: p, group: p.Group})}
+		})
+	}
 	for _, p := range saved {
 		if !a.features.switcher.filesOnly && a.features.switcher.scope == "opened" {
 			break

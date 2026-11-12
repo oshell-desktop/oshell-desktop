@@ -62,6 +62,28 @@ type sessionRow struct {
 	profile         core.Profile
 }
 
+type sessionSortKey struct {
+	name           string
+	folder, pinned bool
+}
+
+func sortSessionList[T any](items []T, key func(T) sessionSortKey) {
+	if len(items) < 2 {
+		return
+	}
+	order := collate.New(language.Und, collate.Numeric)
+	sort.SliceStable(items, func(i, j int) bool {
+		left, right := key(items[i]), key(items[j])
+		if left.pinned != right.pinned {
+			return left.pinned
+		}
+		if left.folder != right.folder {
+			return left.folder
+		}
+		return order.CompareString(left.name, right.name) < 0
+	})
+}
+
 func (a *App) buildManagerRows() []sessionRow {
 	cfg := a.presentationConfig()
 	var folders, profiles []sessionRow
@@ -132,11 +154,10 @@ func (a *App) buildManagerRows() []sessionRow {
 			add(sessionRow{id: "link:" + l.ID, linkID: l.ID, name: l.Name, group: g, profile: p})
 		}
 	}
-	order := collate.New(language.Und, collate.Numeric)
-	sort.SliceStable(folders, func(i, j int) bool { return order.CompareString(folders[i].name, folders[j].name) < 0 })
-	sort.SliceStable(profiles, func(i, j int) bool { return order.CompareString(profiles[i].name, profiles[j].name) < 0 })
 	result := append(folders, profiles...)
-	a.sortPinnedRows(result)
+	sortSessionList(result, func(r sessionRow) sessionSortKey {
+		return sessionSortKey{name: r.name, folder: r.folder, pinned: a.rowPinned(r)}
+	})
 	if !a.managerAll && a.managerGroup != "" {
 		parent := path.Dir(a.managerGroup)
 		if parent == "." {
@@ -178,6 +199,17 @@ func (a *App) managerView(c *ui.Context) {
 	}
 	if a.lockedWorkspace(c) {
 		return
+	}
+	// Ctrl+Enter belongs to command input in the workspace, so route this
+	// manager binding here instead of installing a process-wide accelerator.
+	if a.managerRename == nil {
+		for _, binding := range a.config.Settings.KeyboardShortcuts.Bindings("connectSelected", runtime.GOOS) {
+			mods, key := shortcutMods(binding), shortcutKey(binding.KeyCode)
+			if commandEnter(mods, key) && c.Shortcut(mods, key) {
+				a.performAction("connectSelected")
+				return
+			}
+		}
 	}
 	focusResults := false
 	ui.Column(c).Fill().Padding(6).Gap(4).Children(func() {

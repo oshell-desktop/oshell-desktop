@@ -9,6 +9,21 @@ func glyph(body string) *ui.SVG {
 }
 
 var (
+	catalogIcon     = glyph(`<rect x="2" y="3" width="16" height="6" rx="1.6"/><rect x="2" y="11" width="16" height="6" rx="1.6"/><path d="M5 6h2m-2 8h2"/>`)
+	quickIcon       = glyph(`<path d="m12 2-9 10h6l-1 6 9-11h-6z"/>`)
+	newSessionIcon  = glyph(`<rect x="2" y="3" width="16" height="14" rx="2"/><path d="M10 6v8m-4-4h8"/>`)
+	groupsIcon      = glyph(`<rect x="2" y="7" width="14" height="10" rx="2"/><path d="M5 4h12q1 0 1 1v8"/>`)
+	groupLayoutIcon = glyph(`<rect x="1" y="4" width="5" height="12" rx="1"/><rect x="8" y="4" width="4" height="12" rx="1"/><rect x="14" y="4" width="5" height="12" rx="1"/>`)
+	paneLayoutIcon  = glyph(`<rect x="2" y="3" width="16" height="14" rx="2"/><path d="M10 3v14M2 10h16"/>`)
+	toolsIcon       = glyph(`<path d="M11 4a5 5 0 0 0-6 6l-3 4a2 2 0 0 0 3 3l5-5a5 5 0 0 0 6-6l-3 3-3-3z"/>`)
+	mcpIcon         = glyph(`<path d="M3 5h5a2.5 2.5 0 1 1 4 0h4v4a2.5 2.5 0 1 1 0 4v4H3v-4a2.5 2.5 0 1 0 0-4z"/>`)
+	networkIcon     = glyph(`<circle cx="10" cy="10" r="8"/><ellipse cx="10" cy="10" rx="3.6" ry="8"/><path d="M2 10h16"/>`)
+	propertiesIcon  = glyph(`<rect x="2" y="3" width="16" height="14" rx="2"/><path d="M2 7h16m-12 4h8m-5 3h5"/>`)
+	gearIcon        = glyph(`<path d="m8 2-.6 2.1-1.5.9-2.1-.5-1.6 2.8 1.5 1.6v2.2l-1.5 1.6 1.6 2.8 2.1-.5 1.5.9L8 18h4l.6-2.1 1.5-.9 2.1.5 1.6-2.8-1.5-1.6V8.9l1.5-1.6-1.6-2.8-2.1.5-1.5-.9L12 2z"/><circle cx="10" cy="10" r="3"/>`)
+	stopIcon        = glyph(`<circle cx="10" cy="10" r="7.5"/><rect x="7" y="7" width="6" height="6" rx="1"/>`)
+	downloadIcon    = glyph(`<circle cx="10" cy="10" r="7.5"/><path d="M10 5.5v8m-3-3 3 3 3-3"/>`)
+	moreIcon        = glyph(`<path d="M3 5h14M3 10h14M3 15h14"/>`)
+
 	paletteIcon         = glyph(`<path d="M17.5 10a7.5 7.5 0 1 0-7.5 7.5h1.2a1.8 1.8 0 0 0 1.3-3l-.5-.5a1 1 0 0 1 .7-1.7h1.8a3 3 0 0 0 3-2.3z"/><circle cx="5.5" cy="9" r=".6"/><circle cx="8" cy="5.5" r=".6"/><circle cx="12" cy="5.5" r=".6"/><circle cx="15" cy="8.5" r=".6"/>`)
 	keyboardIcon        = glyph(`<rect x="2" y="4" width="16" height="12" rx="2"/><path d="M5 7h1m2 0h1m2 0h1m2 0h1M5 10h1m2 0h1m2 0h1m2 0h1M6 13h8"/>`)
 	clockIcon           = glyph(`<circle cx="10" cy="10" r="7.5"/><path d="M10 5v5H6"/>`)

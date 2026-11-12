@@ -42,7 +42,11 @@ func (e *SyncFailure) Error() string {
 	case "authentication":
 		return "WebDAV 身份验证失败"
 	case "etag":
-		return "服务器未提供强 ETag，无法安全同步"
+		return "服务器未提供可安全更新的版本标记，已停止覆盖并保留本机修改"
+	case "occupied":
+		return "另一台设备占用了坚果云写入标记，请稍后重新同步"
+	case "uncertain-write":
+		return "坚果云写入或释放标记的结果不确定，请核对远端文件和 .oshell-lock 标记后再同步"
 	case "redirect":
 		return "同步地址发生重定向，请填写最终 HTTP / HTTPS 地址"
 	case "size":
@@ -167,7 +171,7 @@ func (w *WebDAVTransport) requestLimit(ctx context.Context, method string, targe
 	return response.StatusCode, response.Header, data, nil
 }
 func (w *WebDAVTransport) Probe(ctx context.Context) error {
-	_, e := w.Fetch(ctx)
+	_, e := w.ProbeStatus(ctx)
 	return e
 }
 func (w *WebDAVTransport) Fetch(ctx context.Context) (*SharedObject, error) {
@@ -178,24 +182,14 @@ func (w *WebDAVTransport) Fetch(ctx context.Context) (*SharedObject, error) {
 	return w.fetchIn(ctx, directory)
 }
 func (w *WebDAVTransport) fetchIn(ctx context.Context, directory *url.URL) (*SharedObject, error) {
-	status, headers, data, e := w.request(ctx, "GET", webDAVChild(directory, "oshell-vault.json"), nil, nil)
-	if e != nil {
+	object, _, e := w.readObject(ctx, webDAVChild(directory, "oshell-vault.json"), MaxSharedVault, "")
+	if e != nil || object == nil {
 		return nil, e
 	}
-	if status == 404 {
-		return nil, nil
-	}
-	if status != 200 {
-		return nil, &SyncFailure{Kind: "status", Status: status}
-	}
-	tag := headers.Get("ETag")
-	if !ValidETag(tag) {
-		return nil, safeSyncFailure("etag")
-	}
-	if !IsSharedVault(data) {
+	if !IsSharedVault(object.Data) {
 		return nil, safeSyncFailure("unencrypted")
 	}
-	return &SharedObject{data, tag}, nil
+	return object, nil
 }
 func (w *WebDAVTransport) Put(ctx context.Context, data []byte, etag string) error {
 	if len(data) > MaxSharedVault {
@@ -204,30 +198,11 @@ func (w *WebDAVTransport) Put(ctx context.Context, data []byte, etag string) err
 	if !IsSharedVault(data) {
 		return safeSyncFailure("unencrypted")
 	}
-	headers := map[string]string{"Content-Type": "application/json"}
-	if etag == "" {
-		headers["If-None-Match"] = "*"
-	} else {
-		if !ValidETag(etag) {
-			return safeSyncFailure("etag")
-		}
-		headers["If-Match"] = etag
-	}
 	directory, e := w.SyncDirectory(ctx)
 	if e != nil {
 		return e
 	}
-	status, _, _, e := w.request(ctx, "PUT", webDAVChild(directory, "oshell-vault.json"), data, headers)
-	if e != nil {
-		return e
-	}
-	if status == 412 {
-		return safeSyncFailure("conflict")
-	}
-	if status != 200 && status != 201 && status != 204 {
-		return &SyncFailure{Kind: "status", Status: status}
-	}
-	return nil
+	return w.writeObject(ctx, webDAVChild(directory, "oshell-vault.json"), data, etag, "application/json", MaxSharedVault)
 }
 
 type DirectoryTransport struct{ Directory string }

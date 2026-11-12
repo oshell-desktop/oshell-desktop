@@ -10,6 +10,7 @@ import (
 // requested can change during an AppKit animation; settled reconciles it later.
 type focusFullscreenState struct {
 	deep                                     bool
+	fullscreen                               bool
 	requested, chrome, transitioning, target bool
 	native                                   nativeFocusChrome
 }
@@ -68,6 +69,10 @@ func (a *App) reconcileFocusFullscreen() {
 }
 func (a *App) fullscreenSettled(entered bool) {
 	f := &a.focusFullscreen
+	f.fullscreen = entered
+	if a.hub != nil {
+		a.hub.refreshClock()
+	}
 	a.traceFullscreen(fmt.Sprintf("settled:%v", entered))
 	// Exiting via the native window controls also exits focus presentation.
 	// A queued re-entry during our own exit animation keeps its explicit request.

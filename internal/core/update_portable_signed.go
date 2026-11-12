@@ -31,42 +31,47 @@ func portableSignedCandidate(v *VerifiedUpdate) *ReleaseUpdate {
 		asset: releaseAsset{URL: v.archive.URL, Size: v.archive.Size, Digest: "sha256:" + v.archive.SHA256}}
 }
 
-// The same signed envelope is used on Pages and, for the existing optional
-// private repository transport, as a latest.json release attachment.
-type privateSignedMetadata struct {
+type signedReleaseMetadata struct {
 	Release githubRelease
 	Signed  []byte
 }
 
-func checkSignedPortableUpdate(ctx context.Context, cache *UpdateMetadataCache, source UpdateSource, target, current, build, key, token string) (*ReleaseUpdate, error) {
-	if releaseAssetName(target) == "" {
-		return nil, fmt.Errorf("当前系统或架构不支持自更新")
+func (r githubRelease) compareInstalled(current string) (int, error) {
+	if r.Draft || r.Prerelease || !strings.HasPrefix(r.Tag, "v") {
+		return 0, fmt.Errorf("GitHub Release 不是正式版本")
 	}
-	if token == "" {
-		v, err := CheckSignedUpdate(ctx, cache, source, target, "dev.oshell.desktop", current, build, key)
-		if err != nil {
-			return nil, err
-		}
-		return portableSignedCandidate(v), nil
+	return CompareUpdateVersions(r.Tag[1:], current)
+}
+
+func checkSignedPortableUpdate(ctx context.Context, cache *UpdateMetadataCache, source UpdateSource, target, current, build, key, token string) (*ReleaseUpdate, error) {
+	if ReleaseAssetName(target) == "" {
+		return nil, fmt.Errorf("当前系统或架构不支持自更新")
 	}
 	if _, err := ParseUpdatePublicKey(key); err != nil {
 		return nil, err
 	}
 	decode := func(data []byte) (*ReleaseUpdate, error) {
-		var m privateSignedMetadata
+		var m signedReleaseMetadata
 		if err := json.Unmarshal(data, &m); err != nil {
-			return nil, fmt.Errorf("私有更新元数据无效")
+			return nil, fmt.Errorf("GitHub Release 更新信息无效")
+		}
+		cmp, err := m.Release.compareInstalled(current)
+		if err != nil || cmp < 0 || cmp == 0 && (build == "" || len(m.Signed) == 0) {
+			return nil, err
+		}
+		if len(m.Signed) == 0 {
+			return nil, fmt.Errorf("Release %s 缺少已签名的 latest.json，无法安装此版本", m.Release.Tag)
 		}
 		v, err := DecodeSignedUpdate(m.Signed, source, target, "dev.oshell.desktop", current, build, key)
 		if err != nil || v == nil {
 			return nil, err
 		}
-		if m.Release.Draft || m.Release.Prerelease || m.Release.Tag != "v"+v.version {
+		if m.Release.Tag != "v"+v.version {
 			return nil, fmt.Errorf("Release 与签名版本不匹配")
 		}
 		var asset *releaseAsset
 		for _, a := range m.Release.Assets {
-			if a.Name != releaseAssetName(target) {
+			if a.Name != ReleaseAssetName(target) {
 				continue
 			}
 			if asset != nil || a.ID <= 0 || a.State != "uploaded" || a.URL != v.archive.URL || a.Size != v.archive.Size || a.Digest != "sha256:"+v.archive.SHA256 {
@@ -79,11 +84,13 @@ func checkSignedPortableUpdate(ctx context.Context, cache *UpdateMetadataCache, 
 			return nil, fmt.Errorf("Release 缺少签名指定的安装包")
 		}
 		u := portableSignedCandidate(v)
-		u.token, u.assetAPIURL = token, "https://api.github.com/repos/"+source.Repository+"/releases/assets/"+strconv.FormatInt(asset.ID, 10)
+		if token != "" {
+			u.token, u.assetAPIURL = token, "https://api.github.com/repos/"+source.Repository+"/releases/assets/"+strconv.FormatInt(asset.ID, 10)
+		}
 		return u, nil
 	}
 	data, err := cache.Value(ctx, func(ctx context.Context) ([]byte, error) {
-		data, err := fetchPrivateUpdateMetadata(ctx, source, token)
+		data, err := fetchSignedReleaseMetadata(ctx, source, current, build, token)
 		if err == nil {
 			_, err = decode(data)
 		}
@@ -95,27 +102,39 @@ func checkSignedPortableUpdate(ctx context.Context, cache *UpdateMetadataCache, 
 	return decode(data)
 }
 
-func fetchPrivateUpdateMetadata(ctx context.Context, source UpdateSource, token string) ([]byte, error) {
-	client := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+func fetchSignedReleaseMetadata(ctx context.Context, source UpdateSource, current, build, token string) ([]byte, error) {
 	get := func(url, accept string) ([]byte, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("Authorization", "Bearer "+token)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
 		req.Header.Set("Accept", accept)
 		req.Header.Set("User-Agent", "OShell Desktop")
+		client := updateDownloadClient()
+		client.Timeout = 30 * time.Second
+		if accept != "application/octet-stream" {
+			client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		}
 		resp, err := client.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("无法连接私有更新源")
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("无法连接 GitHub Release，请检查网络后重试")
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != 200 {
-			return nil, &UpdateHTTPError{Status: resp.StatusCode}
+			if resp.StatusCode == http.StatusNotFound {
+				return nil, fmt.Errorf("未找到 GitHub Release 或附件，请检查仓库、正式发布版本和访问权限（HTTP 404）")
+			}
+			return nil, updateHTTPError(resp)
 		}
 		data, err := io.ReadAll(io.LimitReader(resp.Body, UpdateMetadataLimit+1))
 		if err != nil {
-			return nil, fmt.Errorf("读取私有更新信息失败")
+			return nil, fmt.Errorf("读取 GitHub Release 更新信息失败")
 		}
 		if len(data) > UpdateMetadataLimit {
 			return nil, fmt.Errorf("更新信息超过大小限制")
@@ -128,8 +147,16 @@ func fetchPrivateUpdateMetadata(ctx context.Context, source UpdateSource, token 
 		return nil, err
 	}
 	var release githubRelease
-	if json.Unmarshal(data, &release) != nil || release.Draft || release.Prerelease {
-		return nil, fmt.Errorf("私有 Release 信息无效")
+	if json.Unmarshal(data, &release) != nil {
+		return nil, fmt.Errorf("GitHub Release 信息无效")
+	}
+	result := signedReleaseMetadata{Release: release}
+	cmp, err := release.compareInstalled(current)
+	if err != nil {
+		return nil, err
+	}
+	if cmp < 0 || cmp == 0 && build == "" {
+		return json.Marshal(result)
 	}
 	var id int64
 	for _, a := range release.Assets {
@@ -141,12 +168,11 @@ func fetchPrivateUpdateMetadata(ctx context.Context, source UpdateSource, token 
 		}
 		id = a.ID
 	}
-	if id == 0 {
-		return nil, fmt.Errorf("私有 Release 缺少已签名的 latest.json，拒绝未签名更新")
+	if id != 0 {
+		result.Signed, err = get(base+"assets/"+strconv.FormatInt(id, 10), "application/octet-stream")
+		if err != nil {
+			return nil, err
+		}
 	}
-	signed, err := get(base+"assets/"+strconv.FormatInt(id, 10), "application/octet-stream")
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(privateSignedMetadata{Release: release, Signed: signed})
+	return json.Marshal(result)
 }

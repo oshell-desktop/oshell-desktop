@@ -103,6 +103,7 @@ func (a *App) shortcuts(c *ui.Context) {
 	}
 	p := a.activePane()
 	terminalFocused := p != nil && p.term != nil && (p.focus.FocusWithin(c) || c.Resolve(p.focus).FocusWithin())
+	commandFocused := terminalFocused || a.features.operators.quickFocus.FocusWithin(c) || a.features.operators.composerFocus.FocusWithin(c)
 	if key := a.localUI.MCPShortcut; key != nil && a.config.Settings.KeyboardShortcuts.Conflict(*key, "", runtime.GOOS) == "" && c.Shortcut(shortcutMods(*key), shortcutKey(key.KeyCode)) {
 		a.showMCP()
 		return
@@ -122,15 +123,23 @@ func (a *App) shortcuts(c *ui.Context) {
 			}
 		}
 		for _, key := range a.config.Settings.KeyboardShortcuts.Bindings(action.ID, runtime.GOOS) {
-			if terminalFocused && terminalControlShortcut(shortcutMods(key), shortcutKey(key.KeyCode)) {
+			mods, uikey := shortcutMods(key), shortcutKey(key.KeyCode)
+			if commandFocused && action.ID == "connectSelected" && commandEnter(mods, uikey) {
 				continue
 			}
-			if uikey := shortcutKey(key.KeyCode); uikey != ui.KeyUnknown && c.Shortcut(shortcutMods(key), uikey) {
+			if terminalFocused && terminalControlShortcut(mods, uikey) && !(action.ID == "find" && uikey == ui.KeyF) {
+				continue
+			}
+			if uikey != ui.KeyUnknown && c.Shortcut(mods, uikey) {
 				a.performAction(action.ID)
 				return
 			}
 		}
 	}
+}
+
+func commandEnter(mods ui.Modifiers, key ui.Key) bool {
+	return key == ui.KeyEnter && (mods == ui.Ctrl || mods == ui.Shift)
 }
 
 // Plain Control letters are terminal editing/signalling keys. Application
@@ -177,8 +186,14 @@ func (a *App) performAction(action string) {
 	case "local":
 		a.local()
 	case "currentProperties":
-		if p != nil && p.profile.Kind != "blank" {
-			a.edit(p.profile)
+		if a.canEditCurrentProfile() {
+			if p.externalLaunch {
+				a.showLiveProperties()
+			} else if saved, ok := a.profileByID(p.profile.ID); ok {
+				a.edit(saved)
+			} else {
+				a.edit(p.profile)
+			}
 		}
 	case "liveProperties":
 		a.showLiveProperties()
@@ -380,7 +395,7 @@ func (a *App) shortcutCapture(c *ui.Context) {
 }
 func (h *applicationHub) installMenu() {
 	if runtime.GOOS == "windows" {
-		// The workspace renders the complete menu in its single header row.
+		// The workspace exposes the application menus from its tab strip.
 		mygo.App.SetMenu(nil)
 		return
 	}
@@ -398,8 +413,11 @@ func (h *applicationHub) menuItems() []*mygo.MenuItem {
 		}
 		acc := " "
 		bindings := h.config.Settings.KeyboardShortcuts.Bindings(id, runtime.GOOS)
-		if len(bindings) > 0 && !terminalControlShortcut(shortcutMods(bindings[0]), shortcutKey(bindings[0].KeyCode)) {
-			acc = bindings[0].Display(runtime.GOOS)
+		if len(bindings) > 0 {
+			mods, key := shortcutMods(bindings[0]), shortcutKey(bindings[0].KeyCode)
+			if !terminalControlShortcut(mods, key) && !(id == "connectSelected" && commandEnter(mods, key)) {
+				acc = bindings[0].Display(runtime.GOOS)
+			}
 		}
 		disabled := false
 		for _, a := range h.windows {

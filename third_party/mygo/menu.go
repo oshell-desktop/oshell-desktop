@@ -81,6 +81,7 @@ type MenuItem struct {
 	// before Click is called.
 	Checked bool
 	ToolTip string
+	Icon    *MenuIcon
 	Submenu []*MenuItem
 	// Click is called on the main thread when the item is chosen. On Linux
 	// and Windows, win is the window whose menu bar or context menu was
@@ -91,6 +92,9 @@ type MenuItem struct {
 	parent *Menu
 	sub    *Menu
 }
+
+// MenuIcon is the image displayed before a menu item's label.
+type MenuIcon = platform.MenuIcon
 
 // Menu is a list of menu items used as application menu, window menu,
 // context menu or tray menu.
@@ -396,6 +400,7 @@ func (it *MenuItem) snapshotLocked() *platform.MenuItem {
 		Visible:     !it.Hidden,
 		Checked:     it.Checked,
 		ToolTip:     it.ToolTip,
+		Icon:        it.Icon,
 	}
 	switch it.Type {
 	case MenuItemSeparator:

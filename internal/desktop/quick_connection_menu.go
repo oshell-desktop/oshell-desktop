@@ -3,19 +3,17 @@ package desktop
 import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
-	"golang.org/x/text/collate"
-	"golang.org/x/text/language"
 	"oshell-desktop/internal/core"
-	"sort"
 	"strings"
 )
 
 type quickConnectionNode struct {
-	label, id string
-	children  []*quickConnectionNode
+	label, id, kind string
+	children        []*quickConnectionNode
+	order           sessionSortKey
 }
 
-func quickConnectionTree(profiles []core.Profile) []*quickConnectionNode {
+func quickConnectionTree(profiles []core.Profile, pins map[string]bool) []*quickConnectionNode {
 	root := &quickConnectionNode{}
 	for _, p := range profiles {
 		if !p.QuickConnect {
@@ -34,27 +32,21 @@ func quickConnectionTree(profiles []core.Profile) []*quickConnectionNode {
 				}
 			}
 			if child == nil {
-				child = &quickConnectionNode{label: part}
+				pinned := node == root && pins["d:"+part]
+				child = &quickConnectionNode{label: part, order: sessionSortKey{name: part, folder: true, pinned: pinned}}
 				node.children = append(node.children, child)
 			}
 			node = child
 		}
-		kind := strings.ToUpper(p.Kind)
-		if p.Kind == "local" {
-			kind = "本地"
-		}
-		node.children = append(node.children, &quickConnectionNode{label: p.Name + " · " + kind, id: p.ID})
+		pinned := p.Group == "" && pins[pinKey(sessionRow{profile: p})]
+		node.children = append(node.children, &quickConnectionNode{
+			label: p.Name, id: p.ID, kind: p.Kind,
+			order: sessionSortKey{name: p.Name, pinned: pinned},
+		})
 	}
-	order := collate.New(language.Und, collate.Numeric)
 	var arrange func(*quickConnectionNode)
 	arrange = func(node *quickConnectionNode) {
-		sort.SliceStable(node.children, func(i, j int) bool {
-			l, r := node.children[i], node.children[j]
-			if (l.id == "") != (r.id == "") {
-				return l.id == ""
-			}
-			return order.CompareString(l.label, r.label) < 0
-		})
+		sortSessionList(node.children, func(n *quickConnectionNode) sessionSortKey { return n.order })
 		for _, n := range node.children {
 			arrange(n)
 		}
@@ -70,30 +62,41 @@ func (a *App) connectQuickID(id string) {
 	}
 	a.request(p, 0)
 }
-func (a *App) populateQuickConnections(menu *ui.Menu, nodes []*quickConnectionNode) {
+func (n *quickConnectionNode) icon(dark bool) *ui.MenuIcon {
+	return sessionIconFor(n.kind, false, n.id == "", false).menuIcon(dark)
+}
+
+func (a *App) populateQuickConnections(menu *ui.Menu, nodes []*quickConnectionNode, dark bool) {
 	for _, n := range nodes {
 		if n.id == "" {
-			menu.Submenu(n.label, func(child *ui.Menu) { a.populateQuickConnections(child, n.children) })
-		} else if menu.Item(n.label).Chosen() {
+			menu.Submenu(n.label, func(child *ui.Menu) { a.populateQuickConnections(child, n.children, dark) }).Icon(n.icon(dark))
+		} else if menu.ItemWithID(n.id, n.label).Icon(n.icon(dark)).Chosen() {
 			a.connectQuickID(n.id)
 		}
 	}
 }
 func (h *applicationHub) nativeQuickConnectionMenu() *mygo.MenuItem {
+	dark := interfaceDark(h.config.Settings)
 	var items func([]*quickConnectionNode) []*mygo.MenuItem
 	items = func(nodes []*quickConnectionNode) []*mygo.MenuItem {
 		var out []*mygo.MenuItem
 		for _, n := range nodes {
 			if n.id == "" {
-				out = append(out, &mygo.MenuItem{Label: n.label, Submenu: items(n.children)})
+				out = append(out, &mygo.MenuItem{Label: n.label, Icon: n.icon(dark), Submenu: items(n.children)})
 			} else {
 				id := n.id
-				out = append(out, h.workspaceMenuItem(n.label, func(a *App) { a.connectQuickID(id) }))
+				item := h.workspaceMenuItem(n.label, func(a *App) { a.connectQuickID(id) })
+				item.Icon = n.icon(dark)
+				out = append(out, item)
 			}
 		}
 		return out
 	}
-	children := items(quickConnectionTree(h.config.Profiles))
+	var pins map[string]bool
+	if len(h.windows) > 0 {
+		pins = h.windows[0].localUI.Pins
+	}
+	children := items(quickConnectionTree(h.config.Profiles, pins))
 	if len(children) == 0 {
 		children = append(children, &mygo.MenuItem{Label: "暂无快捷会话", Disabled: true})
 	}

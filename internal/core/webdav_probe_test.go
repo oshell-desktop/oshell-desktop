@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -31,6 +32,10 @@ func TestWebDAVProbeExistingCollectionAndFailures(t *testing.T) {
 					return
 				}
 				if r.Method == "PROPFIND" {
+					if scenario == "weak-etag" && r.URL.Path == "/dav/oshell-vault.json" {
+						w.WriteHeader(405)
+						return
+					}
 					if r.URL.Path != "/dav/oshell/" || r.Header.Get("Depth") != "0" {
 						t.Error("wrong directory probe")
 					}
@@ -42,7 +47,7 @@ func TestWebDAVProbeExistingCollectionAndFailures(t *testing.T) {
 				}
 				if scenario == "weak-etag" {
 					w.Header().Set("ETag", `W/"weak"`)
-					w.WriteHeader(200)
+					w.Write([]byte(`{"format":"OShell.shared-vault"}`))
 					return
 				}
 				w.WriteHeader(404)
@@ -53,7 +58,13 @@ func TestWebDAVProbeExistingCollectionAndFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			transport.client.Transport = server.Client().Transport
-			err = transport.Probe(context.Background())
+			status, err := transport.ProbeStatus(context.Background())
+			if scenario == "weak-etag" {
+				if err != nil || !strings.Contains(status, "只读") {
+					t.Fatal(status, err)
+				}
+				return
+			}
 			if scenario == "empty" {
 				if err != nil || requests != 3 {
 					t.Fatal(err, requests)
@@ -65,9 +76,6 @@ func TestWebDAVProbeExistingCollectionAndFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			want := scenario
-			if want == "weak-etag" {
-				want = "etag"
-			}
 			if failure.Kind != want {
 				t.Fatal(failure.Kind)
 			}

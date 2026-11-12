@@ -23,7 +23,7 @@ func TestReleaseSelection(t *testing.T) {
 	source := UpdateSource{Repository: DefaultUpdateRepository}
 	for _, target := range []string{"windows-amd64", "linux-amd64"} {
 		t.Run(target, func(t *testing.T) {
-			asset := releaseAsset{Name: releaseAssetName(target), Size: 100, State: "uploaded", Digest: "sha256:" + strings.Repeat("a", 64)}
+			asset := releaseAsset{Name: ReleaseAssetName(target), Size: 100, State: "uploaded", Digest: "sha256:" + strings.Repeat("a", 64)}
 			asset.URL = "https://github.com/" + source.Repository + "/releases/download/v0.3.2/" + asset.Name
 			base := githubRelease{Tag: "v0.3.2", Assets: []releaseAsset{asset}}
 			for _, test := range []struct {
@@ -265,7 +265,7 @@ func TestPortableBuiltArchives(t *testing.T) {
 			}
 			p.Files = nil
 			u := &PortableUpdate{plan: p}
-			if e := u.extract(context.Background(), filepath.Join(root, releaseAssetName(target)), target); e != nil {
+			if e := u.extract(context.Background(), filepath.Join(root, ReleaseAssetName(target)), target); e != nil {
 				t.Fatal(e)
 			}
 			if len(u.plan.Files) == 0 {

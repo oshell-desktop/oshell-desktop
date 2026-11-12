@@ -60,7 +60,7 @@ func (a *App) testWebDAVConnection() {
 	go func() {
 		started := time.Now()
 		webdav := transport.(*core.WebDAVTransport)
-		err := webdav.Probe(ctx)
+		status, err := webdav.ProbeStatus(ctx)
 		directory := ""
 		if err == nil {
 			if resolved, resolveErr := webdav.SyncDirectory(ctx); resolveErr != nil {
@@ -84,7 +84,7 @@ func (a *App) testWebDAVConnection() {
 			if err != nil {
 				f.probeStatus = err.Error()
 			} else {
-				f.probeStatus = "连接正常；同步目录：" + directory + "。点击应用保存；实际写入仍校验版本条件。"
+				f.probeStatus = "连接正常；同步目录：" + directory + "。" + status + "。点击应用保存。"
 			}
 			if logErr != nil {
 				f.logIssue = logErr.Error()

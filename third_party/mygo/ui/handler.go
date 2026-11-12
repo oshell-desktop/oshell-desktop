@@ -51,6 +51,7 @@ const (
 
 // InputEvent is input an element takes as it comes (HandleInput).
 type InputEvent struct {
+	pointerTarget *state
 	// Unshifted identifies a layout-aware printable key. On key-down Text is
 	// its synchronous IME commit (possibly empty for Ctrl/Alt shortcuts).
 	// A zero value retains the platform's ordinary key-then-text path.
@@ -93,6 +94,15 @@ type InputEvent struct {
 	// down the content.
 	DX, DY  float32
 	Precise bool
+}
+
+// FocusPointerTarget gives the focusable control receiving this pointer press
+// keyboard focus immediately. Call it from HandleInput when a secondary press
+// starts editing. Other event kinds have no pointer target.
+func (ev InputEvent) FocusPointerTarget() {
+	if s := ev.pointerTarget; s != nil && s.flags&flagFocusable != 0 {
+		s.rt.focusFromPointer(s.id)
+	}
 }
 
 // HandleInput has fn take the element's input as it comes, on the main

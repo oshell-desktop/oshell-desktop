@@ -87,6 +87,12 @@ func (a *App) updateSettingsView(c *ui.Context) {
 		version = "开发构建"
 	}
 	ui.Text(c, "当前版本："+version+" · "+runtime.GOOS+" / "+runtime.GOARCH).TextColor(c.Theme().TextMuted)
+	if state.status != "" {
+		ui.Text(c, state.status).Wrap()
+	}
+	if state.total > 0 && state.busy {
+		ui.Text(c, fmt.Sprintf("%d / %d KiB", state.downloaded/1024, state.total/1024))
+	}
 	ui.TextInput(c, &settings.UpdateRepository).Label("更新仓库").Placeholder("owner/repo 或 https://github.com/owner/repo")
 	ui.Checkbox(c, &settings.AutomaticUpdateChecks, "每天自动检查更新（安装前仍需确认）")
 	passwordInput(c, &state.tokenDraft).Label("私有仓库访问令牌（可选）").Placeholder("仅本机加密保存，已保存令牌不回显")
@@ -97,7 +103,7 @@ func (a *App) updateSettingsView(c *ui.Context) {
 			ui.Text(c, "已保存访问令牌").TextColor(c.Theme().TextMuted)
 		}
 	})
-	ui.Text(c, "从静态更新信息获取正式版本，并用内置公钥校验元数据及安装包签名。私有仓库通过已签名的 latest.json 附件更新，令牌需要 Contents 读取权限。安装会关闭连接和传输并重新启动；保留配置、凭据，启动失败自动回滚。").Wrap()
+	ui.Text(c, "从 GitHub Release 检查最新正式版。确认更新后将下载、验签并重新启动。安装前会提示关闭活动连接和传输。私有仓库需要 Contents 读取权限。").Wrap()
 	ui.Row(c).Gap(8).Children(func() {
 		ui.Button(c, "检查更新").Disabled(state.busy || state.confirming).OnClick(func() {
 			if settings.UpdateRepository != updateRepository(a.config.Settings.UpdateRepository) {
@@ -107,7 +113,7 @@ func (a *App) updateSettingsView(c *ui.Context) {
 			a.checkForUpdates(false)
 		})
 		if state.candidate != nil && state.prepared == nil {
-			ui.Button(c, "下载更新").Disabled(state.busy || state.confirming).OnClick(a.downloadUpdate)
+			ui.Button(c, "仅下载更新").Disabled(state.busy || state.confirming).OnClick(func() { a.downloadUpdate(false) })
 		}
 		if state.prepared != nil {
 			ui.PrimaryButton(c, "安装并重新启动…").Disabled(state.busy || state.confirming).OnClick(a.installUpdate)
@@ -125,12 +131,6 @@ func (a *App) updateSettingsView(c *ui.Context) {
 			})
 		}
 	})
-	if state.status != "" {
-		ui.Text(c, state.status).Wrap()
-	}
-	if state.total > 0 && state.busy {
-		ui.Text(c, fmt.Sprintf("%d / %d KiB", state.downloaded/1024, state.total/1024))
-	}
 	if state.candidate != nil {
 		ui.Text(c, "新版本："+state.candidate.Version).Bold()
 		ui.Text(c, state.candidate.Notes).Wrap()
@@ -203,7 +203,9 @@ func (a *App) checkForUpdates(automatic bool) {
 		state.candidate = nil
 	}
 	state.busy = true
-	state.status = "正在检查签名更新…"
+	state.candidate = nil
+	state.downloaded, state.total = 0, 0
+	state.status = "正在检查 GitHub Release…"
 	ctx, cancel := context.WithCancel(context.Background())
 	state.cancel = cancel
 	cache := state.cache
@@ -219,7 +221,7 @@ func (a *App) checkForUpdates(automatic bool) {
 			}
 			state.candidate = candidate
 			if candidate == nil {
-				state.status = "当前已是最新版本"
+				state.status = "当前版本 " + version + "，GitHub Release 没有更高的正式版本"
 			} else {
 				state.status = "发现可用更新 " + candidate.Version
 				if !automatic {
@@ -238,7 +240,7 @@ func (a *App) updateSourceStillCurrent() bool {
 	source, e := core.ParseUpdateSource(repository)
 	return e == nil && strings.EqualFold(source.Repository, state.source)
 }
-func (a *App) downloadUpdate() {
+func (a *App) downloadUpdate(install bool) {
 	state := a.updateState()
 	if !a.updateSourceStillCurrent() {
 		state.status = "更新仓库已变化，请重新检查"
@@ -272,6 +274,9 @@ func (a *App) downloadUpdate() {
 			state.prepared = prepared
 			a.refreshMenu()
 			state.status = "更新已准备好，安装前会确认关闭活动会话"
+			if install {
+				a.installUpdate()
+			}
 		})
 	}()
 }
@@ -473,8 +478,7 @@ func (a *App) invokeUpdater() {
 	if a.hub != nil && a.hub.settingsOwner != nil {
 		owner = a.hub.settingsOwner
 	}
-	owner.features.settingsTab = 4
-	owner.openSettings()
+	owner.showPreferenceSection(4)
 	if owner.updateState().prepared != nil {
 		owner.installUpdate()
 	} else {
@@ -524,11 +528,10 @@ func (a *App) updateToolbar(c *ui.Context) {
 		label = "安装更新"
 	}
 	text := label
-	width, _ := c.Size()
-	if width < 1000 {
+	if w, _ := c.Size(); w < 1180 {
 		text = ""
 	}
-	toolButton(c, label, arrowUpIcon, text).Disabled(state.busy || state.confirming).OnClick(a.invokeUpdater)
+	headerButton(c, label, downloadIcon, text, false, state.prepared != nil).Disabled(state.busy || state.confirming).OnClick(a.invokeUpdater)
 }
 func (a *App) confirmAvailableUpdate() {
 	state := a.updateState()
@@ -538,11 +541,15 @@ func (a *App) confirmAvailableUpdate() {
 	}
 	state.confirming = true
 	go func() {
-		result, err := showUpdateConfirmation(mygo.MessageOptions{Parent: a.preferencesWindow, Type: mygo.MessageQuestion, Title: "发现新版本", Message: "下载 OShell Desktop " + candidate.Version + "？", Detail: candidate.Notes, Buttons: []string{"稍后", "下载更新"}, DefaultButton: 0, CancelButton: 0})
+		result, err := showUpdateConfirmation(mygo.MessageOptions{Parent: a.preferencesWindow, Type: mygo.MessageQuestion, Title: "发现新版本", Message: "更新到 OShell Desktop " + candidate.Version + " 并重新启动？", Detail: candidate.Notes, Buttons: []string{"稍后", "下载并安装"}, DefaultButton: 0, CancelButton: 0})
 		a.updateMain(func() {
 			state.confirming = false
-			if err == nil && result.Button == 1 && state.candidate == candidate && a.updateSourceStillCurrent() {
-				a.downloadUpdate()
+			if err != nil {
+				state.status = "无法显示更新确认：" + err.Error()
+				return
+			}
+			if result.Button == 1 && state.candidate == candidate && a.updateSourceStillCurrent() {
+				a.downloadUpdate(true)
 			}
 		})
 	}()

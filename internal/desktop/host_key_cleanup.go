@@ -44,7 +44,7 @@ func (a *App) hostKeyCleanupDialog(c *ui.Context) {
 			}
 			ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 				ui.Button(c, "取消").OnClick(func() { a.hostKeyCleanupOpen = false })
-				ui.Button(c, "确认清理").OnClick(func() {
+				clean := func(reconnect bool) {
 					if err := a.trust.RemoveHostKey(e); err != nil {
 						a.hostKeyCleanupError = err.Error()
 						return
@@ -53,7 +53,12 @@ func (a *App) hostKeyCleanupDialog(c *ui.Context) {
 					p.status = "连接失败：旧主机密钥已清理，请重新连接并核对新指纹"
 					a.status = "旧主机密钥已清理，未信任新密钥"
 					a.hostKeyCleanupOpen = false
-				})
+					if reconnect {
+						a.reconnectPane(p)
+					}
+				}
+				ui.Button(c, "确认清理").OnClick(func() { clean(false) })
+				ui.PrimaryButton(c, "清理并重新连接").OnClick(func() { clean(true) })
 			})
 		})
 	})

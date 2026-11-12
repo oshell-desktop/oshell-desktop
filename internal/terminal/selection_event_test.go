@@ -2,10 +2,65 @@ package terminal
 
 import (
 	"fmt"
+	"net"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 )
+
+func TestLiveOutputDuringMouseSelection(t *testing.T) {
+	loadLib(t)
+	for _, end := range []string{"release", "cancel", "hide", "remote mouse"} {
+		t.Run(end, func(t *testing.T) {
+			conn, remote := net.Pipe()
+			defer remote.Close()
+			output := make(chan struct{}, 2)
+			term, err := New(Options{Conn: conn, CopyOnSelect: true, OnActivity: func() { output <- struct{}{} }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer term.Close()
+			tt := ui.NewTester(func(c *ui.Context) { View(c, term).Fill().AutoFocus() }, 320, 200)
+			term.Feed([]byte("abcdefghij"))
+			<-output
+			if end == "remote mouse" {
+				term.Feed([]byte("\x1b[?1002h\x1b[?1006h"))
+			}
+			tt.Frame()
+			x, y := cellCenter(term, 1, 0)
+			beginCharacterDrag(tt, x, y)
+			x, y = cellCenter(term, 4, 0)
+			tt.Move(x, y)
+			if _, err := remote.Write([]byte("\rXXXXXXXXXX")); err != nil {
+				t.Fatal(err)
+			}
+			if end != "remote mouse" {
+				select {
+				case <-output:
+					t.Fatal("display changed during local selection")
+				case <-time.After(50 * time.Millisecond):
+				}
+			}
+			switch end {
+			case "release":
+				tt.Release(x, y)
+				if s := tt.Clipboard(); s != "bcd" {
+					t.Fatalf("copied %q", s)
+				}
+			case "cancel":
+				tt.CancelPointer()
+			case "hide":
+				term.SetVisible(false)
+			}
+			select {
+			case <-output:
+			case <-time.After(2 * time.Second):
+				t.Fatal("live output remained suspended")
+			}
+		})
+	}
+}
 
 func TestSelectionStartsAtFirstDragEvent(t *testing.T) {
 	for _, tc := range []struct {

@@ -204,6 +204,7 @@ var (
 	gdkPixbufLoaderWrite        func(l ptr, buf unsafe.Pointer, n uintptr, err *ptr) bool
 	gdkPixbufLoaderClose        func(l ptr, err *ptr) bool
 	gdkPixbufLoaderGetPixbuf    func(l ptr) ptr
+	gdkPixbufScaleSimple        func(p ptr, width, height, interp int32) ptr
 	gdkPixbufSaveToBufferv      func(p ptr, buf *ptr, size *uintptr, typ *byte, keys, values ptr, err *ptr) bool
 )
 
@@ -289,6 +290,10 @@ var (
 	gtkMenuBarNew                       func() ptr
 	gtkMenuNew                          func() ptr
 	gtkMenuItemNewWithLabel             func(label *byte) ptr
+	gtkImageMenuItemNewWithLabel        func(label *byte) ptr
+	gtkImageMenuItemSetImage            func(item, image ptr)
+	gtkImageMenuItemSetAlwaysShowImage  func(item ptr, show bool)
+	gtkImageNewFromPixbuf               func(pixbuf ptr) ptr
 	gtkMenuItemSetLabel                 func(item ptr, label *byte)
 	gtkMenuItemSetSubmenu               func(item, menu ptr)
 	gtkMenuItemGetSubmenu               func(item ptr) ptr
@@ -619,6 +624,7 @@ func load() error {
 	mustBind(p, &gdkPixbufLoaderWrite, "gdk_pixbuf_loader_write")
 	mustBind(p, &gdkPixbufLoaderClose, "gdk_pixbuf_loader_close")
 	mustBind(p, &gdkPixbufLoaderGetPixbuf, "gdk_pixbuf_loader_get_pixbuf")
+	mustBind(p, &gdkPixbufScaleSimple, "gdk_pixbuf_scale_simple")
 	mustBind(p, &gdkPixbufSaveToBufferv, "gdk_pixbuf_save_to_bufferv")
 
 	t := libGTK
@@ -690,6 +696,10 @@ func load() error {
 	mustBind(t, &gtkMenuBarNew, "gtk_menu_bar_new")
 	mustBind(t, &gtkMenuNew, "gtk_menu_new")
 	mustBind(t, &gtkMenuItemNewWithLabel, "gtk_menu_item_new_with_label")
+	mustBind(t, &gtkImageMenuItemNewWithLabel, "gtk_image_menu_item_new_with_label")
+	mustBind(t, &gtkImageMenuItemSetImage, "gtk_image_menu_item_set_image")
+	mustBind(t, &gtkImageMenuItemSetAlwaysShowImage, "gtk_image_menu_item_set_always_show_image")
+	mustBind(t, &gtkImageNewFromPixbuf, "gtk_image_new_from_pixbuf")
 	mustBind(t, &gtkMenuItemSetLabel, "gtk_menu_item_set_label")
 	mustBind(t, &gtkMenuItemSetSubmenu, "gtk_menu_item_set_submenu")
 	mustBind(t, &gtkMenuItemGetSubmenu, "gtk_menu_item_get_submenu")

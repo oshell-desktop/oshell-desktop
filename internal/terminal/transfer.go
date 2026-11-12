@@ -56,6 +56,11 @@ func (t *Terminal) startUpload(paths []string, timeout time.Duration) error {
 		return fmt.Errorf("当前终端无法启动 rz 上传")
 	}
 	c := t.transfers
+	// Starting a local upload takes over input. Release a reader that may be
+	// holding the detector lock while its displayed text waits for selection.
+	t.mu.Lock()
+	t.resumeSelectionLocked()
+	t.mu.Unlock()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.active != nil || !t.Available() {
@@ -123,7 +128,7 @@ func (c *transferController) process(data []byte) {
 		}
 		if session.waiting {
 			text, upload, protocol := c.detector.consume(data)
-			c.term.write(text)
+			c.term.writeOutput(text, true)
 			if protocol == nil {
 				return
 			}
@@ -144,12 +149,12 @@ func (c *transferController) process(data []byte) {
 		data = data[n:]
 	}
 	if !c.term.transferEnabled.Load() {
-		c.term.write(c.detector.flush())
-		c.term.write(data)
+		c.term.writeOutput(c.detector.flush(), true)
+		c.term.writeOutput(data, true)
 		return
 	}
 	text, upload, protocol := c.detector.consume(data)
-	c.term.write(text)
+	c.term.writeOutput(text, true)
 	if protocol != nil {
 		c.start(upload, protocol)
 	}

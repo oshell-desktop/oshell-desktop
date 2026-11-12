@@ -14,6 +14,7 @@ import (
 
 // Groups own existing tabs, never connections. A hidden leaf stays alive.
 type tabGroup struct {
+	sharedLayout     string
 	lastRevealedTab  string
 	dragOver         bool
 	scroll           ui.ScrollState
@@ -360,6 +361,7 @@ func (a *App) arrangeTabs(mode string) {
 		}
 		t.group = leaf.group.id
 		leaf.group.active = t.id
+		leaf.group.sharedLayout = ""
 		leaves = append(leaves, leaf)
 	}
 	var build func([]*groupNode, int) *groupNode
@@ -566,6 +568,9 @@ func (a *App) groupWorkspace(c *ui.Context, n *groupNode) {
 		ui.Column(c).Fill().Center().Gap(12).Background(c.Theme().Background).Children(func() {
 			ui.Text(c, "所有标签组已隐藏，连接继续运行。")
 			ui.Button(c, "显示全部标签组").OnClick(a.showAllGroups)
+			if !a.focusFullscreen.chrome {
+				a.workspaceMenus(c)
+			}
 		})
 		return
 	}
@@ -628,12 +633,8 @@ func (a *App) groupWorkspace(c *ui.Context, n *groupNode) {
 			})
 		}
 		box.Children(func() {
-			if t := a.groupTab(g); t != nil {
-				if t.zoomed != nil {
-					a.nodeView(c, t, &node{id: t.zoomed.id, pane: t.zoomed})
-				} else {
-					a.nodeView(c, t, t.root)
-				}
+			if tabs := a.displayedGroupTabs(g); len(tabs) > 0 {
+				a.drawGroupTabs(c, g.sharedLayout, tabs, 0)
 			} else if len(a.groups.root.leaves()) == 1 && g.name == "" && len(a.tabs) == 0 {
 				a.welcome(c)
 			} else {
@@ -657,6 +658,42 @@ func (a *App) groupForNewTab() *tabGroup {
 	g.hidden = false
 	return g
 }
+
+// A split arrangement shares one tab strip. Keep the tab identities and
+// each tab's own split tree so selecting or merging them preserves sessions.
+func (a *App) displayedGroupTabs(g *tabGroup) []*tab {
+	if g.sharedLayout != "" {
+		return a.groupTabs(g)
+	}
+	if t := a.groupTab(g); t != nil {
+		return []*tab{t}
+	}
+	return nil
+}
+func (a *App) drawGroupTabs(c *ui.Context, mode string, tabs []*tab, depth int) {
+	if len(tabs) == 1 {
+		t := tabs[0]
+		if t.zoomed != nil {
+			a.nodeView(c.Key(t.id), t, &node{id: t.zoomed.id, pane: t.zoomed})
+		} else {
+			a.nodeView(c.Key(t.id), t, t.root)
+		}
+		return
+	}
+	vertical := mode == "vertical" || mode == "tile" && depth%2 == 1
+	var container ui.Element
+	if vertical {
+		container = ui.Column(c)
+	} else {
+		container = ui.Row(c)
+	}
+	mid := (len(tabs) + 1) / 2
+	container.Fill().Gap(1).Background(c.Theme().Border).Children(func() {
+		for _, part := range [][]*tab{tabs[:mid], tabs[mid:]} {
+			ui.Column(c.Key(part[0].id)).Grow(float32(len(part))).MinWidth(0).MinHeight(0).Clip().Children(func() { a.drawGroupTabs(c, mode, part, depth+1) })
+		}
+	})
+}
 func (a *App) visiblePanes() []*pane {
 	if a.workspaceLocked() || a.stopped.Load() || a.win != nil && (!a.win.IsVisible() || a.win.IsMinimized()) {
 		return nil
@@ -665,7 +702,7 @@ func (a *App) visiblePanes() []*pane {
 	var out []*pane
 	for _, g := range a.groups.root.leaves() {
 		if !g.hidden {
-			if t := a.groupTab(g); t != nil {
+			for _, t := range a.displayedGroupTabs(g) {
 				if t.zoomed != nil {
 					out = append(out, t.zoomed)
 				} else {

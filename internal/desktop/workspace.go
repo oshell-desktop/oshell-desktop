@@ -14,6 +14,10 @@ import (
 func (a *App) theme(c *ui.Context) { a.themeSettings(c, a.config.Settings) }
 
 func (a *App) themeSettings(c *ui.Context, settings core.Settings) {
+	c.SetTheme(professionalTheme(interfaceDark(settings)))
+}
+
+func interfaceDark(settings core.Settings) bool {
 	dark := settings.Dark
 	switch settings.InterfaceTheme {
 	case "dark":
@@ -25,7 +29,7 @@ func (a *App) themeSettings(c *ui.Context, settings core.Settings) {
 			dark = systemInterfaceDark(mygo.Theme.IsDark())
 		}
 	}
-	c.SetTheme(professionalTheme(dark))
+	return dark
 }
 func (a *App) view(c *ui.Context) {
 	defer a.resumeDeferredUpdate() // Modal teardown may happen after drain during this frame.
@@ -96,154 +100,6 @@ func (a *App) view(c *ui.Context) {
 	a.transferOverlays(c)
 	a.dialogs(c)
 }
-func (a *App) legacyToolbar(c *ui.Context) {
-	ui.Toolbar(c, func() {
-		ui.Button(c, "MCP").OnClick(a.showMCP)
-		toolButton(c, "会话管理", folderIcon, "会话管理").OnClick(a.openManager)
-		ui.MenuButton(c, "快捷连接", a.connectionMenu).Height(25).FontSize(12)
-		toolButton(c, "新建会话", plusIcon, "新建").OnClick(func() { a.edit(a.newProfile("ssh")) })
-		toolButton(c, "本地终端", terminalIcon, "本地").OnClick(a.local)
-		toolButton(c, "当前会话属性", settingsIcon, "").Disabled(a.activePane() == nil || (a.activePane().profile.Kind != "ssh" && !a.activePane().terminalOnly)).OnClick(func() { a.edit(a.activePane().profile) })
-		a.updateToolbar(c)
-		toolButton(c, "默认会话属性", settingsIcon, "").OnClick(a.showDefaults)
-		ui.MenuButton(c, "工具", func(m *ui.Menu) {
-			if m.Item("专注全屏 / 退出").Checked(a.focusFullscreen.requested).Chosen() {
-				a.toggleFocusFullscreen()
-			}
-			m.Separator()
-			if m.Item("同步键盘输入…").Checked(a.features.syncEnabled).Chosen() {
-				a.showSyncInput()
-			}
-			if m.Item("新建窗口").Chosen() && a.hub != nil {
-				a.hub.newWindow()
-			}
-			if m.Item("移动当前标签到新窗口").Disabled(a.activeTab() == nil).Chosen() {
-				a.moveTabToNewWindow()
-			}
-			if m.Item("显示快速发送栏").Checked(a.config.Settings.QuickSendVisible).Chosen() {
-				a.toggleQuickSend()
-			}
-			if m.Item("多行命令撰写…").Chosen() {
-				a.openComposer(a.quick, !a.features.operators.noReturn)
-			}
-			if m.Item("突出显示集…").Chosen() {
-				a.showHighlights()
-			}
-			if m.Item("本机网络工具").Chosen() {
-				a.newBlank()
-			}
-			if m.Item("当前会话空闲保活…").Disabled(!canEditLiveKeepAlive(a.activePane())).Chosen() {
-				a.showLiveProperties()
-			}
-			if m.Item("快速命令…").Chosen() {
-				a.openCommands()
-			}
-			if m.Item("共享代理管理…").Chosen() {
-				a.showProxyManager()
-			}
-			if m.Item("密码保护…").Chosen() {
-				a.showVault()
-			}
-			m.Separator()
-			if m.Item("复制 SSH 渠道（免认证）").Disabled(a.activePane() == nil || a.activePane().conn == nil).Chosen() {
-				a.cloneActive()
-			}
-			if m.Item("保存终端历史文本…").Disabled(a.activePane() == nil || a.activePane().term == nil).Chosen() {
-				a.exportScreen()
-			}
-			m.Separator()
-			if m.Item("导入会话…").Chosen() {
-				a.importProfiles()
-			}
-			m.Submenu("导入 SecureCRT", func(m *ui.Menu) {
-				if m.Item("选择 XML / INI 文件…").Chosen() {
-					a.importThirdParty("SecureCRT", false)
-				}
-				if m.Item("选择 Sessions 目录…").Chosen() {
-					a.importThirdParty("SecureCRT", true)
-				}
-			})
-			m.Submenu("导入 Xshell", func(m *ui.Menu) {
-				if m.Item("选择 XSH / XTS / ZIP 文件…").Chosen() {
-					a.importThirdParty("Xshell", false)
-				}
-				if m.Item("选择会话目录…").Chosen() {
-					a.importThirdParty("Xshell", true)
-				}
-			})
-			if m.Item("导出会话…").Chosen() {
-				a.exportProfiles()
-			}
-			m.Separator()
-			if m.Item("远程文件 · SFTP").Disabled(a.activePane() == nil || a.activePane().conn == nil).Chosen() {
-				a.toggleFiles()
-			}
-		}).Height(25).FontSize(12)
-		toolButton(c, "分屏", splitIcon, "").Disabled(a.activePane() == nil).Menu(func(m *ui.Menu) {
-			if m.Item("左右分屏").Chosen() {
-				a.splitActivePane(1)
-			}
-			if m.Item("放大 / 恢复当前分屏").Chosen() {
-				a.togglePaneZoom()
-			}
-			if m.Item("上一个分屏").Chosen() {
-				a.cyclePane(-1)
-			}
-			if m.Item("下一个分屏").Chosen() {
-				a.cyclePane(1)
-			}
-			if m.Item("上下分屏").Chosen() {
-				a.splitActivePane(2)
-			}
-		})
-		hiddenUnread := a.hiddenUnreadGroups()
-		groupLabel := "标签组"
-		hint := "新建、命名和显示/隐藏标签组"
-		if hiddenUnread > 0 {
-			groupLabel = fmt.Sprintf("标签组 · %d", hiddenUnread)
-			hint = fmt.Sprintf("%d 个隐藏标签组有新输出；连接继续运行", hiddenUnread)
-		}
-		groupButton := ui.MenuButton(c, groupLabel, a.groupsMenu).Label("标签组").Tooltip(hint).Height(25)
-		if hiddenUnread > 0 {
-			groupButton.TextColor(c.Theme().Accent)
-		}
-		ui.MenuButton(c, "排列", func(m *ui.Menu) {
-			a.arrangementMenu(m)
-			m.Separator()
-			if m.Item("均分左右").Chosen() {
-				a.arrangeActive("horizontal")
-			}
-			if m.Item("均分上下").Chosen() {
-				a.arrangeActive("vertical")
-			}
-			if m.Item("瓷砖平铺").Chosen() {
-				a.arrangeActive("tile")
-			}
-			m.Separator()
-			if m.Item("当前分屏移到独立标签").Chosen() {
-				a.detachActive()
-			}
-		}).Height(25).Disabled(len(a.tabs) == 0)
-		ui.Spacer(c)
-		toolButton(c, "搜索终端", searchIcon, "搜索").Disabled(a.activePane() == nil || a.activePane().term == nil).OnClick(a.openSearch)
-		logging := false
-		if p := a.activePane(); p != nil && p.term != nil {
-			var logError error
-			_, logging, logError = p.term.LogState()
-			if logError != nil {
-				a.status = "日志记录失败：" + logError.Error()
-			}
-		}
-		logLabel := "记录"
-		if logging {
-			logLabel = "停止记录"
-		}
-		toolButton(c, "记录终端日志", nil, logLabel).Disabled(a.activePane() == nil || a.activePane().term == nil).OnClick(a.toggleLog)
-		toolButton(c, "远程文件", folderIcon, "文件").Disabled(a.activePane() == nil || a.activePane().conn == nil).OnClick(a.toggleFiles)
-		toolButton(c, "设置", settingsIcon, "").OnClick(func() { a.openSettings() })
-		toolButton(c, "会话侧栏", sidebarIcon, "").OnClick(a.toggleSidebar)
-	}).Height(detailBarHeight).Padding(2, 6).Gap(5).Background(c.Theme().Background).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Label("主工具栏")
-}
 func (a *App) toggleFiles() {
 	if a.hub != nil {
 		a.hub.openFilesFromPane(a.activePane())
@@ -268,11 +124,11 @@ func (a *App) connectionMenu(m *ui.Menu) {
 		a.showQuickSwitch()
 	}
 	m.Separator()
-	tree := quickConnectionTree(a.presentationConfig().Profiles)
+	tree := quickConnectionTree(a.presentationConfig().Profiles, a.localUI.Pins)
 	if len(tree) == 0 {
 		m.Item("暂无快捷会话").Disabled(true)
 	} else {
-		a.populateQuickConnections(m, tree)
+		a.populateQuickConnections(m, tree, interfaceDark(a.config.Settings))
 	}
 	m.Separator()
 	if m.Item("管理会话…").Chosen() {
@@ -550,6 +406,9 @@ func (a *App) groupTabBar(c *ui.Context, g *tabGroup) {
 		tabBarButton(c, "新建标签", plusIcon).ContextMenu(backgroundMenu).Menu(func(m *ui.Menu) { a.activateGroup(g); a.newTabMenu(m) })
 		space := ui.Box(c).Grow(1).MinWidth(24).Height(30).Label("标签栏空白区域").ContextMenu(backgroundMenu)
 		a.tabStripDropSpace(space, g)
+		if g.id == a.groups.active && !a.focusFullscreen.chrome {
+			a.workspaceMenus(c)
+		}
 		tabBarButton(c, "所有标签", chevronIcon).ContextMenu(backgroundMenu).Disabled(len(tabs) == 0).Menu(func(m *ui.Menu) {
 			for _, t := range tabs {
 				title := t.name
@@ -645,8 +504,16 @@ func (a *App) sendBar(c *ui.Context) {
 			}
 		}).Width(166).Height(25).Label("快速发送范围")
 		input := ui.TextInput(c, &a.quick).Grow(1).MinWidth(0).Height(25).Label("快捷命令").Bind(&a.features.operators.quickFocus).Placeholder("输入命令，回车发送；右侧选择历史命令")
+		composing := input.Composing()
 		input.HandleInput(func(ev ui.InputEvent) bool {
-			if ev.Kind == ui.InputKeyDown && !input.Composing() && ev.Mods == 0 && (ev.Key == ui.KeyUp || ev.Key == ui.KeyDown) {
+			if ev.Kind != ui.InputKeyDown || composing {
+				return false
+			}
+			if commandEnter(ev.Mods, ev.Key) {
+				a.prepareSend()
+				return true
+			}
+			if ev.Mods == 0 && (ev.Key == ui.KeyUp || ev.Key == ui.KeyDown) {
 				a.navigateQuickHistory(ev.Key == ui.KeyUp)
 				return true
 			}

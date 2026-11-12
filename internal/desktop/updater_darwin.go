@@ -533,13 +533,10 @@ func (a *App) updateToolbar(c *ui.Context) {
 		label = "安装更新"
 	}
 	text := label
-	if a.win != nil {
-		w, _ := a.win.Size()
-		if w < 1000 {
-			text = ""
-		}
+	if w, _ := c.Size(); w < 1180 {
+		text = ""
 	}
-	toolButton(c, label, arrowUpIcon, text).Disabled(state.busy || state.confirming).OnClick(a.invokeUpdater)
+	headerButton(c, label, downloadIcon, text, false, state.prepared != nil).Disabled(state.busy || state.confirming).OnClick(a.invokeUpdater)
 }
 func (a *App) confirmAvailableUpdate() {
 	state := a.updateState()

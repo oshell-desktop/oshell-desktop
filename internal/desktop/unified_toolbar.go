@@ -2,6 +2,7 @@ package desktop
 
 import (
 	"fmt"
+	"path"
 	"runtime"
 	"strings"
 
@@ -9,96 +10,241 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// The extra 48 points on restore prevent a row from flickering near the threshold.
 func (a *App) toolbar(c *ui.Context) {
-	if runtime.GOOS == "darwin" {
-		a.legacyToolbar(c)
+	width, height := c.Size()
+	margin := float32(0)
+	if a.toolbarMinimal {
+		margin = 48
+	}
+	a.toolbarMinimal = width < 980+margin || height < 500+margin
+	if a.toolbarMinimal {
 		return
 	}
-	if p := a.activePane(); p != nil && p.term != nil {
-		if _, _, err := p.term.LogState(); err != nil {
+	labels := width >= 1180
+	text := func(value string) string {
+		if labels {
+			return value
+		}
+		return ""
+	}
+	p := a.activePane()
+	terminal := p != nil && p.term != nil
+	logging := false
+	if terminal {
+		_, active, err := p.term.LogState()
+		logging = active
+		if err != nil {
 			a.status = "日志记录失败：" + err.Error()
 		}
 	}
-	width, _ := c.Size()
-	compact := width < 1200
-	buttonText := func(text string) string {
-		if width < 1100 {
-			return ""
-		}
-		return text
-	}
 	ui.Toolbar(c, func() {
-		visible := a.sidebar.shown
+		action := func(label string, icon *ui.SVG, caption, id string) ui.Element {
+			return headerButton(c, label, icon, text(caption), false, false).OnClick(func() { a.performAction(id) })
+		}
+		menu := func(label string, icon *ui.SVG, build func(*ui.Menu)) ui.Element {
+			return headerButton(c, label, icon, "", true, false).Menu(build)
+		}
+		divider := func() { ui.Box(c).Width(1).Height(18).Shrink(0).Background(c.Theme().Border) }
 		hint := "显示会话侧栏"
-		if visible {
+		if a.sidebar.shown {
 			hint = "隐藏会话侧栏"
 		}
 		if a.localUI.SidebarShortcut.Valid() {
 			hint += "（" + a.localUI.SidebarShortcut.Display(runtime.GOOS) + "）"
 		}
-		sidebar := toolButton(c.Key("sidebar-toggle"), "会话侧栏", sidebarIcon, "").
-			Shrink(0).Role(ui.RoleToggleButton).Checked(visible).Tooltip(hint).
-			Disabled(a.passwordLocked() || a.modalActive()).OnClick(a.toggleSidebar)
-		if visible {
-			sidebar.Background(c.Theme().Selection)
-			if sidebar.Pressed() {
-				sidebar.Background(c.Theme().SurfacePressed)
-			} else if sidebar.Hovered() {
-				sidebar.Background(c.Theme().SurfaceHover)
-			}
-		}
-		toolButton(c, "会话管理", folderIcon, buttonText("会话管理")).Shrink(0).OnClick(func() { a.performAction("sessionManager") })
-		ui.MenuButton(c, "快捷连接", a.connectionMenu).Height(28).FontSize(12).Shrink(0)
-		toolButton(c, "新建会话", plusIcon, buttonText("新建")).Shrink(0).OnClick(func() { a.performAction("newSession") })
-		toolButton(c, "本地终端", terminalIcon, buttonText("本地")).Shrink(0).OnClick(func() { a.performAction("local") })
-		toolButton(c, "文件管理", folderIcon, buttonText("文件管理")).Shrink(0).OnClick(func() { a.performAction("fileManager") })
-		ui.Box(c).Width(1).Height(18).Background(c.Theme().Border).Shrink(0)
-		ui.MenuButton(c, "工具", func(m *ui.Menu) { a.headerMenu(m, "工具") }).Height(28).FontSize(12).Shrink(0)
-		label := "标签组"
+		headerButton(c, "会话侧栏", sidebarIcon, "", false, a.sidebar.shown).Role(ui.RoleToggleButton).Checked(a.sidebar.shown).Tooltip(hint).Disabled(a.modalActive()).OnClick(a.toggleSidebar)
+		action("会话管理", catalogIcon, "会话管理", "sessionManager")
+		menu("快捷连接", quickIcon, a.connectionMenu)
+		action("新建会话", newSessionIcon, "新建", "newSession")
+		action("本地终端", terminalIcon, "本地", "local")
+		action("文件管理", folderIcon, "文件管理", "fileManager")
+		divider()
+		menu("分屏", splitIcon, a.splitActionsMenu).Disabled(p == nil || p.closed)
+		groups := menu("标签组", groupsIcon, a.groupsMenu)
 		if n := a.hiddenUnreadGroups(); n > 0 {
-			label = fmt.Sprintf("标签组 · %d", n)
+			groups.Background(c.Theme().Selection).Tooltip(fmt.Sprintf("%d 个隐藏标签组有新输出", n))
 		}
-		groups := ui.MenuButton(c, label, a.groupsMenu).Label("标签组").Tooltip("新建、命名和显示/隐藏标签组").Height(28).FontSize(12).Shrink(0)
-		if a.hiddenUnreadGroups() > 0 {
-			groups.TextColor(c.Theme().Accent)
+		menu("分组排列", groupLayoutIcon, a.arrangementMenu).Disabled(len(a.tabs) == 0)
+		menu("分屏排列", paneLayoutIcon, a.headerPaneMenu).Disabled(len(a.tabs) == 0)
+		divider()
+		action("搜索终端", searchIcon, "搜索", "find").Disabled(!terminal)
+		caption, icon, hint := "记录", recordIcon, "开始记录终端日志"
+		if logging {
+			caption, icon, hint = "停止记录", stopIcon, "停止记录终端日志"
 		}
-		if compact {
-			ui.MenuButton(c, "排列", func(m *ui.Menu) {
-				m.Submenu("分组排列", a.arrangementMenu)
-				m.Submenu("分屏排列", a.headerPaneMenu)
-			}).Tooltip("标签排列、创建分屏和分屏布局").Height(28).FontSize(12).Shrink(0).Disabled(len(a.tabs) == 0)
-		} else {
-			ui.MenuButton(c, "分组排列", a.arrangementMenu).Tooltip("排列当前组的标签").Height(28).FontSize(12).Shrink(0).Disabled(len(a.tabs) == 0)
-			ui.MenuButton(c, "分屏排列", a.headerPaneMenu).Tooltip("按窗口内所有标签重新排列分屏").Height(28).FontSize(12).Shrink(0).Disabled(len(a.tabs) == 0)
-		}
-		a.headerEditButton(c)
-		ui.MenuButton(c, "更多", func(m *ui.Menu) {
-			for _, title := range []string{"会话", "视图", "窗口", "快速命令", "OShell"} {
-				m.Submenu(title, func(child *ui.Menu) { a.headerMenu(child, title) })
+		headerButton(c, "记录终端日志", icon, text(caption), false, logging).Role(ui.RoleToggleButton).Checked(logging).Tooltip(hint).Disabled(!terminal).OnClick(func() { a.performAction("logging") })
+		menu("工具", toolsIcon, func(m *ui.Menu) { a.headerMenu(m, "工具") })
+		mcpOpen := a.mcp.open || a.mcp.window != nil
+		headerButton(c, "MCP 控制中心", mcpIcon, "MCP", false, mcpOpen).Role(ui.RoleToggleButton).Checked(mcpOpen).OnClick(func() {
+			if a.mcp.window != nil {
+				a.mcp.window.Close()
+			} else if a.mcp.open {
+				a.closeMCPPanel()
+			} else {
+				a.showMCP()
 			}
-		}).Tooltip("会话属性、视图、窗口、快速命令和应用菜单").Height(28).FontSize(12).Shrink(0)
+		})
+		if a.features.syncEnabled {
+			headerButton(c, "停止同步输入", stopIcon, "", false, true).Tooltip(fmt.Sprintf("正在向 %d 个终端同步输入，点击停止", len(a.features.syncTargets))).OnClick(func() { a.performAction("stopSync") })
+		}
 		ui.Spacer(c)
-		ui.Button(c, "MCP").Label("MCP 控制中心").Height(28).FontSize(12).Shrink(0).OnClick(a.showMCP)
+		ui.Row(c.Key("properties")).Gap(0).Shrink(0).Children(func() {
+			headerButton(c, "当前会话属性", propertiesIcon, "", false, false).Tooltip("编辑当前会话属性").Disabled(!a.canEditCurrentProfile()).OnClick(func() { a.performAction("currentProperties") })
+			headerButton(c, "选择会话属性", chevronIcon, "", false, false).Width(28).Menu(a.propertiesMenu)
+		})
+		a.proxyToolbar(c)
 		a.syncToolbar(c)
 		a.updateToolbar(c)
-		p := a.activePane()
-		hasTerminal := p != nil && p.term != nil
-		toolButton(c, "搜索终端", searchIcon, buttonText("搜索")).Shrink(0).Disabled(!hasTerminal).OnClick(func() { a.performAction("find") })
-		logging := false
-		if hasTerminal {
-			_, logging, _ = p.term.LogState()
+		action("设置", gearIcon, "", "settings")
+	}).Height(40).Padding(0, 8).Gap(8).AlignItems(ui.Center).Background(c.Theme().Background).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Label("主工具栏")
+}
+
+func headerButton(c *ui.Context, label string, icon *ui.SVG, text string, arrow, selected bool) ui.Element {
+	b := ui.Button(c.Key(label), "").Label(label).Tooltip(label).Height(28).MinWidth(28).Shrink(0).Padding(2, 6).Gap(4).Radius(4).BorderWidth(0)
+	switch {
+	case b.Pressed():
+		b.Background(c.Theme().SurfacePressed)
+	case b.Hovered() || b.FocusVisible():
+		b.Background(c.Theme().SurfaceHover)
+	case selected:
+		b.Background(c.Theme().Selection)
+	default:
+		b.Background(ui.Transparent)
+	}
+	return b.Children(func() {
+		ui.Icon(c, icon).Size(14, 14)
+		if text != "" {
+			ui.Text(c, text).FontSize(12).SingleLine()
 		}
-		logText, logHint := "记录", "开始记录终端日志"
-		if logging {
-			logText, logHint = "停止记录", "停止记录终端日志"
+		if arrow {
+			ui.Icon(c, chevronIcon).Size(10, 10)
 		}
-		logButton := toolButton(c, "记录终端日志", recordIcon, buttonText(logText)).Shrink(0).Role(ui.RoleToggleButton).Checked(logging).
-			Tooltip(logHint).Disabled(!hasTerminal).OnClick(func() { a.performAction("logging") })
-		if logging {
-			logButton.Background(c.Theme().Selection)
+	})
+}
+
+func (a *App) canEditCurrentProfile() bool {
+	p := a.activePane()
+	return !a.passwordLocked() && p != nil && !p.closed && (p.profile.Kind == "ssh" || p.terminalOnly)
+}
+
+func (a *App) propertiesMenu(m *ui.Menu) {
+	if m.Item("当前会话").Disabled(!a.canEditCurrentProfile()).Chosen() {
+		a.performAction("currentProperties")
+	}
+	if m.Item("默认会话").Disabled(a.passwordLocked()).Chosen() {
+		a.performAction("defaults")
+	}
+	if a.passwordLocked() {
+		return
+	}
+	m.Separator()
+	entries, folders := sidebarEntries(a.presentationConfig(), "")
+	type item struct {
+		folder string
+		entry  sidebarEntry
+		order  sessionSortKey
+	}
+	children := map[string][]item{}
+	for folder := range folders {
+		if folder != "" {
+			parent := managerParent(folder)
+			children[parent] = append(children[parent], item{folder: folder, order: sessionSortKey{name: path.Base(folder), folder: true, pinned: parent == "" && a.localUI.Pins["d:"+folder]}})
 		}
-		toolButton(c, "设置", settingsIcon, "").Shrink(0).OnClick(func() { a.performAction("settings") })
-	}).Height(detailBarHeight).Padding(2, 6).Gap(3).Background(c.Theme().Background).TextColor(c.Theme().Text).BorderWidth(0, 0, 1, 0).BorderColor(c.Theme().Border).Label("主工具栏")
+	}
+	for _, e := range entries {
+		children[e.group] = append(children[e.group], item{entry: e, order: sessionSortKey{name: e.name, pinned: e.group == "" && a.localUI.Pins["p:"+strings.ToLower(e.id)]}})
+	}
+	dark := interfaceDark(a.config.Settings)
+	var draw func(*ui.Menu, string)
+	draw = func(menu *ui.Menu, parent string) {
+		rows := children[parent]
+		if len(rows) == 0 {
+			menu.Item("暂无会话").Disabled(true)
+			return
+		}
+		sortSessionList(rows, func(row item) sessionSortKey { return row.order })
+		for _, row := range rows {
+			if row.folder != "" {
+				menu.Submenu(row.order.name, func(sub *ui.Menu) { draw(sub, row.folder) }).Icon(sessionIconFor("", row.folder == "Links", true, false).menuIcon(dark))
+				continue
+			}
+			e := row.entry
+			if menu.ItemWithID(e.id, e.name).Icon(sidebarSessionStyle(e).menuIcon(dark)).Disabled(e.profile.Kind == "local").Chosen() {
+				if p, ok := a.profileByID(e.profile.ID); ok && p.Kind != "local" {
+					a.edit(p)
+				}
+			}
+		}
+	}
+	draw(m, "")
+}
+
+func (a *App) splitActionsMenu(m *ui.Menu) {
+	for _, choice := range [][2]string{{"splitVertical", "左右分屏"}, {"splitHorizontal", "上下分屏"}, {"zoomPane", "放大 / 还原当前分屏"}, {"previousPane", "上一个分屏"}, {"nextPane", "下一个分屏"}} {
+		if m.Item(choice[1]).Chosen() {
+			a.performAction(choice[0])
+		}
+	}
+	m.Separator()
+	for _, choice := range [][2]string{{"horizontal", "均分左右"}, {"vertical", "均分上下"}, {"tile", "瓷砖平铺"}} {
+		if m.Item(choice[1]).Chosen() {
+			a.arrangeActive(choice[0])
+		}
+	}
+	if m.Item("当前分屏移到独立标签").Chosen() {
+		a.detachActive()
+	}
+}
+
+// Windows hosts its application menus in the workspace. Keep the launcher
+// on the tab strip so all commands remain reachable with the toolbar folded.
+func (a *App) workspaceMenus(c *ui.Context) {
+	if runtime.GOOS == "darwin" {
+		return
+	}
+	a.headerEditButton(c)
+	headerButton(c, "更多", moreIcon, "", false, false).Tooltip("应用菜单").Menu(func(m *ui.Menu) {
+		if a.toolbarMinimal {
+			if m.Item("新建会话").Chosen() {
+				a.performAction("newSession")
+			}
+			if m.Item("本地终端").Chosen() {
+				a.performAction("local")
+			}
+			if m.Item("会话管理").Chosen() {
+				a.performAction("sessionManager")
+			}
+			m.Submenu("分屏", a.splitActionsMenu).Disabled(a.activePane() == nil)
+			m.Submenu("快捷连接", a.connectionMenu)
+			m.Submenu("会话属性", a.propertiesMenu)
+			m.Submenu("标签组", a.groupsMenu)
+			m.Submenu("分组排列", a.arrangementMenu)
+			m.Submenu("分屏排列", a.headerPaneMenu)
+			if m.Item("会话侧栏").Checked(a.sidebar.shown).Chosen() {
+				a.toggleSidebar()
+			}
+			if m.Item("文件管理").Chosen() {
+				a.performAction("fileManager")
+			}
+			if m.Item("全局代理设置…").Chosen() {
+				a.showGlobalProxy()
+			}
+			if m.Item("多设备同步").Chosen() {
+				a.showSyncStatus()
+			}
+			if m.Item("MCP 控制中心").Chosen() {
+				a.showMCP()
+			}
+			if m.Item("搜索终端").Disabled(a.activePane() == nil || a.activePane().term == nil).Chosen() {
+				a.performAction("find")
+			}
+			m.Separator()
+		}
+		for _, title := range []string{"会话", "视图", "窗口", "工具", "快速命令", "OShell"} {
+			m.Submenu(title, func(child *ui.Menu) { a.headerMenu(child, title) })
+		}
+	})
 }
 
 // Build on opening so saved sessions, commands and shortcuts are current.
@@ -233,7 +379,7 @@ func (a *App) headerMenuItems(m *ui.Menu, items []*mygo.MenuItem) {
 // Native Edit roles route to the focused terminal or text input. Restore that
 // input after activating the toolbar button, before opening the native menu.
 func (a *App) headerEditButton(c *ui.Context) {
-	button := ui.Button(c, "编辑").Height(28).FontSize(12).Role(ui.RoleMenuButton)
+	button := headerButton(c, "编辑", editIcon, "", false, false).Role(ui.RoleMenuButton)
 	open := func() {
 		a.lastInputFocus.Focus()
 		if a.win == nil || !mygo.App.IsReady() {
@@ -257,19 +403,14 @@ func (a *App) headerEditButton(c *ui.Context) {
 }
 
 func (a *App) headerPaneMenu(m *ui.Menu) {
-	a.arrangementMenu(m)
-	m.Separator()
-	for _, choice := range [][2]string{{"splitVertical", "左右分屏"}, {"splitHorizontal", "上下分屏"}, {"zoomPane", "放大 / 还原当前分屏"}} {
+	for _, choice := range arrangementChoices {
 		if m.Item(choice[1]).Chosen() {
-			a.performAction(choice[0])
+			a.arrangeTabs("tabs")
+			if choice[0] != "tabs" {
+				a.groups.root.group.sharedLayout = choice[0]
+			}
+			a.refreshPaneVisibility()
+			return
 		}
-	}
-	for _, choice := range [][2]string{{"horizontal", "均分左右"}, {"vertical", "均分上下"}, {"tile", "瓷砖平铺"}} {
-		if m.Item(choice[1]).Chosen() {
-			a.arrangeActive(choice[0])
-		}
-	}
-	if m.Item("当前分屏移到独立标签").Chosen() {
-		a.detachActive()
 	}
 }

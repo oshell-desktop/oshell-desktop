@@ -320,7 +320,7 @@ func TestShortcutTreeContextMenuAndPicker(t *testing.T) {
 				t.Fatal("canceling the modal changed configuration")
 			}
 			click("快捷连接")
-			if err := tt.ChooseMenuItem("运维", "开发", "开发主机 · SSH"); err != nil {
+			if err := tt.ChooseMenuItem("运维", "开发", "开发主机"); err != nil {
 				t.Fatal(err)
 			}
 			if !a.authOpen || a.pendingProfile.ID != p.ID {

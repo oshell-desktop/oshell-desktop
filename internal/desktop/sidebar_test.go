@@ -62,6 +62,8 @@ func TestSidebarTogglesOnlyTheTargetWindow(t *testing.T) {
 	a, b := newApp(store, cfg), newApp(store, cfg.Clone())
 	h := &applicationHub{store: store, config: cfg, vault: a.vault, windows: []*App{a, b}}
 	a.hub, b.hub = h, h
+	a.toggleSidebar()
+	b.toggleSidebar()
 	first, second := ui.NewTester(a.view, 1024, 700), ui.NewTester(b.view, 1024, 700)
 	if err := first.Click("全部展开"); err != nil {
 		t.Fatal(err)
@@ -150,7 +152,7 @@ func TestSidebarSearchRestoresExpansionAndHeaderSettings(t *testing.T) {
 	if collapsed || tt.HasText("fixture") {
 		t.Fatal("search changed original expansion")
 	}
-	header := ui.NewTester(a.view, 880, 560)
+	header := ui.NewTester(a.view, 1028, 560)
 	header.Frame()
 	if _, ok := header.Find("设置"); !ok {
 		t.Fatal("settings header button missing")

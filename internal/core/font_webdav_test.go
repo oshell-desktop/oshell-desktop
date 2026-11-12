@@ -171,8 +171,12 @@ func TestFontSyncWebDAVWireMergeAndFailure(t *testing.T) {
 	mu.Lock()
 	weak = true
 	mu.Unlock()
-	if _, err = transport.FetchFont(ctx, "library.json"); err == nil {
-		t.Fatal("weak ETag accepted")
+	object, err := transport.FetchFont(ctx, "library.json")
+	if err != nil || object == nil || ValidETag(object.ETag) {
+		t.Fatal("expected a readable manifest with a content revision", err)
+	}
+	if err = transport.PutFont(ctx, "library.json", object.Data, object.ETag); err == nil {
+		t.Fatal("unversioned manifest overwritten")
 	}
 	mu.Lock()
 	weak = false

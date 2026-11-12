@@ -263,6 +263,18 @@ func TestContentFollowsPreferences(t *testing.T) {
 	}
 }
 
+func TestContentMenuPreservesSubmenuAndItemIcons(t *testing.T) {
+	folder, leaf := &MenuIcon{Width: 20}, &MenuIcon{Width: 36}
+	model := &platform.Menu{Items: []*platform.MenuItem{{Type: platform.MenuItemSubmenu, Label: "folder", Icon: folder, Submenu: &platform.Menu{
+		Items: []*platform.MenuItem{{Label: "host", Icon: leaf}},
+	}}}}
+	native := NewMenu(contentMenu(model, nil)).snapshot()
+	group := native.Items[0]
+	if group.Icon != folder || group.Submenu.Items[0].Icon != leaf || group.Submenu.Items[0].Label != "host" {
+		t.Fatal("content menu lost an icon or label on its way to the native backend")
+	}
+}
+
 func TestContentMenuRoles(t *testing.T) {
 	name := "Ada"
 	view := func(c *ui.Context) {

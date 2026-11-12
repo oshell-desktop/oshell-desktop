@@ -28,6 +28,7 @@ func (a *App) validateClockDraft() error {
 func (a *App) clockSettings(c *ui.Context) {
 	s := &a.features.settingsDraft
 	ui.Checkbox(c, &s.TerminalClockEnabled, "显示终端浮动时钟")
+	ui.Checkbox(c, &a.localUIDraft.ClockFullscreenOnly, "仅全屏时显示（含专注全屏）").Disabled(!s.TerminalClockEnabled).Tooltip("仅保存在本机，普通窗口会停止时钟刷新")
 	ui.Form(c, func() {
 		ui.Field(c, "字体", func() {
 			fonts := []string{"", "monospace"}

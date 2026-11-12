@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"encoding/json/v2"
 	"io"
 	"net/http"
 	"os"
@@ -21,7 +22,8 @@ func TestP1SignedPortablePackagePreparation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, metadata, pub := signedPortableFixture(t, "windows-amd64", "0.3.4", body)
+	candidate, metadata, pub := signedPortableFixture(t, "windows-amd64", "0.3.4", body)
+	release, _ := json.Marshal(signedReleaseFixture(candidate, metadata))
 	setPortableSigningKey(t, pub)
 	previous := http.DefaultTransport
 	t.Cleanup(func() { http.DefaultTransport = previous })
@@ -30,7 +32,9 @@ func TestP1SignedPortablePackagePreparation(t *testing.T) {
 		http.DefaultTransport = updateRoundTrip(func(r *http.Request) (*http.Response, error) {
 			var response []byte
 			switch r.URL.String() {
-			case "https://owner.github.io/repo/updates/latest.json":
+			case "https://api.github.com/repos/owner/repo/releases/latest":
+				response = release
+			case "https://api.github.com/repos/owner/repo/releases/assets/8":
 				response = metadata
 			case "https://github.com/owner/repo/releases/download/v0.3.4/OShell-Desktop-windows-amd64-single-file.zip":
 				downloads++

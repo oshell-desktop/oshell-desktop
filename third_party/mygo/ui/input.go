@@ -277,13 +277,9 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, count in
 		if focus != nil {
 			newFocus = focus.id
 		}
-		if newFocus != rt.focused {
-			rt.focused = newFocus
-			rt.focusVisible = false
-			rt.blinkStart = time.Now()
-		}
+		rt.focusFromPointer(newFocus)
 	}
-	if h := rt.handler(chain); h != nil && rt.deliver(h, InputEvent{Kind: InputPointerDown, Button: button, Mods: mods, Clicks: clicks, HasTimestamp: native.HasTimestamp, Timestamp: native.Timestamp, HasDoubleClickSettings: native.HasDoubleClickSettings, DoubleClickInterval: native.DoubleClickInterval, DoubleClickDistanceX: float32(native.DoubleClickDistanceX), DoubleClickDistanceY: float32(native.DoubleClickDistanceY)}) {
+	if h := rt.handler(chain); h != nil && rt.deliver(h, InputEvent{Kind: InputPointerDown, pointerTarget: h, Button: button, Mods: mods, Clicks: clicks, HasTimestamp: native.HasTimestamp, Timestamp: native.Timestamp, HasDoubleClickSettings: native.HasDoubleClickSettings, DoubleClickInterval: native.DoubleClickInterval, DoubleClickDistanceX: float32(native.DoubleClickDistanceX), DoubleClickDistanceY: float32(native.DoubleClickDistanceY)}) {
 		// It takes the moves and the release.
 		rt.pressed, rt.pressButton, rt.pressClicks = h, button, clicks
 		h.pressed = true
@@ -325,6 +321,14 @@ func (rt *engine) pointerDown(x, y float32, button int, mods Modifiers, count in
 	}
 	if clicks == 2 && button == 0 {
 		target.doubleClicks++
+	}
+}
+
+func (rt *engine) focusFromPointer(id uint64) {
+	if id != rt.focused {
+		rt.focused = id
+		rt.focusVisible = false
+		rt.blinkStart = time.Now()
 	}
 }
 

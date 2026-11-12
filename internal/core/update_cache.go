@@ -25,6 +25,17 @@ func (e *UpdateHTTPError) Error() string {
 	return fmt.Sprintf("更新服务返回 HTTP %d", e.Status)
 }
 
+func updateHTTPError(response *http.Response) *UpdateHTTPError {
+	failure := &UpdateHTTPError{Status: response.StatusCode}
+	retry := response.Header.Get("Retry-After")
+	if seconds, err := strconv.ParseInt(retry, 10, 32); err == nil && seconds >= 0 {
+		failure.RetryAt = time.Now().Add(time.Duration(seconds) * time.Second)
+	} else if date, err := http.ParseTime(retry); err == nil {
+		failure.RetryAt = date
+	}
+	return failure
+}
+
 // Each configured source owns a separate cache. A failed refresh discards stale
 // success data. Concurrent checks coalesce without an idle polling goroutine.
 type UpdateMetadataCache struct {
@@ -90,14 +101,7 @@ func FetchUpdateMetadata(ctx context.Context, source UpdateSource) ([]byte, erro
 	}
 	defer response.Body.Close()
 	if response.StatusCode != 200 {
-		failure := &UpdateHTTPError{Status: response.StatusCode}
-		retry := response.Header.Get("Retry-After")
-		if seconds, e := strconv.ParseInt(retry, 10, 32); e == nil && seconds >= 0 {
-			failure.RetryAt = time.Now().Add(time.Duration(seconds) * time.Second)
-		} else if date, e := http.ParseTime(retry); e == nil {
-			failure.RetryAt = date
-		}
-		return nil, failure
+		return nil, updateHTTPError(response)
 	}
 	if response.ContentLength > UpdateMetadataLimit {
 		return nil, fmt.Errorf("更新信息超过大小限制")

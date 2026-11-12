@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
+
 	"slices"
 	"sync"
 	"testing"
@@ -83,10 +83,7 @@ func TestTerminalWorkspaceAndClose(t *testing.T) {
 	a.tabs = []*tab{workspace}
 	tt := ui.NewTester(a.view, 1280, 820)
 	tt.Frame()
-	splitMenu := "分屏排列"
-	if runtime.GOOS == "darwin" {
-		splitMenu = "分屏"
-	}
+	splitMenu := "分屏"
 	if err := tt.Click(splitMenu); err != nil {
 		t.Fatal(err)
 	}

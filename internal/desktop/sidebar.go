@@ -18,20 +18,22 @@ import (
 
 // These preferences are deliberately outside Config and the shared contract.
 type localPreferences struct {
-	MCPShortcut       *core.KeyboardShortcut    `json:"mcpShortcut"`
-	Version           int                       `json:"version,omitempty"`
-	DeepFocusShortcut core.KeyboardShortcut     `json:"deepFocusShortcut"`
-	ImagePasteLocal   bool                      `json:"imagePasteLocal"`
-	ImagePasteSSH     map[string]imagePasteRule `json:"imagePasteSSH,omitempty"`
-	DefaultTitleMode  string                    `json:"defaultTitleMode"`
-	TitleModes        map[string]string         `json:"titleModes,omitempty"`
-	ConfirmTabClose   bool                      `json:"confirmTabClose"`
-	ReduceMotion      bool                      `json:"reduceMotion"`
-	Pins              map[string]bool           `json:"pins,omitempty"`
-	SidebarVisible    bool                      `json:"sidebarVisible"` // Existing installations use this as the initial window state.
-	SidebarShortcut   core.KeyboardShortcut     `json:"sidebarShortcut"`
-	WordSeparators    string                    `json:"wordSeparators"`
-	ShiftWhitespace   bool                      `json:"shiftWhitespace"`
+	MCPShortcut         *core.KeyboardShortcut    `json:"mcpShortcut"`
+	Version             int                       `json:"version,omitempty"`
+	DeepFocusShortcut   core.KeyboardShortcut     `json:"deepFocusShortcut"`
+	ImagePasteLocal     bool                      `json:"imagePasteLocal"`
+	ImagePasteSSH       map[string]imagePasteRule `json:"imagePasteSSH,omitempty"`
+	DefaultTitleMode    string                    `json:"defaultTitleMode"`
+	TitleModes          map[string]string         `json:"titleModes,omitempty"`
+	ConfirmTabClose     bool                      `json:"confirmTabClose"`
+	ReduceMotion        bool                      `json:"reduceMotion"`
+	ClockFullscreenOnly bool                      `json:"clockFullscreenOnly,omitempty"`
+	Pins                map[string]bool           `json:"pins,omitempty"`
+	StartupWindow       *windowSize               `json:"startupWindow,omitempty"`
+	SidebarVisible      bool                      `json:"sidebarVisible"` // Existing installations use this as the initial window state.
+	SidebarShortcut     core.KeyboardShortcut     `json:"sidebarShortcut"`
+	WordSeparators      string                    `json:"wordSeparators"`
+	ShiftWhitespace     bool                      `json:"shiftWhitespace"`
 }
 
 const defaultWordSeparators = " /\\()\"'-:,.;<>~!@#$%^&*|+=[]{}?"
@@ -46,7 +48,7 @@ func defaultLocalPreferences() localPreferences {
 			code = k
 		}
 	}
-	return localPreferences{MCPShortcut: &core.KeyboardShortcut{KeyCode: 0, Modifiers: 6}, DeepFocusShortcut: core.KeyboardShortcut{KeyCode: focusCode, Modifiers: 1 | 2 | 8}, DefaultTitleMode: "sessionName", ConfirmTabClose: true, SidebarVisible: true, SidebarShortcut: core.KeyboardShortcut{KeyCode: code, Modifiers: 1 | 8}, WordSeparators: defaultWordSeparators, ShiftWhitespace: true}
+	return localPreferences{MCPShortcut: &core.KeyboardShortcut{KeyCode: 0, Modifiers: 6}, DeepFocusShortcut: core.KeyboardShortcut{KeyCode: focusCode, Modifiers: 1 | 2 | 8}, DefaultTitleMode: "sessionName", ConfirmTabClose: true, SidebarShortcut: core.KeyboardShortcut{KeyCode: code, Modifiers: 1 | 8}, WordSeparators: defaultWordSeparators, ShiftWhitespace: true}
 }
 func (p localPreferences) clone() localPreferences {
 	if p.MCPShortcut != nil {
@@ -82,6 +84,9 @@ func readLocalPreferences(dir string) (localPreferences, error) {
 	}
 	if !json.Valid(b) || next.Version < 0 || next.Version > 1 {
 		return p, fmt.Errorf("本机设置格式或版本不受支持")
+	}
+	if next.StartupWindow != nil && !next.StartupWindow.valid() {
+		return p, fmt.Errorf("本机启动窗口大小无效")
 	}
 	if next.MCPShortcut != nil && !next.MCPShortcut.Valid() {
 		return p, fmt.Errorf("MCP 本机快捷键无效")
@@ -127,6 +132,8 @@ func (a *App) saveLocalPreferences(p localPreferences) bool {
 			target.win.Invalidate()
 		}
 	}
+	pinsChanged := !maps.Equal(a.localUI.Pins, p.Pins)
+	clockChanged := a.localUI.ClockFullscreenOnly != p.ClockFullscreenOnly
 	apply(a)
 	if a.hub != nil {
 		for _, target := range a.hub.windows {
@@ -134,6 +141,12 @@ func (a *App) saveLocalPreferences(p localPreferences) bool {
 		}
 		if a.hub.fileWindow != nil {
 			apply(a.hub.fileWindow)
+		}
+		if pinsChanged {
+			a.refreshMenu()
+		}
+		if clockChanged {
+			a.hub.refreshClock()
 		}
 	}
 	return true

@@ -90,8 +90,8 @@ func runDesktop() error {
 				diagnostics.Event("window_icon_error", map[string]any{"error": err.Error()})
 			}
 		}
-		hub.installMenu()
 		hub.attach(initial)
+		hub.installMenu()
 		hub.installDockMenu()
 		hub.startExternalLaunch()
 		hub.initializeUpdates()
@@ -236,14 +236,36 @@ func (h *applicationHub) attachAt(a *App, position *tabWindowPosition) {
 		a.features.vaultOpen = true
 		a.features.vaultAction = "unlock"
 	}
+	var previous *App
+	if len(h.windows) > 0 {
+		previous = h.focused(nil)
+	}
+	size := a.startupSize(previous)
 	h.windows = append(h.windows, a)
-	a.win = mygo.NewWindow(mygo.WindowOptions{Title: "OShell Desktop", Width: 1280, Height: 820, MinWidth: 880, MinHeight: 560, Hidden: position != nil, Content: ui.View(a.view)})
+	a.win = mygo.NewWindow(mygo.WindowOptions{Title: "OShell Desktop", Width: defaultWindowSize.Width, Height: defaultWindowSize.Height, MinWidth: 760, MinHeight: 460, UseContentSize: true, Hidden: true, Content: ui.View(a.view)})
 	if position != nil {
 		// transferTab shows the populated window after positioning it, avoiding
 		// a visible jump from the default centered location.
 		if err := position.apply(a.win); err != nil {
 			a.status = "新窗口定位失败：" + err.Error()
 		}
+	}
+	bounds := a.win.Bounds()
+	if previous != nil && previous.win != nil && position == nil {
+		origin := previous.win.Bounds()
+		bounds.X, bounds.Y = origin.X+20, origin.Y+20
+	}
+	work := mygo.Screen.DisplayMatching(bounds).WorkArea
+	if work.Width > 0 && work.Height > 0 {
+		w, h := a.win.ContentSize()
+		a.win.SetBounds(fitWorkspaceWindow(bounds, work, windowSize{w, h}, size))
+	} else {
+		a.win.SetContentSize(size.Width, size.Height)
+	}
+	a.rememberWindowSize()
+	a.win.OnResize(a.rememberWindowSize)
+	if position == nil {
+		a.win.Show()
 	}
 	a.registerFocusWindow()
 	a.win.OnEnterFullScreen(func() { a.fullscreenSettled(true) })
@@ -262,6 +284,7 @@ func (h *applicationHub) attachAt(a *App, position *tabWindowPosition) {
 	}
 	h.scheduleUpdates()
 	a.win.OnClosed(func() {
+		a.saveLastWindowSize()
 		if files := h.fileWindow; files != nil && files.filePresentation.owner.Load() == a {
 			files.filePresentation.owner.Store(nil)
 			if files.win != nil {
