@@ -216,5 +216,5 @@ jobs:
         run: |
           cd release-assets
           sha256sum OShell-Desktop-windows-amd64-single-file.zip OShell-Desktop-linux-amd64.tar.gz > SHA256SUMS.txt
-          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$RELEASE_TAG" --notes-from-tag --latest \
+          gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$RELEASE_TAG" --notes-file ../release-notes.txt --latest \
             OShell-Desktop-windows-amd64-single-file.zip OShell-Desktop-linux-amd64.tar.gz SHA256SUMS.txt latest.json
