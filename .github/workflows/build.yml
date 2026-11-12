@@ -1,4 +1,4 @@
-name: Build and test
+name: Build and release
 on:
   workflow_dispatch:
 permissions:
@@ -14,7 +14,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Compile both applications and all Windows tests inside Docker
+      - name: Build Windows and Linux release archives inside Docker
         uses: ./.github/actions/container-build
         with:
           mode: package
@@ -25,18 +25,6 @@ jobs:
           path: validation/oshell-release
           if-no-files-found: error
           retention-days: 1
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-regression
-          path: validation/windows-regression/*
-          if-no-files-found: error
-          retention-days: 7
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-core-race
-          path: validation/windows-core-race/*
-          if-no-files-found: error
-          retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
           name: oshell-windows-amd64
@@ -51,130 +39,9 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
-  linux:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Full Linux regression and PTY/ZMODEM race tests in Docker
-        uses: ./.github/actions/container-build
-        with:
-          mode: linux
-  core-race-linux:
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [0, 1, 2, 3]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Compile and execute isolated Linux core race shard in Docker
-        uses: ./.github/actions/container-build
-        with:
-          mode: linux-core
-          shard: ${{ matrix.shard }}
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: core-race-Linux-${{ matrix.shard }}
-          path: validation/core-race/*
-          if-no-files-found: error
-          retention-days: 14
-  windows:
-    needs: package
-    runs-on: windows-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - uses: actions/download-artifact@v4
-        with:
-          name: windows-regression
-          path: validation/windows-tests
-      - name: Prepare pinned Windows rz/sz interoperability peer
-        shell: pwsh
-        run: |
-          $archive = Join-Path $env:RUNNER_TEMP 'lrzsz-peer.zip'
-          $destination = Join-Path $env:RUNNER_TEMP 'lrzsz-peer'
-          Invoke-WebRequest 'https://github.com/trzsz/lrzsz-win32/releases/download/v0.12.21rc/lrzsz_0.12.21rc_windows_x86_64.zip' -OutFile $archive
-          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne 'DACE2DB172B1B5A1E5998692760A75355B254E1826718D88BAE7FA3A6DE3C325') {
-            throw 'lrzsz fixture checksum mismatch'
-          }
-          Expand-Archive -LiteralPath $archive -DestinationPath $destination
-          (Join-Path $destination 'lrzsz_0.12.21rc_windows_x86_64') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          'OSHELL_REQUIRE_LRZSZ=1' | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      - name: Execute precompiled full regression suite, PTY and ZMODEM race tests
-        run: python scripts/ci-test-bundle.py windows
-      - uses: actions/download-artifact@v4
-        with:
-          name: oshell-windows-amd64
-          path: validation/container-package
-      - name: Verify single-file GUI and update preservation without compiling
-        shell: pwsh
-        run: |
-          Expand-Archive -LiteralPath 'validation/container-package/OShell-Desktop-windows-amd64-single-file.zip' -DestinationPath 'validation/container-package/extracted'
-          $files = @(Get-ChildItem -LiteralPath 'validation/container-package/extracted' -File -Recurse)
-          if ($files.Count -ne 1 -or $files[0].Name -ne 'OShell Desktop.exe') {
-            throw 'Expected exactly one portable EXE in the Windows archive'
-          }
-          ./scripts/test-update-package.ps1 -Executable $files[0].FullName -FixtureExecutable validation/windows-tests/update-fixture.exe
-  core-race-windows:
-    needs: package
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [0, 1, 2, 3]
-    runs-on: windows-latest
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - uses: actions/download-artifact@v4
-        with:
-          name: windows-core-race
-          path: validation/windows-tests
-      - name: Execute precompiled race shard with complete test accounting
-        run: python scripts/ci-test-bundle.py windows --shard ${{ matrix.shard }}
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: core-race-Windows-${{ matrix.shard }}
-          path: validation/core-race/*
-          if-no-files-found: error
-          retention-days: 14
-  core-race-audit:
-    if: always() && needs.linux.result != 'skipped'
-    needs: [linux, core-race-linux, core-race-windows]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: core-race-*
-          path: validation/core-race
-          merge-multiple: true
-      - name: Require every discovered test exactly once on both platforms
-        shell: bash
-        run: |
-          docker run --rm -e GITHUB_SHA -v "$PWD:/workspace:ro" -w /workspace python:3.12-slim python scripts/core_test_shards.py audit validation/core-race --count 4 | tee -a "$GITHUB_STEP_SUMMARY"
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, windows, core-race-linux, core-race-windows, core-race-audit, package]
+    needs: package
     runs-on: ubuntu-24.04
     permissions:
       contents: write

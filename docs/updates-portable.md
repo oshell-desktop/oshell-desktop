@@ -22,8 +22,8 @@
 
 1. 更新 `mygo.json` 的三段正式版本号，例如 `0.3.2`。
 2. 按用户要求提交代码。创建对应的附注标签（例如 `v0.3.2`），在标签说明中简要列出用户可见的变更，再推送提交和标签。发布工作流使用标签说明作为 Release 正文。
-3. 用户明确要求后，在该标签上手动运行 **Build and test**。标签推送本身不会触发。
-4. 发布前，仓库管理员需在 Actions Secrets 中配置 `OSHELL_UPDATE_SIGNING_KEY`，内容为与 `internal/core/update_public_key.txt` 匹配的 Ed25519 PKCS8 PEM 私钥。签名步骤从标准输入读取密钥。构建、测试和审计通过后，发布作业为两个最终附件签名，用客户端的验证逻辑回读清单，再创建 Release。缺少密钥或公私钥不匹配时，发布作业会在创建 Release 前停止。
+3. 完成本地测试后，按用户要求在该标签上手动运行 **Build and release**。
+4. 发布前，仓库管理员需在 Actions Secrets 中配置 `OSHELL_UPDATE_SIGNING_KEY`，内容为与 `internal/core/update_public_key.txt` 匹配的 Ed25519 PKCS8 PEM 私钥。签名步骤从标准输入读取密钥。双平台包构建完成后，发布作业核对标签版本，为最终附件签名，用客户端的验证逻辑回读清单，再创建 Release。缺少密钥或公私钥不匹配时，发布作业会在创建 Release 前停止。
 
 | 附件 | 内容 |
 | --- | --- |

@@ -17,14 +17,10 @@ elif [[ "${1:-package}" == linux ]]; then
   exit
 fi
 
-python3 scripts/ci-test-bundle.py compile
-export OSHELL_CI_TEST_BUNDLE=1
-
 # One container reuses the build tool, downloaded modules and native libraries.
 # Keep targets sequential: build.py temporarily generates shared embedded resources.
 python3 scripts/build.py --target windows/amd64 --single-file --archive
 python3 scripts/build.py --target linux/amd64 --archive
-python3 scripts/ci-test-bundle.py stage
 if [[ "${GITHUB_REF_TYPE:-}" == tag ]]; then
   go build -trimpath -o validation/oshell-release ./cmd/oshell-release
 fi

@@ -35,7 +35,7 @@ python scripts/test-configuration-contract.py
 
 测试使用合成配置、本机模拟服务和临时目录。部分平台测试有跳过条件；测试通过不代表其他平台或真实远端服务已验收。
 
-- ZMODEM 实际互通：将 `rz` / `sz` 及依赖放入 PATH，设置 `OSHELL_REQUIRE_LRZSZ=1` 后运行相关测试。Windows CI 使用固定摘要的 lrzsz 工具，Linux 使用发行版 lrzsz。
+- ZMODEM 实际互通：将 `rz` / `sz` 及依赖放入 PATH，设置 `OSHELL_REQUIRE_LRZSZ=1` 后运行相关测试。
 - Linux 无图形会话：安装 `xvfb`、`xauth`、`dbus-x11`，用 `xvfb-run -a dbus-run-session -- go test ./...`。
 - UI 截图：桌面测试设置 `OSHELL_TEST_ARTIFACTS`，终端测试设置 `MYGO_TEST_IMAGES`，均指向独立输出目录。
 - 配置协议变更：按 [v2 验证要求](configuration-protocol-v2.md) 执行 Swift ↔ Go 互通；没有 Swift 环境的跳过不算通过。
@@ -61,6 +61,6 @@ macOS 平台适配和连接助手保留作兼容用途，不参与 Windows / Lin
 
 清理本机工作区时，`validation/` 中的旧编译缓存、重复 EXE/ZIP、测试二进制及已完成的一次性修改脚本可以删除；日志、截图、验收 JSON 和源码对照证据保留。`validation/vt` 只需保留当前补丁指纹对应的 Windows/Linux 构建与所用工具链，旧指纹目录和 `.zig-cache` 可重建。不要整体删除 `validation/`：其中还有参考源码、互通工具和配置备份。`dist` 用户数据、`.release-private` 签名材料及未提交源码不属于缓存。
 
-CI 的容器、缓存和分片规则见 [CI 说明](ci-performance.md)。
+CI 的容器构建和发布流程见 [CI 说明](ci-performance.md)。
 
 OShell 源码索引、功能交互对照及未完成项见 [跨端对齐记录](oshell-parity.md)。测试通过不能代替逐项行为一致性验收。
