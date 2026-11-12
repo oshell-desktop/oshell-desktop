@@ -129,8 +129,8 @@ func TestSFTPDirectoryRestartSkipsVerifiedFiles(t *testing.T) {
 		source := filepath.ToSlash(t.TempDir())
 		target := filepath.ToSlash(filepath.Join(t.TempDir(), "tree"))
 		payload := bytes.Repeat([]byte("x"), 1<<20)
-		for name, data := range map[string][]byte{"a": []byte("complete"), "b": payload} {
-			if err := os.WriteFile(filepath.Join(source, name), data, 0600); err != nil {
+		for _, name := range []string{"a", "b"} {
+			if err := os.WriteFile(filepath.Join(source, name), payload, 0600); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -139,8 +139,14 @@ func TestSFTPDirectoryRestartSkipsVerifiedFiles(t *testing.T) {
 		limiter := &TransferLimiter{}
 		limiter.Set(1 << 20)
 		first := tree
+		var complete, partial string
 		err := first.Run(WithTransferLimiter(ctx, limiter), client, func(p TransferProgress) {
-			if p.Bytes >= 64<<10 {
+			// SFTP directory enumeration need not follow local filename order.
+			if p.Files == 0 {
+				complete = filepath.FromSlash(p.Path)
+			}
+			if p.Files == 1 && p.Bytes >= int64(len(payload))+(64<<10) {
+				partial = filepath.FromSlash(p.Path)
 				cancel()
 			}
 		})
@@ -148,7 +154,6 @@ func TestSFTPDirectoryRestartSkipsVerifiedFiles(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatal("directory was not interrupted", err)
 		}
-		complete := filepath.Join(target, "a")
 		old := time.Unix(946684800, 0)
 		if err = os.Chtimes(complete, old, old); err != nil {
 			t.Fatal(err)
@@ -161,11 +166,12 @@ func TestSFTPDirectoryRestartSkipsVerifiedFiles(t *testing.T) {
 		if err != nil || !info.ModTime().Equal(old) {
 			t.Fatal("complete file was rewritten", err)
 		}
-		got, err := os.ReadFile(filepath.Join(target, "b"))
+		got, err := os.ReadFile(partial)
 		if err != nil || !bytes.Equal(got, payload) {
 			t.Fatal("directory did not recover", err)
 		}
-		if err = os.WriteFile(complete, []byte("changed!"), 0600); err != nil {
+		payload[0] = '!'
+		if err = os.WriteFile(complete, payload, 0600); err != nil {
 			t.Fatal(err)
 		}
 		if err = tree.Run(context.Background(), client, nil); err == nil {

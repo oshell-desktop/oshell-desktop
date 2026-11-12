@@ -58,9 +58,6 @@ func TestCtrlWheelFontZoomStaysLocal(t *testing.T) {
 	if term.opts.Font.Size != 14 || term.opts.Font.Family != "monospace" {
 		t.Fatal("zoom changed wrong font fields", term.opts.Font)
 	}
-	if after, _ := term.Size(); after >= cols {
-		t.Fatal("zoom did not resize terminal grid")
-	}
 	term.Send([]byte("barrier"))
 	if got := conn.take(7); got != "barrier" {
 		t.Fatalf("Ctrl wheel leaked remote mouse bytes: %q", got)
@@ -72,6 +69,14 @@ func TestCtrlWheelFontZoomStaysLocal(t *testing.T) {
 	term.v.handleInput(ui.InputEvent{Kind: ui.InputScroll, Mods: ui.Ctrl, DY: -100})
 	if term.opts.Font.Size != 14 {
 		t.Fatal("modifier release retained partial zoom")
+	}
+	// Adjacent point sizes can round to the same physical cell width.
+	for i := 0; i < 4; i++ {
+		term.v.handleInput(ui.InputEvent{Kind: ui.InputScroll, Mods: ui.Ctrl, DY: -300})
+	}
+	tt.Frame()
+	if after, _ := term.Size(); after >= cols {
+		t.Fatal("zoom did not resize terminal grid", cols, after)
 	}
 	for _, bound := range []struct{ size, delta float32 }{{26, -300}, {10, 300}} {
 		term.SetFont(Font{Size: bound.size})

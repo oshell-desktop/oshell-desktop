@@ -25,7 +25,8 @@ var implicitLinkPattern = sync.OnceValue(func() *core.Pattern {
 	end := `(?<!:)(?: +(?= *$))?`
 	prefix := `(?:\.\.\/|\.\/|(?<!{WORD})~\/|(?:[{WC}][{WC}\-.]*\/)*(?<!{WORD})\$[A-Za-z_]{WORD}*\/|\.[{WC}][{WC}\-.]*\/|(?<![{WC}~\/])\/(?!\/))`
 	rooted := prefix + `(?:` + dotted + pathChars + `+` + dottedSpaces + end + `|` + nondotted + pathChars + `+` + anySpaces + end + `)`
-	bare := dotted + `(?<!{WORD})[{WC}][{WC}\-.]*\/` + pathChars + `+` + dottedSpaces + end
+	// Reject non-word starts before scanning ahead for a dotted path.
+	bare := `(?<!{WORD})(?={WORD})` + dotted + `[{WC}][{WC}\-.]*\/` + pathChars + `+` + dottedSpaces + end
 	word := `\p{L}\p{M}\p{Nl}\p{Nd}\p{Pc}\u200c\u200d`
 	pattern := strings.NewReplacer("{WORD}", "["+word+"]", "{WC}", word).Replace(url + `|` + rooted + `|` + bare)
 	p, err := core.CompilePattern(pattern, 100*time.Millisecond)

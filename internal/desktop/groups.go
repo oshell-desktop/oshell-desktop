@@ -33,6 +33,7 @@ type groupNode struct {
 type groupState struct {
 	root                 *groupNode
 	active, recent       string
+	revealPane           string
 	dialog               bool
 	editing, name, error string
 	moveTab              string
@@ -206,6 +207,7 @@ func (a *App) setCurrentTab(t *tab, focus bool) {
 	}
 	t.unread = false
 	if focus && t.active != nil {
+		a.groups.revealPane = t.active.id
 		t.active.focus.Focus()
 	}
 }
@@ -364,17 +366,10 @@ func (a *App) arrangeTabs(mode string) {
 		leaf.group.sharedLayout = ""
 		leaves = append(leaves, leaf)
 	}
-	var build func([]*groupNode, int) *groupNode
-	build = func(nodes []*groupNode, depth int) *groupNode {
-		if len(nodes) == 1 {
-			return nodes[0]
-		}
-		mid := len(nodes) / 2
-		vertical := mode == "vertical" || mode == "tile" && depth%2 == 1
-		return &groupNode{id: core.NewID(), first: build(nodes[:mid], depth+1), second: build(nodes[mid:], depth+1), vertical: vertical, splitRatio: float32(mid) / float32(len(nodes))}
-	}
 	if len(leaves) > 0 {
-		a.groups.root = build(leaves, 0)
+		a.groups.root = buildTabArrangement(leaves, mode, func(left, right *groupNode, vertical bool, ratio float32) *groupNode {
+			return &groupNode{id: core.NewID(), first: left, second: right, vertical: vertical, splitRatio: ratio}
+		})
 		a.setCurrentTab(active, true)
 	}
 }
@@ -564,6 +559,13 @@ func dropPosition(x, y, w, h float32) string {
 	return "center"
 }
 func (a *App) groupWorkspace(c *ui.Context, n *groupNode) {
+	if n != nil && n.group == nil && n.visible() {
+		arrangementCanvas(c, a.groupMinimum(n), func(size viewportSize) { a.drawGroupWorkspace(c, n, size) })
+		return
+	}
+	a.drawGroupWorkspace(c, n, viewportSize{})
+}
+func (a *App) drawGroupWorkspace(c *ui.Context, n *groupNode, size viewportSize) {
 	if n == nil || !n.visible() {
 		ui.Column(c).Fill().Center().Gap(12).Background(c.Theme().Background).Children(func() {
 			ui.Text(c, "所有标签组已隐藏，连接继续运行。")
@@ -576,14 +578,14 @@ func (a *App) groupWorkspace(c *ui.Context, n *groupNode) {
 	}
 	if n.group == nil {
 		if !n.first.visible() {
-			a.groupWorkspace(c, n.second)
+			a.drawGroupWorkspace(c, n.second, size)
 			return
 		}
 		if !n.second.visible() {
-			a.groupWorkspace(c, n.first)
+			a.drawGroupWorkspace(c, n.first, size)
 			return
 		}
-		a.groupSplit(c.Key(n.id), n, func() { a.groupWorkspace(c, n.first) }, func() { a.groupWorkspace(c, n.second) })
+		a.arrangedSplit(c.Key(n.id), n, size, a.groupMinimum(n.first), a.groupMinimum(n.second), func(left viewportSize) { a.drawGroupWorkspace(c, n.first, left) }, func(right viewportSize) { a.drawGroupWorkspace(c, n.second, right) })
 		return
 	}
 	g := n.group
@@ -634,7 +636,7 @@ func (a *App) groupWorkspace(c *ui.Context, n *groupNode) {
 		}
 		box.Children(func() {
 			if tabs := a.displayedGroupTabs(g); len(tabs) > 0 {
-				a.drawGroupTabs(c, g.sharedLayout, tabs, 0)
+				a.drawGroupTabs(c, g.sharedLayout, tabs)
 			} else if len(a.groups.root.leaves()) == 1 && g.name == "" && len(a.tabs) == 0 {
 				a.welcome(c)
 			} else {
@@ -669,30 +671,6 @@ func (a *App) displayedGroupTabs(g *tabGroup) []*tab {
 		return []*tab{t}
 	}
 	return nil
-}
-func (a *App) drawGroupTabs(c *ui.Context, mode string, tabs []*tab, depth int) {
-	if len(tabs) == 1 {
-		t := tabs[0]
-		if t.zoomed != nil {
-			a.nodeView(c.Key(t.id), t, &node{id: t.zoomed.id, pane: t.zoomed})
-		} else {
-			a.nodeView(c.Key(t.id), t, t.root)
-		}
-		return
-	}
-	vertical := mode == "vertical" || mode == "tile" && depth%2 == 1
-	var container ui.Element
-	if vertical {
-		container = ui.Column(c)
-	} else {
-		container = ui.Row(c)
-	}
-	mid := (len(tabs) + 1) / 2
-	container.Fill().Gap(1).Background(c.Theme().Border).Children(func() {
-		for _, part := range [][]*tab{tabs[:mid], tabs[mid:]} {
-			ui.Column(c.Key(part[0].id)).Grow(float32(len(part))).MinWidth(0).MinHeight(0).Clip().Children(func() { a.drawGroupTabs(c, mode, part, depth+1) })
-		}
-	})
 }
 func (a *App) visiblePanes() []*pane {
 	if a.workspaceLocked() || a.stopped.Load() || a.win != nil && (!a.win.IsVisible() || a.win.IsMinimized()) {

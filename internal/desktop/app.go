@@ -700,6 +700,7 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, option
 			}
 		}
 		replace(t.root)
+		t.zoomed = nil
 		t.active = p
 	} else {
 		t = &tab{group: a.groups.active, id: core.NewID(), name: profile.Name, root: n, active: p}

@@ -1,7 +1,7 @@
 package terminal
 
 import (
-	"reflect"
+	"bytes"
 	"testing"
 
 	"github.com/egoist/mygo/ui"
@@ -22,12 +22,21 @@ func TestPrivateFontReplacementRefreshesExistingTerminal(t *testing.T) {
 	beforeFont := term.v.font
 	beforeWidth := term.v.cellW
 	beforeHeight := term.v.cellH
-	before := ui.Shape("MWil09", term.v.fonts[0])
+	// Native font handles may be recreated when the private library is removed.
+	renderSample := func() []byte {
+		return ui.Render(func(c *ui.Context) {
+			ui.Box(c).Fill().Draw(func(p *ui.Painter, r ui.Rect) {
+				p.Fill(r, ui.Hex("#111111"), 0)
+				p.Glyphs(ui.Shape("MWil09", term.v.fonts[0]), r.X, r.Y+24, ui.Hex("#ffffff"))
+			})
+		}, 160, 36, 1).Pix
+	}
+	before := renderSample()
 	if err = ui.ReplaceUserFonts([][]byte{goregular.TTF}); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if term.v.font == beforeFont || reflect.DeepEqual(before, ui.Shape("MWil09", term.v.fonts[0])) {
+	if term.v.font == beforeFont || bytes.Equal(before, renderSample()) {
 		t.Fatal("existing terminal retained stale font")
 	}
 	if term.opts.Font.Size != 19 {
@@ -50,7 +59,7 @@ func TestPrivateFontReplacementRefreshesExistingTerminal(t *testing.T) {
 	if term.v.cellW != beforeWidth || term.v.cellH != beforeHeight {
 		t.Fatal("fallback metrics not restored")
 	}
-	if got := ui.Shape("MWil09", term.v.fonts[0]); !reflect.DeepEqual(before, got) {
+	if !bytes.Equal(before, renderSample()) {
 		t.Fatal("fallback glyphs not restored")
 	}
 }

@@ -363,7 +363,9 @@ func (a *App) groupTabBar(c *ui.Context, g *tabGroup) {
 						row.Background(c.Theme().SurfaceHover)
 					}
 					if t.id == g.active {
-						g.revealSelectedTab(row, t.id)
+						if len(tabs) > 1 && a.groups.active == g.id {
+							g.revealSelectedTab(row, t.id)
+						}
 						accent := c.Theme().Accent
 						row.Background(c.Theme().Selection).DrawOver(func(p *ui.Painter, r ui.Rect) {
 							p.Fill(ui.Rect{X: r.X + 7, Y: r.Y + r.H - 2, W: r.W - 14, H: 2}, accent, 1)
@@ -445,7 +447,12 @@ func (a *App) nodeView(c *ui.Context, t *tab, n *node) {
 	}
 	scheme := a.config.Settings.Scheme()
 	paneBackground, paneForeground := ui.Hex(scheme.Background), ui.Hex(scheme.Foreground)
-	ui.Column(c.Key(p.id)).Fill().MinHeight(0).Background(paneBackground).DrawOver(func(painter *ui.Painter, r ui.Rect) {
+	body := ui.Column(c.Key(p.id)).Fill().MinHeight(0).Background(paneBackground)
+	if a.groups.revealPane == p.id {
+		body.ScrollIntoView()
+		a.groups.revealPane = ""
+	}
+	body.DrawOver(func(painter *ui.Painter, r ui.Rect) {
 		if a.showPaneFocusStripe(t, p) {
 			painter.Fill(ui.Rect{X: r.X, Y: r.Y, W: r.W, H: 2}, terminalFlame, 0)
 		}
@@ -453,12 +460,12 @@ func (a *App) nodeView(c *ui.Context, t *tab, n *node) {
 		// A single terminal needs only its tab. Pane headers appear after splitting.
 		if t.root.pane == nil && !a.focusFullscreen.deep {
 			ui.Row(c).Height(22).Padding(0, 8).Gap(5).Background(paneBackground).TextColor(paneForeground.Alpha(.75)).Children(func() {
-				terminalHeaderButton(c, "选择分屏 "+p.profile.Name, nil, a.paneDisplayTitle(p), paneForeground).Tooltip(paneConnectionDetails(p)).Height(22).Grow(1).OnClick(func() { t.active = p; p.focus.Focus() })
+				terminalHeaderButton(c, "选择分屏 "+p.profile.Name, nil, a.paneDisplayTitle(p), paneForeground).Tooltip(paneConnectionDetails(p)).Height(22).Grow(1).OnClick(func() { a.activatePane(t, p) })
 				label := "放大分屏"
 				if t.zoomed == p {
 					label = "恢复分屏"
 				}
-				terminalHeaderButton(c, label, splitIcon, "", paneForeground).Size(22, 22).OnClick(func() { t.active = p; a.togglePaneZoom() })
+				terminalHeaderButton(c, label, splitIcon, "", paneForeground).Size(22, 22).OnClick(func() { a.activatePane(t, p); a.togglePaneZoom() })
 				terminalHeaderButton(c, "关闭分屏", closeIcon, "", paneForeground).Size(22, 22).OnClick(func() { a.requestSessionClose(t, p) })
 			})
 		}

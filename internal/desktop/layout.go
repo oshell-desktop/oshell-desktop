@@ -112,6 +112,7 @@ func (a *App) arrangeActive(mode string) {
 	}
 	if len(panes) > 0 {
 		t.root = build(panes, w, h)
+		t.zoomed = nil
 		t.active.focus.Focus()
 	}
 }
@@ -140,15 +141,16 @@ func (a *App) detachActive() {
 		return n
 	}
 	t.root = remove(t.root)
+	t.zoomed = nil
 	t.active = nil
 	a.walk(t.root, func(q *pane) {
 		if t.active == nil {
 			t.active = q
 		}
 	})
-	a.tabs = append(a.tabs, &tab{group: t.group, id: core.NewID(), name: p.profile.Name, root: &node{id: core.NewID(), pane: p}, active: p})
-	a.current = len(a.tabs) - 1
-	p.focus.Focus()
+	detached := &tab{group: t.group, id: core.NewID(), name: p.profile.Name, root: &node{id: core.NewID(), pane: p}, active: p}
+	a.tabs = append(a.tabs, detached)
+	a.selectTab(detached)
 }
 func (a *App) activeConnections() int {
 	n := 0

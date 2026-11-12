@@ -130,7 +130,14 @@ func drawClockOverlay(element ui.Element, settings core.Settings, text string, t
 	element.DrawOver(func(p *ui.Painter, r ui.Rect) {
 		var bodies []ui.Rect
 		if terminalBodies != nil {
-			bodies = terminalBodies()
+			// Arranged terminals can extend beyond the scroll viewport.
+			for _, body := range terminalBodies() {
+				x, y := max(r.X, body.X), max(r.Y, body.Y)
+				w, h := min(r.X+r.W, body.X+body.W)-x, min(r.Y+r.H, body.Y+body.H)-y
+				if w > 0 && h > 0 {
+					bodies = append(bodies, ui.Rect{X: x, Y: y, W: w, H: h})
+				}
+			}
 			if len(bodies) == 0 {
 				return
 			}
