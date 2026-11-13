@@ -3,9 +3,61 @@ package desktop
 import (
 	"github.com/egoist/mygo/ui"
 	"oshell-desktop/internal/core"
+	"path"
 	"slices"
 	"testing"
 )
+
+func TestShortcutDirectoryOrderMatchesManager(t *testing.T) {
+	cfg := core.DefaultConfig()
+	cfg.Directories = []string{"Links/Ops/Group10", "Links/Ops/Group2"}
+	source := core.NewProfile()
+	source.Name = "Original name"
+	cfg.Profiles = []core.Profile{source}
+	for _, folder := range []string{"Ops", "Ops/Group2"} {
+		p := core.NewProfile()
+		p.Name, p.Group = path.Base(folder)+"-host2", "Links/"+folder
+		cfg.Profiles = append(cfg.Profiles, p)
+		cfg.Links = append(cfg.Links, core.SessionLink{
+			ID: core.NewID(), ProfileID: source.ID, Name: path.Base(folder) + "-host10", Folder: folder,
+		})
+	}
+	a := newApp(&core.Store{Dir: t.TempDir()}, cfg)
+	view := ui.NewTester(a.view, 1200, 800)
+	for _, tc := range []struct{ button, group string }{
+		{"快捷目录 Ops", "Links/Ops"},
+		{"快捷子目录 Group2", "Links/Ops/Group2"},
+	} {
+		if err := view.Click(tc.button); err != nil {
+			t.Fatal(err)
+		}
+		a.managerGroup = tc.group
+		a.managerAll = false
+		var labels []string
+		for _, row := range a.buildManagerRows() {
+			if row.parent {
+				continue
+			}
+			prefix := "拖动快捷项目 "
+			if row.folder {
+				prefix = "快捷子目录 "
+			}
+			labels = append(labels, prefix+row.name)
+		}
+		if len(labels) < 2 {
+			t.Fatalf("missing manager rows in %s: %v", tc.group, labels)
+		}
+		texts := view.Texts()
+		previous := -1
+		for _, label := range labels {
+			index := slices.Index(texts, label)
+			if index <= previous {
+				t.Fatalf("%s: expected manager order %v in %v", tc.group, labels, texts)
+			}
+			previous = index
+		}
+	}
+}
 
 func TestLinkBarAndMenuFollowPersistedRootOrder(t *testing.T) {
 	cfg := core.DefaultConfig()

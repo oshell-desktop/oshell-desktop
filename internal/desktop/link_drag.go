@@ -141,8 +141,6 @@ func (a *App) linkFolderPopover(c *ui.Context, anchor ui.Element, key string) {
 	})
 }
 
-// Reuse the sidebar's tree rows while keeping Links' own ordering and actions.
-// Expansion is transient UI state; it never changes the shared configuration.
 func (a *App) linkFolderTree(c *ui.Context, folder string) {
 	children := make(map[string][]core.LinkRootItem)
 	for _, dir := range a.config.AllDirectories() {
@@ -156,13 +154,14 @@ func (a *App) linkFolderTree(c *ui.Context, folder string) {
 		}
 		children[parent] = append(children[parent], core.LinkRootItem{Kind: "folder", Folder: relative, Name: path.Base(relative)})
 	}
-	for _, link := range a.config.Links {
-		children[link.Folder] = append(children[link.Folder], core.LinkRootItem{Kind: "link", ID: link.ID, Name: link.Name, ProfileID: link.ProfileID, Folder: link.Folder})
-	}
 	for _, p := range a.config.Profiles {
 		if relative, ok := strings.CutPrefix(p.Group, "Links/"); ok {
 			children[relative] = append(children[relative], core.LinkRootItem{Kind: "session", ID: p.ID, Name: p.Name, ProfileID: p.ID, Folder: relative})
 		}
+	}
+	// The manager lists sessions before links for equal display names.
+	for _, link := range a.config.Links {
+		children[link.Folder] = append(children[link.Folder], core.LinkRootItem{Kind: "link", ID: link.ID, Name: link.Name, ProfileID: link.ProfileID, Folder: link.Folder})
 	}
 	children[""] = a.config.OrderedLinkRootItems()
 	if a.linkMenuExpanded == nil {
@@ -175,7 +174,13 @@ func (a *App) linkFolderTree(c *ui.Context, folder string) {
 	ui.Tree(c, func() {
 		var draw func(string)
 		draw = func(parent string) {
-			for _, item := range children[parent] {
+			items := children[parent]
+			if parent != "" {
+				sortSessionList(items, func(item core.LinkRootItem) sessionSortKey {
+					return sessionSortKey{name: item.Name, folder: item.Kind == "folder"}
+				})
+			}
+			for _, item := range items {
 				contextMenu := func(m *ui.Menu) { a.linkContextMenu(m, &item) }
 				if item.Kind == "folder" {
 					open := a.linkMenuExpanded[item.Folder]
