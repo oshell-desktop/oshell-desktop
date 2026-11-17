@@ -11,6 +11,49 @@ import (
 	"oshell-desktop/internal/core"
 )
 
+func TestMCPQuickAuthorizationRemembersClientAndCancel(t *testing.T) {
+	for _, mode := range []string{"light", "dark"} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := core.DefaultConfig()
+			cfg.Settings.InterfaceTheme = mode
+			a := newApp(&core.Store{Dir: t.TempDir()}, cfg)
+			p, _ := operatorPane(t, a, "target")
+			p.agent = a.agent.Register(p.id, "target")
+			p.agent.Bind(p.term)
+			defer a.agent.Close()
+			clients, err := core.OpenMCPClients(a.store.Dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			clients.Add("first")
+			remembered, _, err := clients.Add("remembered")
+			if err != nil {
+				t.Fatal(err)
+			}
+			a.mcp.clients = clients
+			a.localUI.LastMCPClient = remembered.ID
+			server, err := core.StartMCPServer(a.store.Dir, clients, a.agent.Call, a.agent.Disconnected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer server.Close()
+			a.mcp.server = server
+			a.quickAuthorizeAgent(p)
+			view := ui.NewTester(a.view, 1000, 700)
+			if !a.mcp.quickOpen || a.mcp.quickClient != remembered.ID || a.mcp.quickPermission != "assist" || !view.HasText("将此会话交给 Agent") {
+				t.Fatal(view.Texts())
+			}
+			snapshot(t, view, "mcp-quick-"+mode+".png")
+			if err := view.Click("取消"); err != nil {
+				t.Fatal(err)
+			}
+			if a.mcp.quickOpen || p.agent.State().Authorized || p.agent.State().Audit != "" {
+				t.Fatal("cancel granted access")
+			}
+		})
+	}
+}
+
 func TestMCPPanelPairingLayoutsAndSharedConfigIsolation(t *testing.T) {
 	for _, width := range []int{1360, 880} {
 		t.Run(strconv.Itoa(width), func(t *testing.T) {

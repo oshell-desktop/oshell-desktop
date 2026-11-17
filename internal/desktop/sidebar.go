@@ -18,6 +18,8 @@ import (
 
 // These preferences are deliberately outside Config and the shared contract.
 type localPreferences struct {
+	LastMCPClient       string                    `json:"lastMCPClient,omitempty"`
+	QuickHistoryLimit   int                       `json:"quickHistoryLimit"`
 	MCPShortcut         *core.KeyboardShortcut    `json:"mcpShortcut"`
 	Version             int                       `json:"version,omitempty"`
 	DeepFocusShortcut   core.KeyboardShortcut     `json:"deepFocusShortcut"`
@@ -48,7 +50,7 @@ func defaultLocalPreferences() localPreferences {
 			code = k
 		}
 	}
-	return localPreferences{MCPShortcut: &core.KeyboardShortcut{KeyCode: 0, Modifiers: 6}, DeepFocusShortcut: core.KeyboardShortcut{KeyCode: focusCode, Modifiers: 1 | 2 | 8}, DefaultTitleMode: "sessionName", ConfirmTabClose: true, SidebarShortcut: core.KeyboardShortcut{KeyCode: code, Modifiers: 1 | 8}, WordSeparators: defaultWordSeparators, ShiftWhitespace: true}
+	return localPreferences{QuickHistoryLimit: core.DefaultQuickHistoryLimit, MCPShortcut: &core.KeyboardShortcut{KeyCode: 0, Modifiers: 6}, DeepFocusShortcut: core.KeyboardShortcut{KeyCode: focusCode, Modifiers: 1 | 2 | 8}, DefaultTitleMode: "sessionName", ConfirmTabClose: true, SidebarShortcut: core.KeyboardShortcut{KeyCode: code, Modifiers: 1 | 8}, WordSeparators: defaultWordSeparators, ShiftWhitespace: true}
 }
 func (p localPreferences) clone() localPreferences {
 	if p.MCPShortcut != nil {
@@ -85,6 +87,9 @@ func readLocalPreferences(dir string) (localPreferences, error) {
 	if !json.Valid(b) || next.Version < 0 || next.Version > 1 {
 		return p, fmt.Errorf("本机设置格式或版本不受支持")
 	}
+	if next.QuickHistoryLimit < 1 || next.QuickHistoryLimit > 100000 {
+		return p, fmt.Errorf("快速发送历史保留条数无效")
+	}
 	if next.StartupWindow != nil && !next.StartupWindow.valid() {
 		return p, fmt.Errorf("本机启动窗口大小无效")
 	}
@@ -105,6 +110,10 @@ func readLocalPreferences(dir string) (localPreferences, error) {
 func (a *App) saveLocalPreferences(p localPreferences) bool {
 	p = p.clone()
 	_, err := readLocalPreferences(a.store.Dir)
+	historyChanged := p.QuickHistoryLimit != a.localUI.QuickHistoryLimit
+	if err == nil && historyChanged {
+		err = a.quickHistory().Trim(p.QuickHistoryLimit)
+	}
 	var b []byte
 	if err == nil {
 		b, err = json.Marshal(p)
@@ -134,7 +143,11 @@ func (a *App) saveLocalPreferences(p localPreferences) bool {
 	}
 	pinsChanged := !maps.Equal(a.localUI.Pins, p.Pins)
 	clockChanged := a.localUI.ClockFullscreenOnly != p.ClockFullscreenOnly
+
 	apply(a)
+	if historyChanged {
+		a.quickHistoryChanged()
+	}
 	if a.hub != nil {
 		for _, target := range a.hub.windows {
 			apply(target)

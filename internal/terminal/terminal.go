@@ -48,6 +48,8 @@ import (
 
 // Options configure a terminal.
 type Options struct {
+	ReconnectHistory     *ReconnectHistory
+	OnReconnect          func()
 	Replay               bool
 	Agent                *core.AgentSession
 	BeforeClipboardPaste func() bool
@@ -299,6 +301,16 @@ func New(opts Options) (*Terminal, error) {
 		t.term.SetScrollback(10 << 20)
 	}
 	t.term.SetDefaultCursor(vtCursor(opts.Cursor), !opts.NoBlink)
+	if history := opts.ReconnectHistory; history != nil {
+		t.size.cols, t.size.rows = history.Cols, history.Rows
+		if err := t.term.Resize(t.size.cols, t.size.rows, t.size.cellW, t.size.cellH); err != nil {
+			t.term.Free()
+			return nil, err
+		}
+		t.term.Write(history.Data)
+		t.term.Write([]byte(fmt.Sprintf("\x1b[0m\x1b[%d;1H", history.Rows) + strings.Repeat("\r\n", history.Rows) + "\x1b[H[OShell · 重新连接，已保留之前的终端输出]\r\n"))
+		t.opts.ReconnectHistory = nil
+	}
 	if t.rs, err = vt.NewRenderState(); err != nil {
 		t.term.Free()
 		return nil, err
@@ -346,7 +358,7 @@ func New(opts Options) (*Terminal, error) {
 func (t *Terminal) run() {
 	t.mu.Lock()
 	if t.opts.LocalToolsOnExit {
-		f := &sessionFallback{current: t.src, cols: t.size.cols, rows: t.size.rows, before: func() {
+		f := &sessionFallback{current: t.src, cols: t.size.cols, rows: t.size.rows, reconnect: t.opts.OnReconnect, before: func() {
 			if t.opts.Agent != nil {
 				t.opts.Agent.Disconnect()
 			}
@@ -502,6 +514,7 @@ func (t *Terminal) write(p []byte) {
 func (t *Terminal) writeOutput(p []byte, fromReader bool) {
 	if t.opts.Agent != nil {
 		t.opts.Agent.Observe(p)
+		p = t.opts.Agent.FilterIntegrationEcho(p)
 	}
 	t.mu.Lock()
 	for fromReader && t.selectionHold != nil {
@@ -700,6 +713,20 @@ func (t *Terminal) Snapshot() []byte {
 		return nil
 	}
 	return t.term.VT()
+}
+
+type ReconnectHistory struct {
+	Data       []byte
+	Cols, Rows int
+}
+
+func (t *Terminal) HistoryForReconnect() *ReconnectHistory {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.term == nil {
+		return nil
+	}
+	return &ReconnectHistory{Data: t.term.ReconnectVT(), Cols: t.size.cols, Rows: t.size.rows}
 }
 
 // Send sends data to the program as if typed.

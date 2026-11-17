@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -190,13 +191,13 @@ func (b *MCPBridge) Close() error {
 	}
 	return nil
 }
-func (b *MCPBridge) Call(ctx context.Context, tool string, args json.RawMessage) (any, error) {
+func (b *MCPBridge) request(ctx context.Context, tool string, args json.RawMessage) (any, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.conn == nil {
 		c, err := dialLaunch(ctx, mcpEndpoint(b.root))
 		if err != nil {
-			return nil, fmt.Errorf("请先在 OShell 中手动开启 MCP 服务")
+			return nil, &MCPTransportError{message: "无法连接 OShell MCP 服务；请手动开启，后续请求会自动重连，无需重新配对"}
 		}
 		if err = verifyLaunchConnection(c, true); err != nil {
 			c.Close()
@@ -220,10 +221,75 @@ func (b *MCPBridge) Call(ctx context.Context, tool string, args json.RawMessage)
 	if err != nil {
 		c.Close()
 		b.conn = nil
-		return nil, fmt.Errorf("MCP 通道中断，结果未知；未自动重试")
+		var network net.Error
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed) || errors.As(err, &network) {
+			return nil, &MCPTransportError{message: "MCP 通道中断，执行结果未知；不得用新幂等键重发命令"}
+		}
+		return nil, err
 	}
 	if response.Error != "" {
 		return nil, fmt.Errorf("%s", response.Error)
 	}
 	return response.Result, nil
+}
+
+// Only transport failures can retry a read. Protocol, identity and application
+// failures, and every execution request, retain their original result.
+type MCPTransportError struct{ message string }
+
+func (e *MCPTransportError) Error() string { return e.message }
+func (b *MCPBridge) requestWithRetry(ctx context.Context, tool string, args json.RawMessage) (any, error) {
+	result, err := b.request(ctx, tool, args)
+	var failure *MCPTransportError
+	readOnly := tool == "sessions_list" || tool == "session_state" || tool == "operation_read"
+	if readOnly && errors.As(err, &failure) {
+		timer := time.NewTimer(250 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+		return b.request(ctx, tool, args)
+	}
+	return result, err
+}
+func (b *MCPBridge) Call(ctx context.Context, tool string, args json.RawMessage) (any, error) {
+	if err := ValidateMCPTool(tool, args); err != nil {
+		return nil, err
+	}
+	options := readOptions(args, tool == "session_exec")
+	if tool == "operation_read" && options.WaitMS > 0 {
+		read := NewMCPBridge(b.root, b.token)
+		defer read.Close()
+		return read.requestWithRetry(ctx, tool, args)
+	}
+	result, err := b.requestWithRetry(ctx, tool, args)
+	if err != nil || tool != "session_exec" {
+		return result, err
+	}
+	receipt, ok := result.(map[string]any)
+	if !ok {
+		return result, nil
+	}
+	id, ok := receipt["operation_id"].(string)
+	if !ok {
+		return result, nil
+	}
+	params := map[string]any{"operation_id": id, "format": "compact", "wait_for": "completion", "wait_ms": options.WaitMS, "limit": options.Limit, "view": options.View}
+	if options.TailLines > 0 {
+		params["tail_lines"] = options.TailLines
+	}
+	if options.Contains != "" {
+		params["contains"] = options.Contains
+	}
+	data, _ := json.Marshal(params)
+	read := NewMCPBridge(b.root, b.token)
+	defer read.Close()
+	output, err := read.requestWithRetry(ctx, "operation_read", data)
+	if err != nil {
+		receipt["read_error"], receipt["next_action"] = err.Error(), "read_output"
+		return receipt, nil
+	}
+	return output, nil
 }

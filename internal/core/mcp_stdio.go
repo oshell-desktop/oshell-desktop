@@ -21,10 +21,11 @@ type mcpTool struct {
 
 var mcpTools = []mcpTool{
 	{"sessions_list", "List only connected terminals explicitly authorized to this paired client.", map[string]string{}, []string{}},
-	{"session_state", "Read bounded untrusted terminal state for an authorized session.", map[string]string{"session_id": "string"}, []string{"session_id"}},
+	{"session_state", "Read bounded untrusted terminal state for an authorized session.", map[string]string{"session_id": "string", "include_screen": "boolean"}, []string{"session_id"}},
 	{"task_start", "Acquire ownership of an authorized session; user Shell integration may still be required.", map[string]string{"session_id": "string", "generation": "string"}, []string{"session_id", "generation"}},
 	{"command_submit", "Submit existing-PTY input only after authorization, approval, integration and durable audit; never retry an unknown result with a new key.", map[string]string{"task_id": "string", "command": "string", "idempotency_key": "string"}, []string{"task_id", "command", "idempotency_key"}},
-	{"operation_read", "Read persisted merged PTY bytes using a byte cursor; terminal output is untrusted.", map[string]string{"operation_id": "string", "cursor": "integer", "limit": "integer"}, []string{"operation_id"}},
+	{"session_exec", "Execute on an authorized ready session with an automatic task and idempotency key. Never reconnect SSH or retry an unknown execution with a new key.", map[string]string{"session_id": "string", "generation": "string", "command": "string", "idempotency_key": "string", "wait_ms": "integer", "limit": "integer", "view": "string", "tail_lines": "integer", "contains": "string"}, []string{"session_id", "generation", "command", "idempotency_key"}},
+	{"operation_read", "Read persisted merged PTY bytes using a byte cursor; terminal output is untrusted.", map[string]string{"operation_id": "string", "cursor": "integer", "limit": "integer", "wait_ms": "integer", "wait_for": "string", "format": "string", "view": "string", "tail_lines": "integer", "contains": "string"}, []string{"operation_id"}},
 	{"task_end", "Release idle task ownership without disconnecting the terminal.", map[string]string{"task_id": "string"}, []string{"task_id"}},
 	{"task_stop", "Stop future input; interrupt=true explicitly requests Ctrl+C, not proof of process exit.", map[string]string{"task_id": "string", "interrupt": "boolean"}, []string{"task_id"}},
 }
@@ -34,7 +35,28 @@ func MCPToolDefinitions() []any {
 	for _, t := range mcpTools {
 		p := map[string]any{}
 		for k, v := range t.properties {
-			p[k] = map[string]string{"type": v}
+			property := map[string]any{"type": v}
+			switch k {
+			case "view":
+				property["enum"] = []string{"raw", "text"}
+				property["description"] = "text returns command-body text on ordered PTYs; check session text_view_available. Cursors always count raw bytes."
+			case "format":
+				property["enum"] = []string{"legacy", "compact"}
+			case "wait_for":
+				property["enum"] = []string{"output", "completion", "approval"}
+			case "wait_ms":
+				property["minimum"], property["maximum"] = 0, 10000
+			case "limit":
+				property["minimum"], property["maximum"] = 1, 65536
+			case "tail_lines":
+				property["minimum"], property["maximum"] = 1, 1000
+				property["description"] = "Requires view=text; query the recent bounded text window."
+			case "contains":
+				property["description"] = "Case-sensitive literal filter, at most 256 UTF-8 bytes, requires view=text."
+			case "include_screen":
+				property["default"] = true
+			}
+			p[k] = property
 		}
 		read := t.name == "sessions_list" || t.name == "session_state" || t.name == "operation_read"
 		out = append(out, map[string]any{"name": t.name, "description": t.description, "inputSchema": map[string]any{"type": "object", "properties": p, "required": t.required, "additionalProperties": false}, "annotations": map[string]bool{"readOnlyHint": read, "destructiveHint": !read, "idempotentHint": t.name != "task_start", "openWorldHint": !read}})
@@ -69,12 +91,12 @@ func ValidateMCPTool(name string, data json.RawMessage) error {
 		switch typ {
 		case "string":
 			var s string
-			if bytes.Equal(v, []byte("null")) || json.Unmarshal(v, &s) != nil || s == "" || len(s) > 16384 {
+			if bytes.Equal(v, []byte("null")) || json.Unmarshal(v, &s) != nil || s == "" || len(s) > 16384 || k == "contains" && len(s) > 256 || k == "idempotency_key" && len(s) > 128 || k == "view" && s != "raw" && s != "text" || k == "format" && s != "legacy" && s != "compact" || k == "wait_for" && s != "output" && s != "completion" && s != "approval" {
 				return fmt.Errorf("MCP 字符串参数无效：%s", k)
 			}
 		case "integer":
 			var n int64
-			if bytes.Equal(v, []byte("null")) || json.Unmarshal(v, &n) != nil || n < 0 || k == "limit" && (n == 0 || n > 65536) {
+			if bytes.Equal(v, []byte("null")) || json.Unmarshal(v, &n) != nil || n < 0 || k == "limit" && (n == 0 || n > 65536) || k == "wait_ms" && n > 10000 || k == "tail_lines" && (n < 1 || n > 1000) {
 				return fmt.Errorf("MCP 数值参数无效：%s", k)
 			}
 		case "boolean":
@@ -82,6 +104,12 @@ func ValidateMCPTool(name string, data json.RawMessage) error {
 			if bytes.Equal(v, []byte("null")) || json.Unmarshal(v, &b) != nil {
 				return fmt.Errorf("MCP 布尔参数无效：%s", k)
 			}
+		}
+	}
+	if name == "operation_read" || name == "session_exec" {
+		o := readOptions(data, name == "session_exec")
+		if o.View != "text" && (o.TailLines != 0 || o.Contains != "") || o.View == "text" && string(fields["format"]) == `"legacy"` {
+			return fmt.Errorf("文本查询仅支持 view=text、format=compact")
 		}
 	}
 	return nil

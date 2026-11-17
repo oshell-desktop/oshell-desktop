@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -18,6 +19,7 @@ func (a *App) prepareSettings() {
 		a.features.fontLibrary.error = err.Error()
 	}
 	a.localUIDraft = a.localUI.clone()
+	a.quickHistoryLimitDraft = strconv.Itoa(a.localUI.QuickHistoryLimit)
 	a.localUIOriginal = a.localUI.clone()
 	a.windowDraft.prepare(a.localUI.StartupWindow)
 	a.sidebar.draftShown = a.sidebar.shown
@@ -169,6 +171,12 @@ func (a *App) applySettings() {
 		f.settingsError = err.Error()
 		return
 	}
+	historyLimit, err := strconv.Atoi(strings.TrimSpace(a.quickHistoryLimitDraft))
+	if err != nil || historyLimit < 1 || historyLimit > 100000 {
+		f.settingsError = "快速发送历史保留条数须为 1 至 100000"
+		return
+	}
+	a.localUIDraft.QuickHistoryLimit = historyLimit
 	size, err := a.windowDraft.value()
 	if err != nil {
 		f.settingsError = err.Error()
@@ -399,6 +407,7 @@ var settingsPages = []struct {
 	{"选择与侧栏", "设置文本选择、复制行为和会话侧栏。", sidebarIcon},
 	{"文件", "文件管理打开方式、命令与停靠位置。", folderIcon},
 	{"窗口", "设置启动和新建窗口时的内容区尺寸。", propertiesIcon},
+	{"快速发送", "管理本机快速发送历史。", keyboardIcon},
 }
 
 func (a *App) settingsPage(c *ui.Context) {
@@ -475,6 +484,10 @@ func (a *App) settingsPage(c *ui.Context) {
 		a.fileManagementSettings(c)
 	case 10:
 		a.windowSizeSettings(c)
+	case 11:
+		ui.Field(c, "快速发送历史保留条数", func() { ui.TextInput(c, &a.quickHistoryLimitDraft).Width(160).Placeholder("1–100000") })
+		ui.Text(c, "仅在本机保存，所有窗口共用；不参与同步或归档。降低上限会删除较旧的记录。").Wrap().FontSize(11).TextColor(c.Theme().TextMuted)
+		ui.Button(c, "清空快速发送历史…").OnClick(a.clearQuickHistory)
 	}
 }
 

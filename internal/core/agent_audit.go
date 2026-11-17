@@ -195,8 +195,9 @@ func (a *AgentAudit) Task(id string) error {
 	}
 	return nil
 }
-func (a *AgentAudit) Err() error { a.mu.Lock(); defer a.mu.Unlock(); return a.err }
-func (a *AgentAudit) ID() string { return a.index.ID }
+func (a *AgentAudit) Err() error              { a.mu.Lock(); defer a.mu.Unlock(); return a.err }
+func (a *AgentAudit) DurableSequence() uint64 { a.mu.Lock(); defer a.mu.Unlock(); return a.sequence }
+func (a *AgentAudit) ID() string              { return a.index.ID }
 func (a *AgentAudit) Close() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()

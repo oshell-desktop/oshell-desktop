@@ -2,6 +2,10 @@
 
 2026-11-12，SF-W04/W05 分屏回归。11 个终端的共用标签栏瓷砖排列在 1180 × 760 窗口按 4、4、3 展示。左右、上下和瓷砖排列保留终端最小可用尺寸，超出视口时可以滚动，选中屏外会话会定位到对应终端。修复从放大状态继续拆分时新分屏不可见，以及将放大分屏移至独立标签后再次排列时重复绑定终端造成的崩溃。回归测试从工具栏进入，在实际绘制的终端正文上核对边界、像素及输入目标。
 
+## Mac OShell v0.6.7 标签增量
+
+2026-11-17 用户明确授权同步到 v0.6.7 标签（`dd69495cce674e4eb5d106aa7d987120ceb2e4d8`），包含 MCP 新能力。快速发送历史归 SF-O02，重连历史归 SF-C01/I06，WebDAV Digest 归 SF-Y03，快捷引用归 SF-S11/S14，MCP 归原 V060-G01–G15。具体行为、证据、平台差异和有限待验步骤见 [本轮收尾清单](oshell-mac-v0.6.7-sync.md)。Windows 本地 ConPTY 的 text 输出视图有已复现限制，未宣称全部通过；共享配置协议与 Actions 不变。
+
 ## Mac OShell v0.6.5 发布增量
 
 2026-11-12 按正式版 v0.6.5（build 115，`0d10f5de10edf8293d18bfa694a19e50f973dbe4`）核查并同步。[上游源码差异](https://github.com/oshell-desktop/oshell/compare/v0.6.4...v0.6.5) · [上游头部设计规范](https://github.com/oshell-desktop/oshell/blob/v0.6.5/docs/ui-design.md)

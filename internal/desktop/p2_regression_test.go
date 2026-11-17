@@ -137,32 +137,37 @@ func TestP2S05AliasAndTargetMetadataSearch(t *testing.T) {
 }
 func TestP2O02QuickHistoryBoundsAndDraft(t *testing.T) {
 	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
+	a.features.operators.pendingReturn = true
 	for i := 0; i < 60; i++ {
 		a.rememberQuickSend(fmt.Sprint(i))
 	}
 	a.rememberQuickSend("59")
-	if len(a.history) != 50 {
-		t.Fatal(len(a.history))
+	page, more, err := a.quickHistory().Page("")
+	if err != nil || !more || len(page) != 50 {
+		t.Fatal(len(page), more, err)
 	}
 	a.quick = "draft"
+	a.features.operators.noReturn = true
 	a.navigateQuickHistory(true)
-	if a.quick != "59" {
-		t.Fatal(a.quick)
+	if a.quick != "59" || a.features.operators.noReturn {
+		t.Fatal("history pair", a.quick)
 	}
 	a.navigateQuickHistory(false)
-	if a.quick != "draft" {
-		t.Fatal("draft lost")
+	if a.quick != "draft" || !a.features.operators.noReturn {
+		t.Fatal("draft pair lost")
 	}
-	a.history = nil
+	reopened := newApp(a.store, a.config)
+	reopened.navigateQuickHistory(true)
+	if reopened.quick != "59" {
+		t.Fatal("restart lost history")
+	}
+	a.quickHistory().Trim(0)
 	for i := 0; i < 10; i++ {
 		a.rememberQuickSend(fmt.Sprint(i) + strings.Repeat("x", 8191))
 	}
-	if len(a.history) != 8 {
-		t.Fatal("64 KiB cap", len(a.history))
-	}
-	a.rememberQuickSend(strings.Repeat("x", 8193))
-	if len(a.history) != 8 {
-		t.Fatal("oversize history")
+	page, more, err = a.quickHistory().Page("")
+	if err != nil || len(page) != 8 || !more {
+		t.Fatal("64 KiB page", len(page), more, err)
 	}
 }
 

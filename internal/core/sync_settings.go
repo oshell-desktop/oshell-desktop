@@ -19,6 +19,7 @@ type SyncOptions struct {
 	Backend                  string            `json:"backend"`
 	Address                  string            `json:"address"`
 	Username                 string            `json:"username,omitempty"`
+	Authentication           string            `json:"authentication,omitempty"`
 }
 
 var ErrSyncSettingsLocked = errors.New("WebDAV 设置已加密，请先解锁主密码")
@@ -49,7 +50,17 @@ func LoadSyncOptions(dir string, master ...[]byte) (SyncOptions, error) {
 	if e = options.Policy.Validate(); e != nil {
 		return options, e
 	}
+	if e = options.validateAuthentication(); e != nil {
+		return options, e
+	}
 	return options, nil
+}
+
+func (o SyncOptions) validateAuthentication() error {
+	if o.Authentication != "" && o.Authentication != "basic" && o.Authentication != "digest" {
+		return fmt.Errorf("请选择 Basic 或 Digest 认证方式")
+	}
+	return nil
 }
 func (o SyncOptions) Target() string {
 	target := o.FontTarget()
@@ -81,7 +92,13 @@ func (o SyncOptions) CredentialProfile() Profile {
 func (o SyncOptions) Transport(password, localDirectory string) (SyncTransport, error) {
 	switch o.Backend {
 	case "webdav":
+		if err := o.validateAuthentication(); err != nil {
+			return nil, err
+		}
 		w, err := NewWebDAVTransport(o.Address, o.Username, password, false)
+		if err == nil {
+			w.authentication = o.Authentication
+		}
 		if err == nil && w.directory.Scheme == "https" && o.TrustedServerCertificate != (WebDAVCertificate{}) {
 			err = w.trustCertificate(o.TrustedServerCertificate)
 		}
@@ -124,6 +141,9 @@ func SaveSyncOptions(dir string, o SyncOptions, master ...[]byte) error {
 	return saveSyncOptionsLocked(dir, o, master...)
 }
 func saveSyncOptionsLocked(dir string, o SyncOptions, master ...[]byte) error {
+	if err := o.validateAuthentication(); err != nil {
+		return err
+	}
 	if err := o.Policy.Validate(); err != nil {
 		return err
 	}

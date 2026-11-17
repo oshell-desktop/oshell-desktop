@@ -18,6 +18,7 @@ import (
 )
 
 type pane struct {
+	reconnectHistory       *terminal.ReconnectHistory
 	agent                  *core.AgentSession
 	hostKeyMismatch        *core.HostKeyMismatch
 	fileDisplayIP          string
@@ -132,7 +133,7 @@ type App struct {
 	managerClipboard                                *sessionConfigurationClipboard
 	authPasswordRevealed                            bool
 	managerList                                     *ui.ListState
-	history                                         []string
+	quickHistoryLimitDraft                          string
 	query, selected, status, quick                  string
 	editing, authOpen, confirmSend                  bool
 	draft                                           core.Profile
@@ -677,6 +678,11 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, option
 		wasZoomed := t.zoomed == old
 		if old.profile.ID == profile.ID && old.profile.Identity() == profile.Identity() {
 			p.files = reconnectFileState(old.files)
+			if profile.Kind == "ssh" && old.term != nil {
+				p.reconnectHistory = old.term.HistoryForReconnect()
+			} else if profile.Kind == "ssh" {
+				p.reconnectHistory = old.reconnectHistory
+			}
 		}
 		replace(t.root)
 		a.dispose(old)
@@ -930,7 +936,7 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, option
 		}
 		var agentSession *core.AgentSession
 		if profile.Kind == "ssh" || profile.Kind == "local" {
-			agentSession = a.agentCoordinator().Register(p.id, profile.Name)
+			agentSession = a.agentCoordinator().Register(p.id, profile.Name, func() { post(func() {}) })
 		}
 		opts := terminal.Options{Dir: options.localDirectory, Agent: agentSession, PreferColorEmoji: settings.PreferColorEmoji, ManagedClipboardBindings: true, AmbiguousCharactersAreWide: settings.AmbiguousCharactersAreWide, Font: terminal.Font{Family: terminalFamily(settings.FontFamily), Size: float32(settings.FontSize)}, Scrollback: settings.ScrollbackMB << 20, Theme: terminalTheme(settings.Scheme()), NoBlink: true}
 
@@ -1016,6 +1022,17 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, option
 			})
 		}
 		opts.LocalToolsOnExit = profile.Kind == "ssh" || profile.Kind == "local" || cred.OpenTerminal
+		opts.ReconnectHistory = p.reconnectHistory
+		p.reconnectHistory = nil
+		if profile.Kind == "ssh" {
+			opts.OnReconnect = func() {
+				post(func() {
+					if owner := p.owner.Load(); owner != nil && !p.closed {
+						owner.reconnectPane(p)
+					}
+				})
+			}
+		}
 		opts.OnProcessState = func() { post(func() {}) }
 		opts.OnSessionEnd = func() {
 			diagnostics.Event("terminal_session_ended", map[string]any{"pane": p.id})

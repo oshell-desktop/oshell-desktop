@@ -26,10 +26,14 @@ type ToolsConsole struct {
 	closed       bool
 	once         sync.Once
 	managed      atomic.Bool
+	reconnect    func()
 }
 
 func NewToolsConsole() *ToolsConsole {
-	c := &ToolsConsole{cols: 80, rows: 24}
+	return newToolsConsole(nil)
+}
+func newToolsConsole(reconnect func()) *ToolsConsole {
+	c := &ToolsConsole{cols: 80, rows: 24, reconnect: reconnect}
 	c.output, c.writer = io.Pipe()
 	c.editor = newPromptEditor(c.writer)
 	c.managed.Store(true)
@@ -88,9 +92,13 @@ func (c *ToolsConsole) run() {
 		if e != nil {
 			return
 		}
+		empty := line == ""
 		line = strings.TrimSpace(line)
 		switch line {
 		case "":
+			if c.reconnect != nil && empty {
+				c.reconnect()
+			}
 			continue
 		case "exit", "quit":
 			return

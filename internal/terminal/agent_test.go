@@ -27,7 +27,7 @@ func TestMCPExistingBashPTYApprovalExecutionAndRevoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, _, err := clients.Add("PTY fixture")
+	client, credential, err := clients.Add("PTY fixture")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,6 +51,9 @@ func TestMCPExistingBashPTYApprovalExecutionAndRevoke(t *testing.T) {
 		}
 	}
 	wait("initial prompt", func() bool { return strings.Contains(term.Text(), "fixture>") })
+	if runtime.GOOS == "windows" && term.AgentRawOutputOrdered() {
+		t.Fatal("started ConPTY incorrectly reported ordered output")
+	}
 	if err = s.Grant(client.ID, "ask"); err != nil {
 		t.Fatal(err)
 	}
@@ -94,6 +97,93 @@ func TestMCPExistingBashPTYApprovalExecutionAndRevoke(t *testing.T) {
 		t.Fatal("idempotency failed", again)
 	}
 	call("task_end", map[string]any{"task_id": task})
+	if state := s.State(); !state.ControlActive || !state.ShellReady || state.Task != "" {
+		t.Fatal("task_end lost access", state)
+	}
+	stateOnly := call("session_state", map[string]any{"session_id": v.ID, "include_screen": false}).(map[string]any)
+	if _, exists := stateOnly["screen"]; exists || stateOnly["can_exec"] != true {
+		t.Fatal(stateOnly)
+	}
+	shortcutArgs := map[string]any{"session_id": v.ID, "generation": v.Generation, "command": "printf 'alpha\\r\\nbeta中文\\n'", "idempotency_key": core.NewID()}
+	shortcut := call("session_exec", shortcutArgs).(core.AgentOperation)
+	if shortcut.State != "pending_approval" {
+		t.Fatal(shortcut)
+	}
+	if err := s.Approve(shortcut.ID, shortcut.Command, true); err != nil {
+		t.Fatal(err)
+	}
+	view := "text"
+	if runtime.GOOS == "windows" {
+		view = "raw"
+	}
+	textResult := call("operation_read", map[string]any{"operation_id": shortcut.ID, "view": view, "format": "compact", "wait_for": "completion", "wait_ms": 3000}).(map[string]any)
+	if textResult["completed"] != true {
+		t.Fatal(textResult)
+	}
+	if view == "text" {
+		if textResult["output_text"] != "alpha\nbeta中文\n" || textResult["body_ended"] != true {
+			t.Fatal(textResult)
+		}
+		query := call("operation_read", map[string]any{"operation_id": shortcut.ID, "view": "text", "tail_lines": 1, "contains": "beta"}).(map[string]any)
+		if query["output_text"] != "beta中文\n" {
+			t.Fatal(query)
+		}
+	} else {
+		request, _ := json.Marshal(map[string]any{"operation_id": shortcut.ID, "view": "text"})
+		if _, err := coordinator.Call(context.Background(), client.ID, "operation_read", request); err == nil || !strings.Contains(err.Error(), "ConPTY") {
+			t.Fatal(err)
+		}
+		wait("rendered command body", func() bool {
+			return strings.Contains(term.Text(), "alpha\n") && strings.Contains(term.Text(), "beta中文\n")
+		})
+		raw := call("operation_read", map[string]any{"operation_id": shortcut.ID, "format": "compact"}).(map[string]any)
+		if !strings.Contains(raw["output_text"].(string), "alpha\r\nbeta中文") {
+			t.Fatal(raw)
+		}
+	}
+	if s.State().Task != "" || !s.Busy() {
+		t.Fatal("automatic task not released independently")
+	}
+
+	if again := call("session_exec", shortcutArgs).(core.AgentOperation); again.ID != shortcut.ID {
+		t.Fatal("shortcut replayed")
+	}
+	if err := s.ChangePermission("assist"); err != nil {
+		t.Fatal(err)
+	}
+	server, err := core.StartMCPServer(root, clients, coordinator.Call, coordinator.Disconnected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	bridge := core.NewMCPBridge(root, credential)
+	defer bridge.Close()
+	request, _ := json.Marshal(map[string]any{"session_id": v.ID, "generation": v.Generation, "command": "pwd", "idempotency_key": core.NewID(), "view": view, "wait_ms": 3000})
+	bridgeOutput, err := bridge.Call(context.Background(), "session_exec", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := bridgeOutput.(map[string]any); result["completed"] != true || result["encoding"] != "utf8" {
+		t.Fatal(result)
+	}
+	if err := s.ChangePermission("ask"); err != nil {
+		t.Fatal(err)
+	}
+	// A released task retains a running operation until the real shell end marker.
+	task = call("task_start", map[string]any{"session_id": v.ID, "generation": v.Generation}).(map[string]any)["task_id"].(string)
+	stopping := call("command_submit", map[string]any{"task_id": task, "command": "sleep 0.3; printf 'after-stop\\n'", "idempotency_key": core.NewID()}).(core.AgentOperation)
+	if err := s.Approve(stopping.ID, stopping.Command, true); err != nil {
+		t.Fatal(err)
+	}
+	wait("started before stop", func() bool { return s.State().Operation.State == "running" })
+	call("task_stop", map[string]any{"task_id": task})
+	if !s.Busy() || s.State().Operation.State != "running" {
+		t.Fatal("stop changed command result", s.State())
+	}
+	stopped := call("operation_read", map[string]any{"operation_id": stopping.ID, "view": view, "format": "compact", "wait_ms": 3000, "wait_for": "completion"}).(map[string]any)
+	if stopped["completed"] != true || view == "text" && stopped["output_text"] != "after-stop\n" {
+		t.Fatal(stopped)
+	}
 	// Queued input is checked again by the real input worker after revocation.
 	task = call("task_start", map[string]any{"session_id": v.ID, "generation": v.Generation}).(map[string]any)["task_id"].(string)
 	op = call("command_submit", map[string]any{"task_id": task, "command": "printf should-not-run", "idempotency_key": core.NewID()}).(core.AgentOperation)

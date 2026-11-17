@@ -40,7 +40,7 @@ func (e *SyncFailure) Error() string {
 	case "conflict":
 		return "共享版本已变化，未覆盖；请重新同步"
 	case "authentication":
-		return "WebDAV 身份验证失败"
+		return "WebDAV 身份验证失败，请检查认证方式、账号、密码及服务端算法"
 	case "etag":
 		return "服务器未提供可安全更新的版本标记，已停止覆盖并保留本机修改"
 	case "occupied":
@@ -89,6 +89,7 @@ type WebDAVTransport struct {
 	resolvedDirectory  *url.URL
 	directory          *url.URL
 	username, password string
+	authentication     string
 	client             *http.Client
 }
 
@@ -135,13 +136,43 @@ func (w *WebDAVTransport) requestLimit(ctx context.Context, method string, targe
 	if e != nil {
 		return 0, nil, nil, safeSyncFailure("network")
 	}
-	req.SetBasicAuth(w.username, w.password)
+	if w.authentication != "digest" {
+		req.SetBasicAuth(w.username, w.password)
+	}
 	req.Header.Set("User-Agent", "OShell Desktop")
 	req.Header.Set("Cache-Control", "no-cache")
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 	response, e := w.client.Do(req)
+	if e == nil && w.authentication == "digest" {
+		previousNonce := ""
+		for attempt := 0; response.StatusCode == http.StatusUnauthorized && attempt < 2; attempt++ {
+			response.Body.Close()
+			digest, err := parseWebDAVDigest(strings.Join(response.Header.Values("WWW-Authenticate"), ", "))
+			if err != nil {
+				return 0, nil, nil, err
+			}
+			if previousNonce != "" && (!strings.EqualFold(digest.fields["stale"], "true") || digest.fields["nonce"] == previousNonce) {
+				return 0, nil, nil, safeSyncFailure("authentication")
+			}
+			authorization, err := digest.authorization(method, target, w.username, w.password, "")
+			if err != nil {
+				return 0, nil, nil, err
+			}
+			previousNonce = digest.fields["nonce"]
+			retry := req.Clone(ctx)
+			retry.Body, err = req.GetBody()
+			if err != nil {
+				return 0, nil, nil, safeSyncFailure("network")
+			}
+			retry.Header.Set("Authorization", authorization)
+			response, e = w.client.Do(retry)
+			if e != nil {
+				break
+			}
+		}
+	}
 	if e != nil {
 		if ctx.Err() != nil {
 			return 0, nil, nil, ctx.Err()

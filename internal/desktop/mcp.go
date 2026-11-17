@@ -12,6 +12,8 @@ import (
 )
 
 type mcpPanelState struct {
+	quickOpen                                                                bool
+	quickSession, quickGeneration, quickClient, quickPermission              string
 	detaching                                                                bool
 	sidebarShown                                                             bool
 	open, busy, confirmIdle, confirmDelete                                   bool
@@ -76,6 +78,14 @@ func (a *App) showMCP() {
 			a.hub.mcpClients = clients
 		} else {
 			f.clients = clients
+		}
+	}
+	if f.client == "" {
+		for _, client := range a.mcpClients().List() {
+			if client.ID == a.localUI.LastMCPClient {
+				f.client = client.ID
+				break
+			}
 		}
 	}
 	a.refreshMCPArchives()
@@ -177,12 +187,79 @@ func (a *App) mcpWindow() {
 }
 func (a *App) mcpDialog(c *ui.Context) {
 	f := &a.mcp
+	if a.workspaceLocked() {
+		f.quickOpen = false
+	}
+	desktopModal(c.Key("mcp-quick-authorize"), &f.quickOpen, func() {
+		dialogBody(c, 460).Gap(10).Children(func() {
+			windowHeading(c, "将此会话交给 Agent")
+			s := a.agentCoordinator().Session(f.quickSession)
+			if s == nil || s.State().Generation != f.quickGeneration || !s.State().Connected {
+				ui.Text(c, "目标会话已改变，请重新选择")
+				ui.Button(c, "关闭").OnClick(func() { f.quickOpen = false })
+				return
+			}
+			ui.Text(c, "目标："+s.State().Title)
+			choices := [][2]string{}
+			if clients := a.mcpClients(); clients != nil {
+				for _, client := range clients.List() {
+					choices = append(choices, [2]string{client.ID, client.Name})
+				}
+			}
+			selectValue(c, "客户端", &f.quickClient, choices)
+			selectValue(c, "权限", &f.quickPermission, [][2]string{{"ask", "请求批准"}, {"assist", "帮我批准（简单查询）"}, {"full", "完全访问（仍审批复杂语法）"}})
+			ui.Text(c, "请确认当前 Bash/Zsh 空闲，没有未提交的输入或密码提示。授权仅作用于此会话，不修改启动文件；可用“终止接入”或双按 Esc 接管。").TextColor(c.Theme().TextMuted)
+			ui.Row(c).Gap(8).Children(func() {
+				ui.Spacer(c)
+				ui.Button(c, "取消").OnClick(func() { f.quickOpen = false })
+				ui.PrimaryButton(c, "确认空闲并授权").Disabled(f.busy || a.mcpServer() == nil || f.quickClient == "").OnClick(func() {
+					client, permission := f.quickClient, f.quickPermission
+					f.quickOpen = false
+					a.mcpRun(func() error {
+						err := s.Grant(client, permission)
+						a.post(func() {
+							if err != nil {
+								a.status = "MCP 接入失败：" + err.Error()
+								a.showMCP()
+								a.mcp.error = err.Error()
+								return
+							}
+							preferences := a.localUI.clone()
+							preferences.LastMCPClient = client
+							a.saveLocalPreferences(preferences)
+						})
+						return err
+					})
+				})
+			})
+		})
+	})
 	if f.sidebarShown {
 		return
 	}
 	desktopModal(c, &f.open, func() { dialogBody(c, 860).Gap(10).Children(func() { a.mcpContents(c) }) })
 	if !f.open && f.window == nil && f.poll != nil {
 		a.closeMCPPanel()
+	}
+}
+
+func (a *App) quickAuthorizeAgent(p *pane) {
+	f := &a.mcp
+	f.session = p.id
+	clients := a.mcpClients()
+	state := p.agent.State()
+	if a.mcpServer() == nil || clients == nil || len(clients.List()) == 0 || state.Authorized || state.Audit != "" {
+		a.showMCP()
+		return
+	}
+	f.quickOpen, f.quickSession, f.quickGeneration, f.quickPermission = true, state.ID, state.Generation, "assist"
+	items := clients.List()
+	f.quickClient = items[0].ID
+	for _, client := range items {
+		if client.ID == a.localUI.LastMCPClient {
+			f.quickClient = client.ID
+			break
+		}
 	}
 }
 func (a *App) mcpContents(c *ui.Context) {
@@ -274,11 +351,23 @@ func (a *App) mcpContents(c *ui.Context) {
 			}
 			selectValue(c, "待授权终端", &f.session, sessions)
 			selectValue(c, "授权权限", &f.permission, [][2]string{{"ask", "请求批准"}, {"assist", "帮我批准（简单查询）"}, {"full", "完全访问（仍审批复杂语法）"}})
-			ui.Button(c, "授权此终端").Disabled(f.busy || a.mcpServer() == nil || f.client == "" || f.session == "").OnClick(func() {
+			ui.Checkbox(c, &f.confirmIdle, "我确认此终端是空闲 Bash/Zsh；授权后自动准备 Shell")
+			ui.Button(c, "授权并接入此终端").Disabled(!f.confirmIdle || f.busy || a.mcpServer() == nil || f.client == "" || f.session == "").OnClick(func() {
 				s := a.agentCoordinator().Session(f.session)
 				client, permission := f.client, f.permission
 				if s != nil {
-					a.mcpRun(func() error { return s.Grant(client, permission) })
+					f.confirmIdle = false
+					a.mcpRun(func() error {
+						err := s.Grant(client, permission)
+						if err == nil {
+							a.post(func() {
+								preferences := a.localUI.clone()
+								preferences.LastMCPClient = client
+								a.saveLocalPreferences(preferences)
+							})
+						}
+						return err
+					})
 				}
 			})
 			for _, s := range a.agentCoordinator().Sessions() {
@@ -308,7 +397,7 @@ func (a *App) mcpSessionCard(c *ui.Context, s *core.AgentSession, v core.AgentSe
 		})
 		ui.Checkbox(c, &f.confirmIdle, "我确认所操作终端是空闲的 Bash/Zsh")
 		ui.Row(c).Wrap().Gap(6).Children(func() {
-			ui.Button(c, "启用临时 Shell 集成").Disabled(f.busy || !v.Authorized || !v.Connected || !f.confirmIdle).OnClick(func() { f.confirmIdle = false; a.mcpRun(func() error { return s.Integrate(context.Background()) }) })
+			ui.Button(c, "恢复 Agent 接入").Disabled(v.ControlActive || f.busy || !v.Authorized || !v.Connected || !f.confirmIdle).OnClick(func() { f.confirmIdle = false; a.mcpRun(func() error { return s.Integrate(context.Background()) }) })
 			ui.MenuButton(c, "调整权限", func(m *ui.Menu) {
 				for _, p := range [][2]string{{"ask", "请求批准"}, {"assist", "帮我批准"}, {"full", "完全访问"}} {
 					if m.Item(p[1]).Chosen() {

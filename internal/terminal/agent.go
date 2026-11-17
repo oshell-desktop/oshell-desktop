@@ -3,6 +3,7 @@ package terminal
 import (
 	"context"
 	"fmt"
+	"runtime"
 
 	"oshell-desktop/internal/core"
 	"oshell-desktop/internal/terminal/internal/vt"
@@ -14,6 +15,18 @@ func (t *Terminal) AgentSend(ctx context.Context, data []byte, ticket string) er
 	}
 	_, err := t.in.rawTicket(ctx, data, ticket)
 	return err
+}
+
+// ConPTY renders text asynchronously while forwarding OSC markers immediately.
+// Only raw PTYs can delimit command text reliably with those markers.
+func (t *Terminal) AgentRawOutputOrdered() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return runtime.GOOS != "windows" || t.opts.Conn != nil || t.opts.Replay
+}
+
+func (t *Terminal) AgentCanInitialize() bool {
+	return !t.idleEditing.Load() && t.FileCommandReady()
 }
 
 func (t *Terminal) FileCommandReady() bool {

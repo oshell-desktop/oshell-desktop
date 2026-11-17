@@ -10,6 +10,37 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+func TestQuickConnectionExplicitLinkUsesAliasAndTarget(t *testing.T) {
+	cfg := core.DefaultConfig()
+	p := core.NewProfile()
+	p.Name, p.Group, p.Host, p.QuickConnect = "original", "private", "fixture.invalid", false
+	cfg.Profiles = []core.Profile{p}
+	link := core.SessionLink{ID: core.NewID(), ProfileID: p.ID, Name: "alias2", Folder: "folder"}
+	cfg.Links = []core.SessionLink{link}
+	tree := quickConnectionTree(cfg.Profiles, nil, cfg.Links...)
+	if len(tree) != 1 || tree[0].label != "Links" || !tree[0].linksFolder {
+		t.Fatal(tree)
+	}
+	leaf := tree[0].children[0].children[0]
+	if leaf.label != "alias2" || leaf.id != p.ID || leaf.linkID != link.ID || leaf.icon(false) == nil {
+		t.Fatal(leaf)
+	}
+	if cfg.Profiles[0].Name != "original" || cfg.Profiles[0].QuickConnect {
+		t.Fatal("reference changed profile")
+	}
+	a := newApp(&core.Store{Dir: t.TempDir()}, cfg)
+	a.connectQuickID(p.ID, link.ID)
+	if !a.authOpen || a.pendingProfile.ID != p.ID || a.pendingProfile.Name != "original" {
+		t.Fatal("alias did not resolve original identity")
+	}
+	a.authOpen = false
+	a.config.Links = nil
+	a.connectQuickID(p.ID, link.ID)
+	if a.authOpen {
+		t.Fatal("removed reference still connected")
+	}
+}
+
 func TestQuickConnectionSessionMarkers(t *testing.T) {
 	cfg := core.DefaultConfig()
 	for _, kind := range []string{"ftp", "local", "sftp", "ssh"} {

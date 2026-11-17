@@ -25,6 +25,12 @@ func (a *App) tabSessionMenu(m *ui.Menu, t *tab) bool {
 		a.reconnectActive()
 		return true
 	}
+	if m.Item("交给 Agent…").Disabled(p.closed || p.agent == nil || p.term == nil || !p.term.Available() || p.term.InLocalToolsMode()).Chosen() {
+		a.selectTab(t)
+		a.quickAuthorizeAgent(p)
+		return true
+	}
+
 	if m.Item("移动到新窗口").Disabled(a.hub == nil || a.modalActive()).Chosen() {
 		a.selectTab(t)
 		a.moveTabToNewWindow()

@@ -10,23 +10,27 @@ import (
 )
 
 type operatorState struct {
-	historyOffset                       int
-	historyDraft, historyValue          string
-	selectedGroups, groupSelectionDraft map[string]bool
-	groupsOpen                          bool
-	noReturn                            bool
-	quickFocus, composerFocus           ui.Handle
-	selected                            map[string]bool
-	selectionDraft                      map[string]bool
-	targetsOpen                         bool
-	composerOpen                        bool
-	composerText                        string
-	composerReturn                      bool
-	composerTargets                     map[string]bool
-	pendingTargets                      []*pane
-	pendingText                         string
-	pendingReturn, pendingComposer      bool
-	error                               string
+	historyBrowseOpen, historyPageMore         bool
+	historyRecords                             []core.QuickHistoryEntry
+	historyPages                               []string
+	historyID, historyPage                     string
+	historyDraftNoReturn, historyValueNoReturn bool
+	historyDraft, historyValue                 string
+	selectedGroups, groupSelectionDraft        map[string]bool
+	groupsOpen                                 bool
+	noReturn                                   bool
+	quickFocus, composerFocus                  ui.Handle
+	selected                                   map[string]bool
+	selectionDraft                             map[string]bool
+	targetsOpen                                bool
+	composerOpen                               bool
+	composerText                               string
+	composerReturn                             bool
+	composerTargets                            map[string]bool
+	pendingTargets                             []*pane
+	pendingText                                string
+	pendingReturn, pendingComposer             bool
+	error                                      string
 }
 
 var sendScopes = [][2]string{{"current", "当前会话"}, {"tab", "当前标签全部分屏"}, {"visible", "当前可见终端"}, {"all", "本窗口全部终端"}, {"selected", "所选终端"}, {"currentGroup", "当前标签组"}, {"selectedGroups", "所选标签组"}}
@@ -267,13 +271,16 @@ func (a *App) send() {
 		o.error = "发送前目标已关闭、移走或开始传输，命令未发送"
 		a.status = "错误：" + o.error
 	} else {
-		a.rememberQuickSend(o.pendingText)
+		historyErr := a.rememberQuickSend(o.pendingText)
 		if !o.pendingComposer {
 			a.quick = ""
 			o.noReturn = false
-			o.historyOffset = 0
+			o.historyID, o.historyPage = "", ""
 		}
 		a.status = fmt.Sprintf("已发送至 %d 个终端", count)
+		if historyErr != nil {
+			a.status += "；历史保存失败：" + historyErr.Error()
+		}
 	}
 	a.confirmSend = false
 	o.pendingTargets = nil

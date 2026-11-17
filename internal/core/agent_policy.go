@@ -42,6 +42,9 @@ func AgentCommandDecision(command, permission string) (string, error) {
 	if permission == "ask" {
 		return "approval", nil
 	}
+	if agentQueryAllowed(command) {
+		return "automatic", nil
+	}
 	for _, r := range command {
 		if !strings.ContainsRune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./- \t", r) {
 			return "approval", nil
@@ -71,12 +74,6 @@ func AgentCommandDecision(command, permission string) (string, error) {
 	return "approval", nil
 }
 func agentShellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
-func agentIntegrationCommand(token string) []byte {
-	return []byte("if [ -n \"${BASH_VERSION-}${ZSH_VERSION-}\" ]; then printf '\\033]779;OSHELL;" + token + ";ready\\007'; else printf '\\033]779;OSHELL;" + token + ";unsupported\\007'; fi\n")
-}
-func agentExecutionCommand(token, id, command string) []byte {
-	return []byte("printf '\\033]779;OSHELL;" + token + ";start;" + id + "\\007'; eval -- " + agentShellQuote(command) + "; printf '\\033]779;OSHELL;" + token + ";end;" + id + ";%s\\007' \"$?\"\n")
-}
 
 // Keep only a suffix which could be the start of a sensitive value. This
 // preserves ordinary output latency and removes secrets split across reads.

@@ -81,7 +81,7 @@ func (a *App) modalActive() bool {
 	return len(a.challenges) > 0 || a.nonAuthenticationModalActive()
 }
 func (a *App) nonAuthenticationModalActive() bool {
-	if a.mcp.open && !a.mcp.sidebarShown || a.sidebar.rename != nil || a.imagePaste != nil || a.hostKeyCleanupOpen {
+	if a.mcp.quickOpen || a.mcp.open && !a.mcp.sidebarShown || a.sidebar.rename != nil || a.imagePaste != nil || a.hostKeyCleanupOpen {
 		return true
 	}
 	f := &a.features

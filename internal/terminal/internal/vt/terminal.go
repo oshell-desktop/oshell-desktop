@@ -614,6 +614,17 @@ func (t *Terminal) ScreenVT() []byte {
 	return t.vtFrom(max(0, int(s.Total)-int(s.Len)))
 }
 func (t *Terminal) vtFrom(first int) []byte {
+	return t.formatVTFrom(first, false)
+}
+
+// ReconnectVT archives only the normal buffer's cells. Parser modes, title,
+// keyboard protocols and working directory must belong to the new connection.
+func (t *Terminal) ReconnectVT() []byte {
+	t.Write([]byte("\x1b[?1049l\x1b[?47l"))
+	return t.formatVTFrom(0, true)
+}
+
+func (t *Terminal) formatVTFrom(first int, historyOnly bool) []byte {
 	// Replaying soft wraps as CR/LF splits logical paragraphs, changing BiDi,
 	// selection and subsequent reflow even if the initial cells look identical.
 	opts := formatterOptions{size: unsafe.Sizeof(formatterOptions{}), emit: formatVT, unwrap: true}
@@ -630,6 +641,10 @@ func (t *Terminal) vtFrom(first int) []byte {
 	x.modes, x.scrollingRegion, x.tabstops, x.pwd, x.keyboard = true, true, true, true, true
 	x.screen.size = unsafe.Sizeof(opts.extra.screen)
 	x.screen.cursor, x.screen.style, x.screen.hyperlink, x.screen.protection, x.screen.kittyKeyboard, x.screen.charsets = true, true, true, true, true, true
+	if historyOnly {
+		x.modes, x.scrollingRegion, x.tabstops, x.pwd, x.keyboard = false, false, false, false, false
+		x.screen.cursor, x.screen.protection, x.screen.kittyKeyboard, x.screen.charsets = false, false, false, false
+	}
 	var f uintptr
 	if formatterTerminalNew(0, &f, t.h, opts) != 0 {
 		return nil

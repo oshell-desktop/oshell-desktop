@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,21 +22,24 @@ type AgentTerminal interface {
 	AgentSnapshot() (screen []byte, text string, cols, rows int, eligible bool)
 }
 type AgentOperation struct {
-	ID                                              string `json:"operation_id"`
-	State                                           string `json:"state"`
-	ExitCode                                        *int   `json:"exit_code,omitempty"`
-	Command                                         string `json:"-"`
-	Task, Client, Key, Digest, Revision, Generation string `json:"-"`
+	Task                                      string `json:"task_id,omitempty"`
+	ID                                        string `json:"operation_id"`
+	State                                     string `json:"state"`
+	ExitCode                                  *int   `json:"exit_code,omitempty"`
+	Command                                   string `json:"-"`
+	ShellToken, Permission                    string `json:"-"`
+	Sent                                      bool   `json:"-"`
+	Client, Key, Digest, Revision, Generation string `json:"-"`
 }
 type AgentSessionState struct {
-	ID                                           string `json:"session_id"`
-	Generation                                   string `json:"generation"`
-	Title                                        string `json:"title"`
-	Client                                       string `json:"client"`
-	Permission                                   string `json:"permission"`
-	Authorized, Connected, ShellReady, Sensitive bool
-	Task, Audit, Problem                         string
-	Operation                                    *AgentOperation
+	ID                                                          string `json:"session_id"`
+	Generation                                                  string `json:"generation"`
+	Title                                                       string `json:"title"`
+	Client                                                      string `json:"client"`
+	Permission                                                  string `json:"permission"`
+	Authorized, Connected, ShellReady, Sensitive, ControlActive bool
+	Task, Audit, Problem                                        string
+	Operation                                                   *AgentOperation
 }
 type AgentCoordinator struct {
 	taskCount atomic.Int64
@@ -48,6 +49,14 @@ type AgentCoordinator struct {
 	sessions  map[string]*AgentSession
 }
 type AgentSession struct {
+	notify                                            func()
+	unorderedOutput                                   bool
+	integrationInputSent                              bool
+	changed                                           chan struct{}
+	integrationFrames                                 [][]byte
+	integrationNext                                   int
+	automaticTask                                     bool
+	integrationEcho                                   *AgentIntegrationEcho
 	displayRedactor                                   agentRedactor
 	size                                              atomic.Uint64
 	taskConnection                                    string
@@ -74,13 +83,16 @@ type AgentSession struct {
 func NewAgentCoordinator(root string) *AgentCoordinator {
 	return &AgentCoordinator{root: root, sessions: map[string]*AgentSession{}}
 }
-func (c *AgentCoordinator) Register(id, title string) *AgentSession {
+func (c *AgentCoordinator) Register(id, title string, notify ...func()) *AgentSession {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if old := c.sessions[id]; old != nil {
 		old.Disconnect()
 	}
-	s := &AgentSession{receiptMu: &c.receiptMu, root: c.root, id: id, title: title, generation: NewID(), operations: map[string]*AgentOperation{}}
+	s := &AgentSession{changed: make(chan struct{}), receiptMu: &c.receiptMu, root: c.root, id: id, title: title, generation: NewID(), operations: map[string]*AgentOperation{}}
+	if len(notify) > 0 {
+		s.notify = notify[0]
+	}
 	c.sessions[id] = s
 	return s
 }
@@ -122,7 +134,7 @@ func (c *AgentCoordinator) Disconnected(connection string) {
 	for _, s := range c.Sessions() {
 		s.mu.Lock()
 		if s.task != "" && s.taskConnection == connection {
-			s.takeover("MCP 客户端连接已断开；远端命令结果仍需确认")
+			s.releaseTask("MCP 客户端连接已断开；接入授权保留，命令结果仍需确认")
 		}
 		s.mu.Unlock()
 	}
@@ -142,6 +154,9 @@ func (s *AgentSession) Bind(peer AgentTerminal) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.peer = peer
+	if source, ok := peer.(interface{ AgentRawOutputOrdered() bool }); ok {
+		s.unorderedOutput = !source.AgentRawOutputOrdered()
+	}
 	s.connected = true
 }
 func (s *AgentSession) Busy() bool      { return s.owner.Load() }
@@ -149,7 +164,7 @@ func (s *AgentSession) Recording() bool { return s.recording.Load() }
 func (s *AgentSession) State() AgentSessionState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r := AgentSessionState{ID: s.id, Generation: s.generation, Title: s.title, Client: s.client, Permission: s.permission, Authorized: s.authorized, Connected: s.connected, ShellReady: s.integrated, Sensitive: s.sensitive, Task: s.task, Problem: s.problem}
+	r := AgentSessionState{ID: s.id, Generation: s.generation, Title: s.title, Client: s.client, Permission: s.permission, Authorized: s.authorized, Connected: s.connected, ShellReady: s.integrated, Sensitive: s.sensitive, ControlActive: s.owner.Load(), Task: s.task, Problem: s.problem}
 	if s.audit != nil {
 		r.Audit = s.audit.ID()
 		if err := s.audit.Err(); err != nil {
@@ -166,6 +181,14 @@ func validAgentPermission(permission string) bool {
 	return permission == "ask" || permission == "assist" || permission == "full"
 }
 func (s *AgentSession) Grant(client, permission string) error {
+	if err := s.grant(client, permission); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return s.Integrate(ctx)
+}
+func (s *AgentSession) grant(client, permission string) error {
 	if !validAgentID(client) || !validAgentPermission(permission) {
 		return fmt.Errorf("客户端或权限无效")
 	}
@@ -175,6 +198,9 @@ func (s *AgentSession) Grant(client, permission string) error {
 		return fmt.Errorf("终端未连接，或已有授权/存档，请先结束旧存档")
 	}
 	screen, _, cols, rows, eligible := s.peer.AgentSnapshot()
+	if initializer, ok := s.peer.(interface{ AgentCanInitialize() bool }); ok {
+		eligible = eligible && initializer.AgentCanInitialize()
+	}
 	if !eligible {
 		return fmt.Errorf("只允许已连接且没有交互工具或文件传输的 Shell")
 	}
@@ -187,7 +213,7 @@ func (s *AgentSession) Grant(client, permission string) error {
 	s.lastCols, s.lastRows = cols, rows
 	s.NoteResize(cols, rows)
 	s.operations = map[string]*AgentOperation{}
-	s.problem = "请确认当前为空闲 Bash/Zsh，再启用临时 Shell 集成"
+	s.problem = "正在准备 Shell…"
 	return nil
 }
 func (s *AgentSession) event(kind string, data []byte, fields map[string]string) error {
@@ -195,7 +221,7 @@ func (s *AgentSession) event(kind string, data []byte, fields map[string]string)
 		return fmt.Errorf("尚未开启审计")
 	}
 	op := ""
-	if s.current != nil {
+	if s.current != nil && ((kind != "output" && kind != "display") || s.current.active() || s.unorderedOutput && s.current.State == "completed" || strings.HasPrefix(s.current.State, "unknown")) {
 		op = s.current.ID
 	}
 	err := s.audit.Append(AgentAuditEvent{Kind: kind, Operation: op, Bytes: data, Fields: fields})
@@ -205,9 +231,28 @@ func (s *AgentSession) event(kind string, data []byte, fields map[string]string)
 		s.integrated = false
 		s.owner.Store(false)
 	}
+	// Output already invalidates the terminal. Control-only changes must also
+	// wake its window when the panel is closed and the shell is silent.
+	if s.notify != nil && kind != "output" && kind != "display" {
+		s.notify()
+	}
+	close(s.changed)
+	s.changed = make(chan struct{})
 	return err
 }
+func (s *AgentSession) releaseTask(reason string) {
+	if s.current != nil && !s.current.Sent && (s.current.State == "pending_approval" || s.current.State == "queued") {
+		s.current.State = "cancelled_before_send"
+		s.ticket = ""
+	}
+	s.task, s.taskConnection, s.automaticTask = "", "", false
+	if s.audit != nil {
+		_ = s.event("task_released", nil, map[string]string{"reason": reason})
+	}
+}
 func (s *AgentSession) takeover(reason string) {
+	cancelLoader := s.integrationPending && s.integrationInputSent && s.connected
+	s.integrationFrames = nil
 	s.integrationPending = false
 	s.ticket = ""
 	s.task = ""
@@ -229,8 +274,21 @@ func (s *AgentSession) takeover(reason string) {
 	if s.audit != nil {
 		_ = s.event("takeover", nil, map[string]string{"reason": reason})
 	}
+	if cancelLoader && s.peer != nil {
+		s.ticket = "interrupt:" + NewID()
+		ticket, peer := s.ticket, s.peer
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = peer.AgentSend(ctx, []byte{3}, ticket)
+		}()
+	}
 }
-func (s *AgentSession) revoke(reason string) { s.takeover(reason); s.authorized = false }
+func (s *AgentSession) revoke(reason string) {
+	s.takeover(reason)
+	s.authorized = false
+	s.current = nil
+}
 func (s *AgentSession) Revoke() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -245,7 +303,8 @@ func (s *AgentSession) ChangePermission(permission string) error {
 	if !s.authorized {
 		return fmt.Errorf("终端未授权")
 	}
-	s.takeover("权限已变化，请重新开始任务和确认 Shell")
+	s.releaseTask("权限已变化，旧审批失效")
+	s.revision = NewID()
 	s.permission = permission
 	return s.event("permission", nil, map[string]string{"permission": permission})
 }
@@ -284,11 +343,18 @@ func (s *AgentSession) EndArchive() error {
 }
 func (s *AgentSession) Integrate(ctx context.Context) error {
 	s.mu.Lock()
+	if s.integrationPending || s.integrated && s.owner.Load() {
+		s.mu.Unlock()
+		return nil
+	}
 	if !s.authorized || !s.connected || s.peer == nil || s.audit == nil || s.sensitive {
 		s.mu.Unlock()
 		return fmt.Errorf("请先授权已连接的终端并结束敏感输入")
 	}
 	_, _, _, _, eligible := s.peer.AgentSnapshot()
+	if initializer, ok := s.peer.(interface{ AgentCanInitialize() bool }); ok {
+		eligible = eligible && initializer.AgentCanInitialize()
+	}
 	if !eligible {
 		s.mu.Unlock()
 		return fmt.Errorf("当前不是可接管的空闲 Shell")
@@ -304,6 +370,9 @@ func (s *AgentSession) Integrate(ctx context.Context) error {
 	s.integrated = false
 	s.integrationPending = true
 	data := agentIntegrationCommand(s.token)
+	s.integrationFrames, s.integrationNext = agentIntegrationFrames(s.token), 0
+	s.integrationInputSent = false
+	s.integrationEcho = NewAgentIntegrationEcho(strings.TrimSuffix(string(data), "\n"))
 	if err := s.event("integration_approval", data, nil); err != nil {
 		s.mu.Unlock()
 		return err
@@ -358,6 +427,13 @@ func (s *AgentSession) Gate(ticket string, data []byte, write func() error) erro
 		if err != nil {
 			s.takeover("输入写入结果未知，禁止自动重试")
 			return err
+		}
+		if s.integrationPending {
+			s.integrationInputSent = true
+		}
+		if !s.integrationPending && s.current != nil && s.current.State == "queued" {
+			s.current.Sent = true
+			s.current.State = "dispatched"
 		}
 		return s.event("input_written", nil, nil)
 	}
@@ -521,26 +597,50 @@ func (s *AgentSession) mark(fields []string) {
 			return
 		}
 		s.integrationPending = false
+		s.integrationFrames = nil
 		if s.timer != nil {
 			s.timer.Stop()
 			s.timer = nil
 		}
 		s.integrated = true
 		s.problem = ""
-		s.owner.Store(s.task != "")
+		s.owner.Store(true)
 		_ = s.event("shell_ready", nil, nil)
+	case "load":
+		if len(fields) != 2 || !s.integrationPending || !s.owner.Load() {
+			return
+		}
+		index, err := strconv.Atoi(fields[1])
+		if err != nil || index != s.integrationNext || index >= len(s.integrationFrames) {
+			return
+		}
+		data := s.integrationFrames[index]
+		s.integrationNext++
+		s.ticket = NewID()
+		ticket, peer := s.ticket, s.peer
+		if s.event("integration_payload", data, nil) != nil {
+			return
+		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := peer.AgentSend(ctx, data, ticket); err != nil {
+				s.ContextChanged("Shell 准备中断：" + err.Error())
+			}
+		}()
 	case "unsupported":
 		s.takeover("当前 Shell 不支持临时集成；请使用 Bash/Zsh")
 	case "start":
-		if len(fields) == 2 && s.current != nil && fields[1] == s.current.ID && (s.current.State == "dispatched" || s.current.State == "queued") {
+		if (len(fields) == 1 || len(fields) == 2 && s.current != nil && fields[1] == s.current.ID) && s.current != nil && (s.current.State == "dispatched" || s.current.State == "queued") {
 			s.current.State = "running"
+			s.current.Sent = true
 			s.startTimer(30*time.Minute, "命令未确认结束，已转人工处理")
 			_ = s.event("command_start", nil, nil)
 		}
 	case "end":
-		if len(fields) == 3 && s.current != nil && fields[1] == s.current.ID {
-			code, err := strconv.Atoi(fields[2])
-			if err != nil {
+		if (len(fields) == 2 || len(fields) == 3 && s.current != nil && fields[1] == s.current.ID) && s.authorized && s.current != nil && s.current.Sent && s.current.State != "completed" {
+			code, err := strconv.Atoi(fields[len(fields)-1])
+			if err != nil || code < 0 || code > 255 {
 				return
 			}
 			if b := s.redactor.consume(nil, true); len(b) > 0 {
@@ -552,7 +652,10 @@ func (s *AgentSession) mark(fields []string) {
 				s.timer.Stop()
 				s.timer = nil
 			}
-			_ = s.event("command_end", nil, map[string]string{"exit_code": fields[2]})
+			_ = s.event("command_end", nil, map[string]string{"exit_code": strconv.Itoa(code)})
+			if s.automaticTask {
+				s.releaseTask("快捷执行结束")
+			}
 		}
 	}
 }
@@ -572,15 +675,16 @@ func (c *AgentCoordinator) Call(ctx context.Context, client, tool string, args j
 		return nil, err
 	}
 	var p struct {
-		Session    string `json:"session_id"`
-		Generation string `json:"generation"`
-		Task       string `json:"task_id"`
-		Command    string `json:"command"`
-		Key        string `json:"idempotency_key"`
-		Operation  string `json:"operation_id"`
-		Cursor     int64  `json:"cursor"`
-		Limit      int    `json:"limit"`
-		Interrupt  bool   `json:"interrupt"`
+		Session       string `json:"session_id"`
+		Generation    string `json:"generation"`
+		Task          string `json:"task_id"`
+		Command       string `json:"command"`
+		Key           string `json:"idempotency_key"`
+		Operation     string `json:"operation_id"`
+		Cursor        int64  `json:"cursor"`
+		Limit         int    `json:"limit"`
+		Interrupt     bool   `json:"interrupt"`
+		IncludeScreen *bool  `json:"include_screen"`
 	}
 	_ = json.Unmarshal(args, &p)
 	if tool == "sessions_list" {
@@ -588,7 +692,11 @@ func (c *AgentCoordinator) Call(ctx context.Context, client, tool string, args j
 		for _, s := range c.Sessions() {
 			v := s.State()
 			if v.Authorized && v.Connected && v.Client == client {
-				out = append(out, map[string]any{"session_id": v.ID, "generation": v.Generation, "title": v.Title, "permission": v.Permission})
+				s.mu.Lock()
+				progress := s.progress()
+				s.mu.Unlock()
+				progress["session_id"], progress["generation"], progress["title"] = v.ID, v.Generation, v.Title
+				out = append(out, progress)
 			}
 		}
 		return out, nil
@@ -620,21 +728,42 @@ func (c *AgentCoordinator) Call(ctx context.Context, client, tool string, args j
 	}
 	switch tool {
 	case "session_state":
-		_, text, _, _, _ := s.peer.AgentSnapshot()
-		text = s.redactor.text(text)
-		if len(text) > 16384 {
-			text = text[len(text)-16384:]
-			for len(text) > 0 && !utf8.RuneStart(text[0]) {
-				text = text[1:]
+		result := s.progress()
+		result["generation"], result["sensitive_input_waiting_human"], result["output_trust"], result["audit_error"] = s.generation, s.sensitive, "untrusted_terminal_data", s.problem
+		if p.IncludeScreen == nil || *p.IncludeScreen {
+			_, text, _, _, _ := s.peer.AgentSnapshot()
+			text = s.redactor.text(text)
+			if len(text) > 16384 {
+				text = text[len(text)-16384:]
+				for len(text) > 0 && !utf8.RuneStart(text[0]) {
+					text = text[1:]
+				}
+			}
+			if s.sensitive {
+				text = ""
+			}
+			result["screen"] = text
+		}
+		return result, nil
+	case "task_start", "session_exec":
+		if p.Generation != s.generation {
+			return nil, fmt.Errorf("连接代次已改变")
+		}
+		if tool == "session_exec" {
+			for _, op := range s.operations {
+				if op.Key == p.Key && op.Client == client {
+					if op.Command != p.Command {
+						return nil, fmt.Errorf("幂等键已用于不同命令")
+					}
+					return *op, nil
+				}
+			}
+			if !s.integrated || s.current != nil && (s.current.active() || s.current.State == "pending_approval" || strings.HasPrefix(s.current.State, "unknown")) {
+				return nil, fmt.Errorf("请等待 Shell 就绪和当前操作结束")
 			}
 		}
-		if s.sensitive {
-			text = ""
-		}
-		return map[string]any{"generation": s.generation, "occupied": s.task != "", "shell_ready": s.integrated, "screen": text, "sensitive_input_waiting_human": s.sensitive, "output_trust": "untrusted_terminal_data", "audit_error": s.problem}, nil
-	case "task_start":
-		if p.Generation != s.generation || s.task != "" || s.audit.Err() != nil || len(s.operations) >= 1024 {
-			return nil, fmt.Errorf("连接变化、已有任务、审计不可用或达到 1024 操作上限")
+		if !s.owner.Load() || s.task != "" || s.audit.Err() != nil || len(s.operations) >= 1024 {
+			return nil, fmt.Errorf("接入暂停、已有任务、审计不可用或达到操作上限")
 		}
 		if c.taskCount.Add(1) > 1024 {
 			c.taskCount.Add(-1)
@@ -645,35 +774,50 @@ func (c *AgentCoordinator) Call(ctx context.Context, client, tool string, args j
 			c.taskCount.Add(-1)
 			return nil, err
 		}
-		s.task = id
-		s.taskConnection = mcpConnectionID(ctx)
-		s.owner.Store(true)
+		s.task, s.taskConnection, s.automaticTask = id, mcpConnectionID(ctx), tool == "session_exec"
+		if tool == "session_exec" {
+			result, err := s.submit(ctx, client, p.Command, p.Key)
+			if err != nil || s.current == nil || s.current.Task != id {
+				s.releaseTask("快捷执行未提交")
+			}
+			return result, err
+		}
 		return map[string]any{"task_id": id, "generation": s.generation, "waiting_for_shell_integration": !s.integrated}, nil
 	case "task_end":
 		if s.current != nil && (s.current.State == "pending_approval" || s.current.State == "queued" || s.current.State == "dispatched" || s.current.State == "running") {
 			return nil, fmt.Errorf("当前操作尚未结束，请使用 task_stop；不能据此标记成功")
 		}
-		s.task = ""
-		s.owner.Store(false)
-		_ = s.event("task_end", nil, nil)
-		return map[string]any{"state": "released", "connection_preserved": true}, nil
+		s.releaseTask("task_end")
+		return map[string]any{"state": "released", "connection_preserved": true, "access_preserved": s.owner.Load()}, nil
 	case "task_stop":
-		s.mu.Unlock()
-		err := s.Takeover(ctx, p.Interrupt)
-		s.mu.Lock()
-		return map[string]any{"state": "released", "connection_preserved": true}, err
+		sent := s.current != nil && s.current.Sent && s.current.State != "completed"
+		s.releaseTask("task_stop")
+		if p.Interrupt && sent {
+			s.ticket = "interrupt:" + NewID()
+			ticket, peer := s.ticket, s.peer
+			if err := s.event("interrupt_request", nil, nil); err != nil {
+				return nil, err
+			}
+			s.mu.Unlock()
+			err := peer.AgentSend(ctx, []byte{3}, ticket)
+			s.mu.Lock()
+			if err != nil {
+				return nil, err
+			}
+		}
+		return map[string]any{"state": "released", "connection_preserved": true, "access_preserved": s.owner.Load()}, nil
 	case "command_submit":
 		return s.submit(ctx, client, p.Command, p.Key)
 	case "operation_read":
-		return s.readOperation(ctx, p.Operation, p.Cursor, p.Limit)
+		return s.readOperation(ctx, p.Operation, readOptions(args, false))
 	}
 	return nil, fmt.Errorf("未知工具")
 }
 func (s *AgentSession) submit(ctx context.Context, client, command, key string) (any, error) {
 	s.receiptMu.Lock()
 	defer s.receiptMu.Unlock()
-	if len(key) > 256 {
-		return nil, fmt.Errorf("幂等键超过 256 字节")
+	if len(key) > 128 {
+		return nil, fmt.Errorf("幂等键超过 128 字节")
 	}
 	digest := sha256.Sum256([]byte(command))
 	hash := hex.EncodeToString(digest[:])
@@ -688,7 +832,7 @@ func (s *AgentSession) submit(ctx context.Context, client, command, key string) 
 	if s.current != nil && s.current.State != "completed" && s.current.State != "cancelled_before_send" {
 		return nil, fmt.Errorf("已有未完成操作；请人工确认后重新集成 Shell")
 	}
-	if !s.integrated || s.sensitive || s.audit.Err() != nil {
+	if !s.owner.Load() || !s.integrated || s.sensitive || s.audit.Err() != nil {
 		return nil, fmt.Errorf("请完成 Shell 集成、敏感输入确认和审计检查")
 	}
 	decision, err := AgentCommandDecision(command, s.permission)
@@ -727,7 +871,7 @@ func (s *AgentSession) submit(ctx context.Context, client, command, key string) 
 	if !os.IsNotExist(err) {
 		return nil, err
 	}
-	op := &AgentOperation{ID: NewID(), State: "pending_approval", Command: command, Task: s.task, Client: client, Key: key, Digest: hash, Revision: s.revision, Generation: s.generation}
+	op := &AgentOperation{ID: NewID(), State: "pending_approval", Command: command, ShellToken: s.token, Permission: s.permission, Task: s.task, Client: client, Key: key, Digest: hash, Revision: s.revision, Generation: s.generation}
 	receipt, _ := json.Marshal(map[string]string{"ID": op.ID, "Digest": hash, "Generation": s.generation})
 	sealed, err := seal(privateKey, receipt, "OShell.Desktop.MCP.receipt.v1")
 	if err != nil {
@@ -750,7 +894,7 @@ func (s *AgentSession) submit(ctx context.Context, client, command, key string) 
 	return *op, nil
 }
 func (s *AgentSession) execute(op *AgentOperation, authority string) error {
-	if !s.authorized || !s.connected || !s.integrated || s.sensitive || s.current != op || s.task != op.Task || s.revision != op.Revision || s.generation != op.Generation {
+	if !s.authorized || !s.connected || !s.owner.Load() || !s.integrated || s.sensitive || s.current != op || s.task != op.Task || s.revision != op.Revision || s.generation != op.Generation {
 		return fmt.Errorf("审批快照已失效，请重新开始任务")
 	}
 	_, _, _, _, eligible := s.peer.AgentSnapshot()
@@ -796,53 +940,11 @@ func (s *AgentSession) Approve(id, command string, approve bool) error {
 	}
 	if !approve {
 		op.State = "cancelled_before_send"
-		return s.event("approval_rejected", nil, nil)
+		err := s.event("approval_rejected", nil, nil)
+		if s.automaticTask {
+			s.releaseTask("快捷执行审批已拒绝")
+		}
+		return err
 	}
 	return s.execute(op, "user")
-}
-func (s *AgentSession) readOperation(ctx context.Context, id string, cursor int64, limit int) (any, error) {
-	if s.sensitive {
-		return nil, fmt.Errorf("敏感输入期间暂不提供终端内容")
-	}
-	op := s.operations[id]
-	if op == nil || op.Client != s.client || op.Generation != s.generation {
-		return nil, fmt.Errorf("操作不可访问")
-	}
-	if limit == 0 {
-		limit = 16384
-	}
-	if cursor < 0 || limit < 1 || limit > 65536 {
-		return nil, fmt.Errorf("游标或读取上限无效")
-	}
-	position := int64(0)
-	output := make([]byte, 0, limit)
-	stop := errors.New("page complete")
-	err := ReadAgentAudit(ctx, s.root, s.audit.ID(), func(e AgentAuditEvent) error {
-		if e.Kind != "output" || e.Operation != id {
-			return nil
-		}
-		end := position + int64(len(e.Bytes))
-		if end > cursor {
-			start := max(int64(0), cursor-position)
-			n := min(limit-len(output), len(e.Bytes)-int(start))
-			output = append(output, e.Bytes[start:int(start)+n]...)
-		}
-		position = end
-		if len(output) == limit {
-			return stop
-		}
-		return nil
-	})
-	if err != nil && !errors.Is(err, ErrAgentAuditUnsealed) && err != stop {
-		s.takeover("审计读取失败")
-		return nil, err
-	}
-	if cursor > position {
-		return nil, fmt.Errorf("游标超出已持久化输出")
-	}
-	var text any
-	if len(output) <= 16384 && utf8.Valid(output) {
-		text = string(output)
-	}
-	return map[string]any{"operation": *op, "output_base64": base64.StdEncoding.EncodeToString(output), "output_text": text, "stream": "merged_pty", "next_cursor": cursor + int64(len(output)), "output_trust": "untrusted_terminal_data"}, nil
 }

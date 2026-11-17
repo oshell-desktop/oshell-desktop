@@ -124,7 +124,8 @@ func (a *App) connectionMenu(m *ui.Menu) {
 		a.showQuickSwitch()
 	}
 	m.Separator()
-	tree := quickConnectionTree(a.presentationConfig().Profiles, a.localUI.Pins)
+	catalog := a.presentationConfig()
+	tree := quickConnectionTree(catalog.Profiles, a.localUI.Pins, catalog.Links...)
 	if len(tree) == 0 {
 		m.Item("暂无快捷会话").Disabled(true)
 	} else {
@@ -471,6 +472,29 @@ func (a *App) nodeView(c *ui.Context, t *tab, n *node) {
 		}
 		if p.term != nil {
 			a.terminalSearchBar(c.Key("terminal-search"), t, p)
+			if p.agent != nil && p.agent.Busy() {
+				state := p.agent.State()
+				label := "MCP 接入中 · 等待下一项任务"
+				if !state.ShellReady {
+					label = "MCP 接入中 · 正在准备 Shell…"
+				} else if state.Operation != nil && state.Operation.State == "pending_approval" {
+					label = "MCP 接入中 · 等待批准"
+				} else if state.Task != "" {
+					label = "MCP 接入中 · 任务执行中"
+				}
+				if clients := a.mcpClients(); clients != nil {
+					for _, client := range clients.List() {
+						if client.ID == state.Client {
+							label = client.Name + " · " + label
+							break
+						}
+					}
+				}
+				ui.Row(c).Height(28).Padding(2, 8).Gap(8).Background(c.Theme().Surface).Children(func() {
+					ui.Text(c, label).SingleLine().Grow(1).TextColor(c.Theme().TextMuted)
+					ui.Button(c, "终止接入").Height(24).OnClick(func() { p.agent.Revoke() })
+				})
+			}
 			if strings.HasPrefix(p.status, "已断开") {
 				ui.Row(c).Height(27).Padding(3, 10).Gap(8).Background(c.Theme().Surface).Children(func() {
 					ui.Text(c, p.status).SingleLine().Grow(1).TextColor(c.Theme().TextMuted)
@@ -529,27 +553,16 @@ func (a *App) sendBar(c *ui.Context) {
 		if input.Submitted() {
 			a.prepareSend()
 		}
-		flatButton(c, "命令历史与快速命令", chevronIcon, "").Menu(func(m *ui.Menu) {
+		historyButton := flatButton(c, "命令历史与快速命令", chevronIcon, "").Menu(func(m *ui.Menu) {
 			a.quickCommandsMenu(m)
 			m.Separator()
 			if m.Item("管理快速命令…").Chosen() {
 				a.openCommands()
 			}
 			m.Separator()
-			if len(a.history) == 0 {
-				m.Item("暂无历史命令").Disabled(true)
-			}
-			for _, s := range a.history {
-				label := strings.ReplaceAll(s, "\n", " ")
-				if len([]rune(label)) > 60 {
-					label = string([]rune(label)[:60]) + "…"
-				}
-				if m.Item(label).Chosen() {
-					a.quick = s
-					a.features.operators.noReturn = false
-				}
-			}
+			a.quickHistoryMenu(m)
 		})
+		a.quickHistoryBrowser(c, historyButton)
 		appendReturn := !a.features.operators.noReturn
 		if ui.Checkbox(c, &appendReturn, "追加回车").Changed() {
 			a.features.operators.noReturn = !appendReturn

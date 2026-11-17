@@ -25,6 +25,8 @@ func HostProbeCommand(token string) (string, error) {
 // HostProbeEcho suppresses only a verified echo of our own complete command.
 // Unknown output, mode changes and partial echoes are replayed unchanged.
 type HostProbeEcho struct {
+	shellEditing, matched, afterCR                  bool
+	csiParameters, preservedModes                   []byte
 	expected, pending                               []byte
 	index                                           int
 	escape, csi, pendingSpace, awaitingLF, finished bool
@@ -62,6 +64,7 @@ func (h *HostProbeEcho) Consume(data []byte) []byte {
 			reject()
 			continue
 		}
+		paddingWrap := h.pendingSpace && (b == 13 || b == 10)
 		if h.pendingSpace {
 			h.pendingSpace = false
 			if b != '\r' && b != '\n' {
@@ -80,6 +83,7 @@ func (h *HostProbeEcho) Consume(data []byte) []byte {
 			h.escape = false
 			if b == '[' {
 				h.csi = true
+				h.csiParameters = nil
 				continue
 			}
 			reject()
@@ -88,9 +92,17 @@ func (h *HostProbeEcho) Consume(data []byte) []byte {
 		if h.csi {
 			if b >= 0x40 && b <= 0x7e {
 				h.csi = false
+				if h.shellEditing && (b == 'h' || b == 'l') && string(h.csiParameters) == "?2004" {
+					h.preservedModes = append(h.preservedModes, 27, '[')
+					h.preservedModes = append(h.preservedModes, h.csiParameters...)
+					h.preservedModes = append(h.preservedModes, b)
+					continue
+				}
 				if !strings.ContainsRune("ABCDGHJKfm", rune(b)) {
 					reject()
 				}
+			} else {
+				h.csiParameters = append(h.csiParameters, b)
 			}
 			continue
 		}
@@ -98,8 +110,15 @@ func (h *HostProbeEcho) Consume(data []byte) []byte {
 			h.escape = true
 			continue
 		}
+		if h.shellEditing && b == 8 && h.index > 0 {
+			h.index--
+			h.afterCR = false
+			continue
+		}
 		if h.index == len(h.expected) {
 			if b == '\r' || b == '\n' {
+				h.matched = true
+				out = append(out, h.preservedModes...)
 				out = append(out, '\r', 27, '[', '2', 'K')
 				h.awaitingLF = b == '\r'
 				h.finished = !h.awaitingLF
@@ -107,8 +126,13 @@ func (h *HostProbeEcho) Consume(data []byte) []byte {
 			} else {
 				reject()
 			}
+		} else if h.shellEditing && h.afterCR && h.index > 0 && b == h.expected[h.index-1] {
+			h.afterCR = false
 		} else if b == h.expected[h.index] {
 			h.index++
+			h.afterCR = false
+		} else if b == 13 {
+			h.afterCR = !paddingWrap
 		} else if b != '\r' && b != '\n' {
 			reject()
 		}

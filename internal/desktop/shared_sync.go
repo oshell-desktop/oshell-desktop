@@ -105,6 +105,10 @@ func (a *App) sharedSyncSettings(c *ui.Context) {
 			})
 			ui.Text(c, "自动使用或创建 oshell 子目录；已有直接同步文件的旧地址继续沿用。测试连接可能创建该目录。").Wrap()
 			ui.Field(c, "用户名", func() { ui.TextInput(c, &f.options.Username) })
+			if f.options.Authentication == "" {
+				f.options.Authentication = "basic"
+			}
+			selectValue(c, "认证方式", &f.options.Authentication, [][2]string{{"basic", "Basic"}, {"digest", "Digest"}})
 			ui.Field(c, "密码", func() { passwordInput(c, &f.password).Placeholder("留空沿用此地址已保存的密码") })
 			a.webDAVCertificateSettings(c)
 		}

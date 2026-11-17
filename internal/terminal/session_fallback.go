@@ -21,6 +21,7 @@ type sessionFallback struct {
 	before         func()
 	changed        func()
 	processChanged func()
+	reconnect      func()
 	prefix         []byte
 }
 
@@ -58,7 +59,7 @@ func (f *sessionFallback) Read(out []byte) (int, error) {
 			f.mu.Unlock()
 			return 0, io.EOF
 		}
-		tools := NewToolsConsole()
+		tools := newToolsConsole(f.reconnect)
 		tools.SetStateHandler(f.processChanged)
 		f.tools = tools
 		f.current = tools

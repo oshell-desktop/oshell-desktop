@@ -145,7 +145,7 @@ func TestMCPStdioLifecycleToolsAndValidation(t *testing.T) {
 	enc.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})
 	r = request(2, "tools/list", nil)
 	tools := r["result"].(map[string]any)["tools"].([]any)
-	if len(tools) != 7 {
+	if len(tools) != 8 {
 		t.Fatal(tools)
 	}
 	r = request(3, "tools/call", map[string]any{"name": "sessions_list", "arguments": map[string]any{}})
