@@ -20,7 +20,7 @@ func TestTransferKeepsLocalSelectionCopyAndScroll(t *testing.T) {
 	term.opts.OnUserInput = func(ui.InputEvent) { forwarded++ }
 	term.in.pause(true)
 	x, y := cellCenter(term, 0, 0)
-	end, _ := cellCenter(term, 5, 0)
+	end, _ := cellCenter(term, 4, 0)
 	beginCharacterDrag(tt, x-2, y)
 	tt.Move(end+2, y)
 	tt.Release(end+2, y)
@@ -115,7 +115,7 @@ func TestSelectAllHonorsCopyPolicyDuringTransfer(t *testing.T) {
 	}
 }
 
-func TestTransferEncodedInterruptAndRawProtocolIsolation(t *testing.T) {
+func TestTransferIgnoresTerminalInterruptAndKeepsRawProtocol(t *testing.T) {
 	for _, kitty := range []bool{false, true} {
 		name := "legacy"
 		if kitty {
@@ -175,32 +175,31 @@ func TestTransferEncodedInterruptAndRawProtocolIsolation(t *testing.T) {
 			default:
 			}
 			tt.Key(ui.Ctrl, ui.KeyC)
-			if kitty {
-				// Swift checks encoded bytes, not the physical shortcut: Kitty's
-				// CSI-u Ctrl+C contains no literal byte 3.
-				if transferContext.Err() != nil {
-					t.Fatal("Kitty Ctrl+C was treated as a literal interrupt")
-				}
-				// Output parsing may own the controller while the UI sends a
-				// key. Cancellation must not invert controller/terminal locks.
-				term.transfers.mu.Lock()
-				returned := make(chan struct{})
-				go func() { term.Send([]byte("prefix\x03suffix")); close(returned) }()
-				blocked := false
-				select {
-				case <-returned:
-				case <-time.After(time.Second):
-					blocked = true
-				}
-				term.transfers.mu.Unlock()
-				if blocked {
-					t.Fatal("interrupt waited for the transfer controller lock")
-				}
+			tt.Type("accidental input")
+			term.Send([]byte("prefix\x03suffix"))
+			term.Paste("pasted command\n")
+			if transferContext.Err() != nil {
+				t.Fatal("terminal input cancelled transfer")
+			}
+			// Explicit cancellation must still work while output parsing owns
+			// the controller, without entering the input or controller locks.
+			term.transfers.mu.Lock()
+			returned := make(chan struct{})
+			go func() { term.CancelTransfer(); close(returned) }()
+			blocked := false
+			select {
+			case <-returned:
+			case <-time.After(time.Second):
+				blocked = true
+			}
+			term.transfers.mu.Unlock()
+			if blocked {
+				t.Fatal("explicit cancel waited for the transfer controller lock")
 			}
 			select {
 			case <-interrupted:
 			case <-time.After(time.Second):
-				t.Fatal("encoded interrupt did not cancel transfer")
+				t.Fatal("explicit cancel did not cancel transfer")
 			}
 			if forwarded != 0 || term.idleEditing.Load() || term.Available() {
 				t.Fatal("interruption bypassed paused input state", forwarded)

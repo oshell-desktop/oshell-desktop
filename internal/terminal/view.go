@@ -817,6 +817,7 @@ func (v *view) pointerEvent(ev ui.InputEvent) bool {
 			return false
 		}
 		v.selecting = true
+		v.selectionDragPoint = [2]float32{ev.X, ev.Y}
 		if t.selectionHold == nil && !t.opts.Replay && (t.transfers == nil || t.transfers.cancellable.Load() == nil) {
 			t.selectionHold = make(chan struct{})
 		}
@@ -841,39 +842,16 @@ func (v *view) pointerEvent(ev ui.InputEvent) bool {
 		if !v.selecting {
 			return false
 		}
-		v.semanticPress.dragged = true
-		v.selectionRectangle = ev.Mods&ui.Alt != 0
-		ref, ok := t.term.CellAt(col, row)
-		if !v.selectionRectangle {
-			ref, row, ok = v.selectionCellAt(ev.X, ev.Y)
-		}
-		if !ok {
-			return true
-		}
-		// SelectionService establishes its soft start on the first drag,
-		// including a new drag after scrolling has invalidated the old range.
-		// An active empty/out-of-storage selection must still keep its anchor.
-		if !v.selectionRectangle && !t.term.SelectionActive() {
-			v.gesture.PressCount(t.term, ref, px, py, uint64(time.Since(v.gestureStart)), 1)
-		}
-		if s, ok := v.gesture.Drag(t.term, ref, px, py, v.geometry(row), v.selectionRectangle); ok {
-			t.term.SetSelection(&s)
-		} else if v.gesture.Anchored(t.term) {
-			t.term.SetSelection(nil)
-		}
-		v.wordClicks = wordClickState{}
-		v.selectionDragPoint = [2]float32{ev.X, ev.Y}
-		delta := 0
-		if v.selectionRectangle {
-			delta = v.gesture.Autoscroll(t.term)
-		} else if t.term.SelectionActive() {
-			delta = selectionScrollVelocity(row, v.rows)
-		}
-		v.setSelectionAutoscroll(delta, time.Now())
+		v.dragSelection(ev)
 		return true
 	case ui.InputPointerUp:
 		if !v.selecting || ev.Button != 0 {
 			return false
+		}
+		// Mouse move events can be coalesced before release. Copy-on-select
+		// must use the release position, rather than the last delivered move.
+		if v.selectionDragPoint != [2]float32{ev.X, ev.Y} {
+			v.dragSelection(ev)
 		}
 		v.selecting = false
 		v.setSelectionAutoscroll(0, time.Time{})
@@ -887,6 +865,42 @@ func (v *view) pointerEvent(ev ui.InputEvent) bool {
 		return true
 	}
 	return false
+}
+
+// dragSelection updates a held pointer from either motion or its final release.
+// The caller holds t.mu.
+func (v *view) dragSelection(ev ui.InputEvent) {
+	t := v.t
+	col, row := v.cellAt(ev.X, ev.Y)
+	px, py := float64(ev.X*v.scale), float64(ev.Y*v.scale)
+	v.selectionRectangle = ev.Mods&ui.Alt != 0
+	ref, ok := t.term.CellAt(col, row)
+	if !v.selectionRectangle {
+		ref, row, ok = v.selectionCellAt(ev.X, ev.Y)
+	}
+	if !ok {
+		return
+	}
+	// Keep the mouse-down anchor on the first move. Only restart after an
+	// existing drag has been invalidated by a buffer edit.
+	if !v.selectionRectangle && v.semanticPress.dragged && !t.term.SelectionActive() {
+		v.gesture.PressCount(t.term, ref, px, py, uint64(time.Since(v.gestureStart)), 1)
+	}
+	v.semanticPress.dragged = true
+	if s, ok := v.gesture.DragInclusive(t.term, ref, px, py, v.geometry(row), v.selectionRectangle); ok {
+		t.term.SetSelection(&s)
+	} else if v.gesture.Anchored(t.term) {
+		t.term.SetSelection(nil)
+	}
+	v.wordClicks = wordClickState{}
+	v.selectionDragPoint = [2]float32{ev.X, ev.Y}
+	delta := 0
+	if v.selectionRectangle {
+		delta = v.gesture.Autoscroll(t.term)
+	} else if t.term.SelectionActive() {
+		delta = selectionScrollVelocity(row, v.rows)
+	}
+	v.setSelectionAutoscroll(delta, time.Now())
 }
 
 // geometry is the grid in pixels, for selection gestures.
@@ -920,7 +934,7 @@ func (v *view) autoscroll() {
 	}
 	// Scroll once, then map the pointer against the NEW viewport. Tick also
 	// scrolls natively, which used to advance twice and apply a stale BiDi map.
-	if s, ok := v.gesture.Drag(t.term, ref, float64(x*v.scale), float64(y*v.scale), v.geometry(row), v.selectionRectangle); ok {
+	if s, ok := v.gesture.DragInclusive(t.term, ref, float64(x*v.scale), float64(y*v.scale), v.geometry(row), v.selectionRectangle); ok {
 		t.term.SetSelection(&s)
 	} else if v.gesture.Anchored(t.term) {
 		t.term.SetSelection(nil)

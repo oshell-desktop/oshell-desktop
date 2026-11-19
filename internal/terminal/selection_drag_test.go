@@ -13,11 +13,11 @@ func TestBidiDragLogicalBoundaries(t *testing.T) {
 		text, want string
 		end        int
 	}{
-		{"ab אב cd", "ab", 3},
+		{"ab אב cd", "ab א", 3},
 		{"אבג abc", "אבג", 3},
-		{"\x1b[8l\x1b[2 kABCDEFG", "ABC", 3},
-		{"א\u05b0ב 界 😀 xyz", "א\u05b0ב", 3},
-		{"א\u05b0ב 界 😀 xyz", "א\u05b0ב 界 😀", 9},
+		{"\x1b[8l\x1b[2 kABCDEFG", "ABCD", 3},
+		{"א\u05b0ב 界 😀 xyz", "א\u05b0ב 界", 3},
+		{"א\u05b0ב 界 😀 xyz", "א\u05b0ב 界 😀 x", 9},
 	} {
 		for _, backwards := range []bool{false, true} {
 			for _, fraction := range []float32{0.1, 0.9} {
@@ -26,8 +26,8 @@ func TestBidiDragLogicalBoundaries(t *testing.T) {
 					term.Feed([]byte(tc.text))
 					tt.Frame()
 					v := term.v
-					// Swift's character selection is a half-open logical range;
-					// both directions and either side of a displayed cell agree.
+					// Both touched logical characters are included even when
+					// BiDi reorders them, regardless of the hit's cell fraction.
 					a, b := 0, tc.end
 					if backwards {
 						a, b = b, a
@@ -132,7 +132,7 @@ func TestSelectionDragReturnClearsAndInvalidAnchorPreserves(t *testing.T) {
 	x1, y1 := cellCenter(term, 5, 0)
 	beginCharacterDrag(tt, x0, y0)
 	tt.Move(x1, y1)
-	if got := term.SearchSelection(); got != "ordin" {
+	if got := term.SearchSelection(); got != "ordina" {
 		t.Fatal("initial drag", got)
 	}
 	tt.Move(x0, y0)
@@ -203,7 +203,7 @@ func TestBidiAutoscrollMapsNewViewport(t *testing.T) {
 		end := int(term.term.Scrollbar().Offset) + v.rows
 		text, _ := term.term.SelectionText()
 		term.mu.Unlock()
-		want := "abc"
+		want := "abcd"
 		if end%2 == 1 {
 			want = "abcdefghijklmno"
 		}

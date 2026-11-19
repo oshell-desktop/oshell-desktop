@@ -73,8 +73,8 @@ func TestCascadiaLightGridAndSelection(t *testing.T) {
 			x := (float32(v.ox) + 0.2*float32(v.cellW)) / scale
 			y := (float32(v.oy) + 0.5*float32(v.cellH)) / scale
 			beginCharacterDrag(tt, x, y)
-			tt.Move(x+11*float32(v.cellW)/scale, y)
-			tt.Release(x+11*float32(v.cellW)/scale, y)
+			tt.Move(x+10*float32(v.cellW)/scale, y)
+			tt.Release(x+10*float32(v.cellW)/scale, y)
 			tt.Command("copy")
 			if got := tt.Clipboard(); got != text[:11] {
 				t.Fatalf("pointer selection %q, want %q", got, text[:11])

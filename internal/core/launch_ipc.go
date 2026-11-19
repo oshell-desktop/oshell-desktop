@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"oshell-desktop/internal/diagnostics"
 	"sync"
 	"time"
 )
@@ -139,6 +140,11 @@ func SendExternalLaunch(ctx context.Context, configuration string, request Exter
 	}
 	var response LaunchResponse
 	if e = readLaunchMessage(conn, &response); e != nil {
+		var timeout net.Error
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) || errors.As(e, &timeout) && timeout.Timeout() {
+			diagnostics.Event("external_launch_response_timeout", nil)
+			return fmt.Errorf("等待 OShell 接收外部会话超时；请查看接收请求的 OShell 窗口，完成主密码解锁后重新发起连接：%w", e)
+		}
 		return e
 	}
 	if !response.Accepted {

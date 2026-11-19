@@ -45,7 +45,7 @@ func TestLiveOutputDuringMouseSelection(t *testing.T) {
 			switch end {
 			case "release":
 				tt.Release(x, y)
-				if s := tt.Clipboard(); s != "bcd" {
+				if s := tt.Clipboard(); s != "bcde" {
 					t.Fatalf("copied %q", s)
 				}
 			case "cancel":
@@ -62,14 +62,14 @@ func TestLiveOutputDuringMouseSelection(t *testing.T) {
 	}
 }
 
-func TestSelectionStartsAtFirstDragEvent(t *testing.T) {
+func TestSelectionStartsAtMouseDown(t *testing.T) {
 	for _, tc := range []struct {
 		name               string
 		press, first, next int
-		want               string
+		firstWant, want    string
 	}{
-		{"forward", 0, 3, 6, "def"},
-		{"reverse", 9, 7, 4, "efg"},
+		{"forward", 0, 3, 6, "abcd", "abcdefg"},
+		{"reverse", 9, 7, 4, "hij", "efghij"},
 	} {
 		for _, bidi := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%s/bidi=%v", tc.name, bidi), func(t *testing.T) {
@@ -82,14 +82,14 @@ func TestSelectionStartsAtFirstDragEvent(t *testing.T) {
 				tt.Press(x, y)
 				x, y = cellCenter(term, tc.first, 0)
 				tt.Move(x, y)
-				if got := term.SearchSelection(); got != "" {
-					t.Fatalf("first drag copied %q", got)
+				if got := term.SearchSelection(); got != tc.firstWant {
+					t.Fatalf("first drag copied %q, want %q", got, tc.firstWant)
 				}
 				term.mu.Lock()
 				active := term.term.SelectionActive()
 				term.mu.Unlock()
 				if !active {
-					t.Fatal("first drag did not retain active empty range")
+					t.Fatal("first drag did not create a selection")
 				}
 				x, y = cellCenter(term, tc.next, 0)
 				tt.Move(x, y)
@@ -110,7 +110,7 @@ func TestSelectionDragRestartsAfterSelectionCancelled(t *testing.T) {
 	tt.Move(x, y)
 	x, y = cellCenter(term, 4, 0)
 	tt.Move(x, y)
-	if got := term.SearchSelection(); got != "bcd" {
+	if got := term.SearchSelection(); got != "abcde" {
 		t.Fatal("initial selection", got)
 	}
 	term.Feed([]byte("\x1b[1;3r\x1b[S\x1b[Habcdefghij"))
@@ -123,13 +123,13 @@ func TestSelectionDragRestartsAfterSelectionCancelled(t *testing.T) {
 	x, y = cellCenter(term, 8, 0)
 	tt.Move(x, y)
 	tt.Release(x, y)
-	if got := tt.Clipboard(); got != "fgh" {
+	if got := tt.Clipboard(); got != "fghi" {
 		t.Fatal("selection did not restart at next drag", got)
 	}
 }
 
-// Model a first drag motion within the initial cell before testing an extended
-// range. OShell seeds on mouseDragged, not on mouseDown.
+// Include a small initial motion to exercise repeated drag events. The anchor
+// remains the original mouse-down cell even if the first motion is farther away.
 func beginCharacterDrag(tt *ui.Tester, x, y float32) {
 	tt.Press(x, y)
 	tt.Move(x+0.01, y)

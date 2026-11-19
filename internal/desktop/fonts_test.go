@@ -9,6 +9,9 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	if os.Getenv("OSHELL_NATIVE_EXTERNAL_LAUNCH") == "1" {
+		os.Exit(runExternalLaunchVisibilityFixture())
+	}
 	if os.Getenv("OSHELL_NATIVE_MANAGER_COMPLETION") == "1" {
 		os.Exit(runManagerCompletionFixture())
 	}

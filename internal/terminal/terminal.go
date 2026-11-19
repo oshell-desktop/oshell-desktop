@@ -25,7 +25,6 @@
 package terminal
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -991,7 +990,6 @@ type inputQueue struct {
 	cond           *sync.Cond
 	queue          []inputPacket
 	closed, paused bool
-	cancelPaused   context.CancelFunc
 }
 
 func (q *inputQueue) init() {
@@ -1003,21 +1001,9 @@ func (q *inputQueue) push(p []byte) {
 	q.pushBefore(p, nil)
 }
 func (q *inputQueue) pushBefore(p []byte, before func()) bool {
-	var cancel context.CancelFunc
 	q.mu.Lock()
-	defer func() {
-		q.mu.Unlock()
-		// Cancel the specific session that rejected this input, outside the
-		// queue lock. Do not enter transferController.mu while t.mu is held:
-		// PTY output parsing takes those locks in the opposite order.
-		if cancel != nil {
-			cancel()
-		}
-	}()
+	defer q.mu.Unlock()
 	q.init()
-	if !q.closed && q.paused && bytes.IndexByte(p, 3) >= 0 {
-		cancel = q.cancelPaused
-	}
 	if !q.closed && !q.paused {
 		if before != nil {
 			before()
@@ -1033,16 +1019,10 @@ func (q *inputQueue) pushBefore(p []byte, before func()) bool {
 	return false
 }
 func (q *inputQueue) pause(paused bool) {
-	q.pauseWithCancel(paused, nil)
-}
-
-func (q *inputQueue) pauseWithCancel(paused bool, cancel context.CancelFunc) {
 	q.mu.Lock()
 	q.init()
 	q.paused = paused
-	q.cancelPaused = nil
 	if paused {
-		q.cancelPaused = cancel
 		next := q.queue[:0]
 		for _, packet := range q.queue {
 			if packet.raw {
@@ -1085,7 +1065,6 @@ func (q *inputQueue) close() {
 	q.mu.Lock()
 	q.init()
 	q.closed = true
-	q.cancelPaused = nil
 	for _, packet := range q.queue {
 		if packet.result != nil {
 			packet.result <- io.ErrClosedPipe

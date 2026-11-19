@@ -40,7 +40,7 @@ func TestRegionScrollViewCopyAndDrag(t *testing.T) {
 	term.Feed([]byte("\x1b[2J\x1b[H000000\r\n111111\r\n222222\r\n333333\r\n444444\x1b[2;4r"))
 	tt.Frame()
 	x0, y0 := cellCenter(term, 0, 2)
-	x3, y3 := cellCenter(term, 3, 2)
+	x3, y3 := cellCenter(term, 2, 2)
 	beginCharacterDrag(tt, x0, y0)
 	tt.Move(x3, y3)
 	if got := term.SearchSelection(); got != "222" {
@@ -52,7 +52,7 @@ func TestRegionScrollViewCopyAndDrag(t *testing.T) {
 	if got := tt.Clipboard(); got != "222" {
 		t.Fatal("scroll copied replacement text", got)
 	}
-	x5, y5 := cellCenter(term, 5, 1)
+	x5, y5 := cellCenter(term, 4, 1)
 	tt.Move(x5, y5)
 	if got := term.SearchSelection(); got != "22222" {
 		t.Fatal("drag anchor did not move", got)

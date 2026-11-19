@@ -34,6 +34,7 @@ const (
 type Gesture struct {
 	h                          uintptr
 	press, release, drag, tick uintptr
+	extending                  bool
 }
 
 // Ghostty copies the codepoints into each reusable event. Keep identical word
@@ -119,6 +120,7 @@ func (g *Gesture) Press(t *Terminal, ref GridRef, x, y float64, ns uint64) (Sele
 // PressWithShift preserves and extends an active OShell selection on a single
 // Shift click. Repeated word/line clicks keep their own selection behavior.
 func (g *Gesture) PressWithShift(t *Terminal, ref GridRef, x, y float64, ns uint64, shift bool) (Selection, bool) {
+	g.extending = shift && t.SelectionActive()
 	pos := surfacePosition{x, y}
 	if oshellABI >= 56 && oshellABI <= 62 {
 		call(fnGestureEventSet, g.press, 1000, uintptr(unsafe.Pointer(&shift)))
@@ -159,6 +161,41 @@ func (g *Gesture) Drag(t *Terminal, ref GridRef, x, y float64, geo Geometry, rec
 	call(fnGestureEventSet, g.drag, gestureOptGeometry, uintptr(unsafe.Pointer(&gg)))
 	call(fnGestureEventSet, g.drag, gestureOptRectangle, uintptr(unsafe.Pointer(&rect)))
 	return g.apply(t, g.drag)
+}
+
+// DragInclusive gives ordinary Desktop mouse drags inclusive character
+// endpoints. The native OShell compatibility gesture uses half-open columns;
+// word, row and Shift extensions already supply their own range boundaries.
+func (g *Gesture) DragInclusive(t *Terminal, ref GridRef, x, y float64, geo Geometry, rect bool) (Selection, bool) {
+	s, found := g.Drag(t, ref, x, y, geo, rect)
+	if !found || rect || g.extending || s.logical == nil || s.logical[12]&6 != 0 {
+		return s, found
+	}
+	ax, ay, bx, by := int(s.logical[0]), int(s.logical[1]), int(s.logical[2]), int(s.logical[3])
+	if ax == bx && ay == by {
+		return s, found // retain an active empty range when returning to the anchor
+	}
+	if ay > by || ay == by && ax > bx {
+		ax, ay, bx, by = bx, by, ax, ay
+	}
+	first, firstOK := t.screenCell(ax, ay)
+	last, lastOK := t.screenCell(bx, by)
+	if !firstOK || !lastOK {
+		return s, found // explicit history truncation may retain out-of-storage endpoints
+	}
+	cols, _ := t.Size()
+	for i, endpoint := range []*GridRef{&first, &last} {
+		var raw uint64
+		if ok(call(fnGridRefCell, uintptr(unsafe.Pointer(endpoint)), uintptr(unsafe.Pointer(&raw)))) {
+			wide := Wide(cell.wide.of(raw))
+			if i == 0 && wide == SpacerTail && endpoint.x > 0 {
+				endpoint.x--
+			} else if i == 1 && wide == WideChar && int(endpoint.x)+1 < cols {
+				endpoint.x++
+			}
+		}
+	}
+	return Selection{size: selectionCSize, start: first, end: last}, true
 }
 
 // Tick continues a drag past an edge after the viewport scrolled, with the
@@ -207,7 +244,10 @@ func (g *Gesture) Autoscroll(t *Terminal) int {
 }
 
 // Reset forgets the gesture's clicks.
-func (g *Gesture) Reset(t *Terminal) { call(fnGestureReset, g.h, t.h) }
+func (g *Gesture) Reset(t *Terminal) {
+	g.extending = false
+	call(fnGestureReset, g.h, t.h)
+}
 
 // Anchored distinguishes an empty drag range from an invalid gesture after
 // a screen switch or anchor eviction. A borrowed pin never escapes this call.

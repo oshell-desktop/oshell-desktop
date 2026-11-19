@@ -178,7 +178,9 @@ func (c *transferController) newSession() *protocolSession {
 	session.pipe = newProtocolPipe(ctx, session.done, func(p []byte) (int, error) { return c.term.in.raw(ctx, p) })
 	c.active = session
 	c.cancellable.Store(session)
-	c.term.in.pauseWithCancel(true, session.cancel)
+	// Only an explicit CancelTransfer or the peer may cancel the protocol;
+	// accidental terminal input, including Ctrl+C, is discarded while paused.
+	c.term.in.pause(true)
 	if c.term.opts.TransferStarted != nil {
 		c.term.opts.TransferStarted()
 	}

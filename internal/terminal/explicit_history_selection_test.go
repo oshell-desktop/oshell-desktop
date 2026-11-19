@@ -19,7 +19,7 @@ func TestExplicitHistoryClearViewCopyAndDrag(t *testing.T) {
 	term.mu.Unlock()
 	tt.Frame()
 	x0, y0 := cellCenter(term, 0, 2)
-	x3, y3 := cellCenter(term, 3, 2)
+	x3, y3 := cellCenter(term, 2, 2)
 	beginCharacterDrag(tt, x0, y0)
 	tt.Move(x3, y3)
 	if got := term.SearchSelection(); got != "002" {
@@ -32,7 +32,7 @@ func TestExplicitHistoryClearViewCopyAndDrag(t *testing.T) {
 	if got := tt.Clipboard(); got != want {
 		t.Fatal("copy did not use logical row", got, want)
 	}
-	x5, y5 := cellCenter(term, 5, 2)
+	x5, y5 := cellCenter(term, 4, 2)
 	tt.Move(x5, y5)
 	term.v.copy()
 	if got := tt.Clipboard(); got != want+"ab" {

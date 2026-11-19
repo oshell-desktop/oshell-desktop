@@ -2513,7 +2513,7 @@ index 78f2b43..8676680 100644
      self.glyph_glossary.deinit(alloc);
      if (self.kitty_dnd) |dnd| dnd.destroy(alloc);
      self.* = undefined;
-@@ -484,7 +526,133 @@ pub fn setScrollbackMaxBytes(self: *Terminal, max: ?usize) void {
+@@ -484,7 +526,135 @@ pub fn setScrollbackMaxBytes(self: *Terminal, max: ?usize) void {
  /// unaffected because it never retains scrollback.
  pub fn setScrollbackMaxLines(self: *Terminal, max: ?usize) void {
      const primary = self.screens.get(.primary).?;
@@ -2562,6 +2562,8 @@ index 78f2b43..8676680 100644
 +        }
 +        for (self.anchors.items) |anchor| {
 +            anchor.pin.* = screen.pages.pin(.{ .screen = .{ .x = anchor.pos.x, .y = anchor.pos.y } }).?;
++            // Native inclusive selections also keep the compatibility drag anchor.
++            if (screen.oshell_gesture_coordinates.getPtr(anchor.pin)) |pos| pos.* = .{ .col = anchor.pos.x, .row = anchor.pos.y };
 +        }
 +    }
 +};

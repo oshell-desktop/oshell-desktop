@@ -16,7 +16,7 @@ func TestShiftCharacterSelectionAndDrag(t *testing.T) {
 			term, tt := wordClickFixture(t, "abcdefghij", 320)
 			x, y := cellCenter(term, 2, 0)
 			beginCharacterDrag(tt, x, y)
-			x, y = cellCenter(term, 5, 0)
+			x, y = cellCenter(term, 4, 0)
 			tt.Move(x, y)
 			tt.Release(x, y)
 

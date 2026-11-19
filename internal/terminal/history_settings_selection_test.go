@@ -50,7 +50,7 @@ func TestHistoryLimitPruningPrimaryPreservesAlternateSelection(t *testing.T) {
 	term.Feed([]byte("\x1b[?47h\x1b[Halternate"))
 	tt.Frame()
 	x0, y0 := cellCenter(term, 0, 0)
-	x3, y3 := cellCenter(term, 3, 0)
+	x3, y3 := cellCenter(term, 2, 0)
 	beginCharacterDrag(tt, x0, y0)
 	tt.Move(x3, y3)
 	tt.Release(x3, y3)
@@ -91,7 +91,7 @@ func TestHistoryLimitWithoutPruningPreservesSelectionAndDrag(t *testing.T) {
 			term.Feed([]byte("abcdef"))
 			tt.Frame()
 			x0, y0 := cellCenter(term, 0, 0)
-			x3, y3 := cellCenter(term, 3, 0)
+			x3, y3 := cellCenter(term, 2, 0)
 			beginCharacterDrag(tt, x0, y0)
 			tt.Move(x3, y3)
 			if got := term.SearchSelection(); got != "abc" {
@@ -108,7 +108,7 @@ func TestHistoryLimitWithoutPruningPreservesSelectionAndDrag(t *testing.T) {
 			if got := tt.Clipboard(); got != "abc" {
 				t.Fatal("capacity-only change lost copy", got)
 			}
-			x5, y5 := cellCenter(term, 5, 0)
+			x5, y5 := cellCenter(term, 4, 0)
 			tt.Move(x5, y5)
 			if got := term.SearchSelection(); got != "abcde" {
 				t.Fatal("capacity-only change lost drag anchor", got)

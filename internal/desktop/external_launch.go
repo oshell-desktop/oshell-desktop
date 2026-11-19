@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/egoist/mygo"
 	"oshell-desktop/internal/core"
+	"oshell-desktop/internal/diagnostics"
 )
 
 type pendingExternalLaunch struct {
@@ -26,6 +27,7 @@ func (h *applicationHub) startExternalLaunch() {
 		}
 	})
 	if e != nil {
+		diagnostics.Failure("external_launch_listen", e)
 		if len(h.windows) > 0 {
 			h.windows[0].status = "外部启动服务不可用：" + e.Error()
 		}
@@ -37,6 +39,7 @@ func (h *applicationHub) drainExternalLaunch() {
 	remaining := h.externalPending[:0]
 	for _, pending := range h.externalPending {
 		if pending.ctx.Err() != nil {
+			diagnostics.Event("external_launch_expired", nil)
 			pending.request = core.ExternalLaunchRequest{}
 			continue
 		}
@@ -46,14 +49,20 @@ func (h *applicationHub) drainExternalLaunch() {
 			continue
 		}
 		a := h.focused(nil)
-		if a.passwordLocked() {
+		locked := a.passwordLocked()
+		diagnostics.Event("external_launch_received", map[string]any{"locked": locked, "window_visible": a.win != nil && a.win.IsVisible()})
+		if locked {
 			remaining = append(remaining, pending)
 			if !a.features.vaultOpen {
 				a.showVault()
 			}
 			a.features.startupUnlock = true
 			if a.win != nil {
+				// Focus restores minimized windows, but does not show a hidden
+				// workspace. The user must be able to see the unlock prompt.
+				a.win.Show()
 				a.win.Focus()
+				a.win.Invalidate()
 			}
 			continue
 		}
@@ -89,9 +98,12 @@ func (h *applicationHub) drainExternalLaunch() {
 				a.open(profile, credentials, 0)
 			}
 			if pending.request.File == nil && a.win != nil {
+				a.win.Show()
 				a.win.Focus()
+				a.win.Invalidate()
 			}
 		}
+		diagnostics.Event("external_launch_completed", map[string]any{"accepted": e == nil})
 		pending.result <- e
 		pending.request = core.ExternalLaunchRequest{}
 	}

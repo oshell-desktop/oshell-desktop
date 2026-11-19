@@ -1,13 +1,19 @@
 package desktop
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"testing"
 	"time"
 
+	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"oshell-desktop/internal/core"
 	"oshell-desktop/internal/terminal"
+	"oshell-desktop/internal/zmodem"
 )
 
 func TestTerminalTransferCompletionCountdown(t *testing.T) {
@@ -46,6 +52,68 @@ func TestTerminalTransferCompletionCountdown(t *testing.T) {
 	}
 }
 
+func TestTerminalTransferDialogExplicitCancel(t *testing.T) {
+	for _, upload := range []bool{true, false} {
+		t.Run(fmt.Sprint(upload), func(t *testing.T) {
+			a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
+			p := &pane{id: "transfer", profile: core.Profile{Name: "test"}}
+			p.owner.Store(a)
+			a.tabs = []*tab{{id: "one", root: &node{pane: p}, active: p}}
+			conn, peer := net.Pipe()
+			defer peer.Close()
+			go io.Copy(io.Discard, peer)
+			started := make(chan context.Context, 1)
+			opts := terminal.Options{Conn: conn, NoBlink: true}
+			a.configureTerminalTransferWithPicker(p, &opts, true, func(ctx context.Context, _ *mygo.Window, direction bool) ([]string, error) {
+				if direction != upload {
+					return nil, fmt.Errorf("unexpected transfer direction")
+				}
+				started <- ctx
+				<-ctx.Done()
+				return nil, ctx.Err()
+			})
+			term, err := terminal.New(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer term.Close()
+			p.term = term
+			frame := byte(zmodem.FrameZRINIT)
+			if !upload {
+				frame = zmodem.FrameZRQINIT
+			}
+			if _, err := peer.Write(zmodem.BuildZhexHeader(frame, 0)); err != nil {
+				t.Fatal(err)
+			}
+			waitOperator(t, a, func() bool { return len(started) > 0 })
+			ctx := <-started
+			clicked := false
+			tt := ui.NewTester(func(c *ui.Context) {
+				ui.Button(c, "后台命令").OnClick(func() { clicked = true })
+				a.transferOverlays(c)
+			}, 800, 500)
+			tt.Key(ui.Ctrl, ui.KeyC)
+			tt.Key(0, ui.KeyEscape)
+			tt.Type("input")
+			tt.ClickAt(5, 5)
+			if ctx.Err() != nil || clicked || !tt.HasText("ZMODEM 文件传输") {
+				t.Fatal("accidental input dismissed/cancelled transfer")
+			}
+			if err := tt.Click("取消"); err != nil {
+				t.Fatal(err)
+			}
+			waitOperator(t, a, func() bool { return !p.transfer.active && term.Available() })
+			tt.Frame()
+			if ctx.Err() == nil || tt.HasText("ZMODEM 文件传输") || p.transfer.status != "ZMODEM · 已取消" {
+				t.Fatal("explicit cancellation did not restore input", p.transfer.status)
+			}
+			if err := tt.Click("后台命令"); err != nil || !clicked {
+				t.Fatal("modal still intercepts input", err)
+			}
+		})
+	}
+}
+
 func TestTerminalTransferOverlaysAcrossTabs(t *testing.T) {
 	for _, theme := range []string{"light", "dark"} {
 		t.Run(theme, func(t *testing.T) {
@@ -74,18 +142,31 @@ func TestTerminalTransferOverlaysAcrossTabs(t *testing.T) {
 				}
 			}
 			r, ok := tt.Find("rz 上传")
-			if !ok || r.X < 500 || r.Y < 38 || r.Y > 90 {
-				t.Fatalf("not top right: %+v", r)
+			if !ok || r.X < 200 || r.X > 500 || r.Y < 80 {
+				t.Fatalf("not centered: %+v", r)
 			}
 			before, _ := tt.Find("终端内容")
-			if err := tt.Click("继续操作终端"); err != nil || !clicked {
-				t.Fatal("overlay intercepted terminal", err)
+			if err := tt.Click("继续操作终端"); err != nil || clicked {
+				t.Fatal("modal did not block terminal", err)
+			}
+			tt.Key(ui.Ctrl, ui.KeyC)
+			tt.Key(0, ui.KeyEscape)
+			if !tt.HasText("ZMODEM 文件传输") || !upload.transfer.active {
+				t.Fatal("keyboard dismissed transfer dialog")
 			}
 			snapshot(t, tt, "zmodem-overlay-"+theme+".png")
+			upload.transfer.active, upload.transfer.visible = false, false
+			tt.Frame()
+			if tt.HasText("ZMODEM 文件传输") {
+				t.Fatal("completed transfer left modal blocking")
+			}
+			if err := tt.Click("继续操作终端"); err != nil || !clicked {
+				t.Fatal("terminal did not resume", err)
+			}
 			if err := tt.Click("关闭传输进度"); err != nil {
 				t.Fatal(err)
 			}
-			if download.transfer.visible || !upload.transfer.visible {
+			if download.transfer.visible {
 				t.Fatal("closed wrong transfer")
 			}
 			upload.transfer.visible = false
