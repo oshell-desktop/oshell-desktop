@@ -28,3 +28,22 @@ func TestP1OSC52DeniedByProductionTerminal(t *testing.T) {
 		t.Fatalf("OSC52 query replied or manual paste changed: %q", sent)
 	}
 }
+
+func TestMiddleClickPasteRespectsMouseTracking(t *testing.T) {
+	term, tt := wordClickFixture(t, "", 500)
+	tt.SetClipboard("sample")
+	var received []string
+	term.opts.BeforePaste = func(s string) bool {
+		received = append(received, s)
+		return false
+	}
+	ev := ui.InputEvent{Kind: ui.InputPointerDown, Button: 2, X: 20, Y: 20}
+	term.v.handleInput(ev)
+	term.SetMiddleClickPaste(true)
+	term.v.handleInput(ev)
+	term.Feed([]byte("\x1b[?1000h"))
+	term.v.handleInput(ev)
+	if len(received) != 1 || received[0] != "sample" {
+		t.Fatalf("clipboard deliveries: %q", received)
+	}
+}

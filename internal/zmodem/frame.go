@@ -124,11 +124,10 @@ func AppendEscaped(dst []byte, src []byte) []byte {
 	return dst
 }
 
-// CRC16 is the XMODEM CRC (poly 0x1021, init 0) used for ZBIN (CRC16) frames.
-func CRC16(data []byte) uint16 {
-	var crc uint16
-	for _, b := range data {
-		crc ^= uint16(b) << 8
+var crc16Table = func() [256]uint16 {
+	var table [256]uint16
+	for b := range table {
+		crc := uint16(b) << 8
 		for i := 0; i < 8; i++ {
 			if crc&0x8000 != 0 {
 				crc = (crc << 1) ^ 0x1021
@@ -136,6 +135,20 @@ func CRC16(data []byte) uint16 {
 				crc <<= 1
 			}
 		}
+		table[b] = crc
+	}
+	return table
+}()
+
+func crc16Byte(crc uint16, b byte) uint16 {
+	return crc<<8 ^ crc16Table[byte(crc>>8)^b]
+}
+
+// CRC16 is the XMODEM CRC (poly 0x1021, init 0) used for ZBIN (CRC16) frames.
+func CRC16(data []byte) uint16 {
+	var crc uint16
+	for _, b := range data {
+		crc = crc16Byte(crc, b)
 	}
 	return crc
 }

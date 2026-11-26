@@ -34,6 +34,7 @@ func (a *App) lockWorkspaceSecrets() {
 		windows = a.hub.configurationWindows()
 	}
 	for _, window := range windows {
+		window.closeBastionPassword()
 		window.cancelSharedSync()
 		window.cancelWebDAVProbe()
 	}

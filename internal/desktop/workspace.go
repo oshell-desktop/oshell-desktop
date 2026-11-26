@@ -63,7 +63,16 @@ func (a *App) view(c *ui.Context) {
 		})
 	}
 	a.mcp.sidebarShown = a.mcp.open && a.mcp.window == nil && width >= 1200 && !a.focusFullscreen.chrome
-	ui.Column(c).Fill().Children(func() {
+	workspace := ui.Column(c).Fill()
+	if drag, dropped := ui.Drop[tabDrag](workspace); dropped {
+		// Rows and group content take precedence. A drop on the remaining
+		// window chrome returns a foreign tab to the active visible group.
+		if source := a.tabDragSource(drag.ID); source != nil && source != a {
+			g := a.groupByID(a.groups.active)
+			a.post(func() { a.receiveTabDrag(drag, g, "", false) })
+		}
+	}
+	workspace.Children(func() {
 		if !a.focusFullscreen.chrome {
 			a.toolbar(c)
 			a.masterWarning(c)
@@ -240,12 +249,16 @@ func (a *App) linksBar(c *ui.Context) {
 	})
 }
 func (a *App) profileByID(id string) (core.Profile, bool) {
+	var alternate core.Profile
 	for _, p := range a.config.Profiles {
 		if p.ID == id {
 			return p, true
 		}
+		if p.MatchesUUID(id) {
+			alternate = p
+		}
 	}
-	return core.Profile{}, false
+	return alternate, alternate.ID != ""
 }
 func (a *App) linksMenu(m *ui.Menu, folder string) {
 	if folder == "" {
@@ -306,11 +319,14 @@ func (a *App) linksMenu(m *ui.Menu, folder string) {
 	}
 }
 func (a *App) newTabMenu(m *ui.Menu) {
-	if m.Item("新建空白标签（网络工具）").Chosen() {
+	if m.Item("新建空白标签（本地命令行）").Chosen() {
 		a.newBlank()
 	}
 	if m.Item("新建 SSH 会话…").Chosen() {
 		a.edit(a.newProfile("ssh"))
+	}
+	if m.Item("新建堡垒机 SSH 会话…").Chosen() {
+		a.edit(a.newProfile(bastionSSH))
 	}
 	if m.Item("打开本地终端").Chosen() {
 		a.local()
@@ -360,6 +376,11 @@ func (a *App) groupTabBar(c *ui.Context, g *tabGroup) {
 			ui.Row(c).Gap(4).Children(func() {
 				for i, t := range tabs {
 					row := ui.Row(c.Key(t.id)).Height(28).Gap(0).Padding(0, 4).Width(widths[i]).Shrink(0).Radius(2).Background(ui.Transparent).BorderColor(ui.Transparent)
+					tabAccent := c.Theme().Accent
+					if appearance := a.config.Settings.TerminalAppearance; appearance != nil && appearance.TabColor != "" {
+						tabAccent = ui.Hex(appearance.TabColor)
+						row.Background(tabAccent.Alpha(0.18))
+					}
 					if row.Hovered() {
 						row.Background(c.Theme().SurfaceHover)
 					}
@@ -367,7 +388,7 @@ func (a *App) groupTabBar(c *ui.Context, g *tabGroup) {
 						if len(tabs) > 1 && a.groups.active == g.id {
 							g.revealSelectedTab(row, t.id)
 						}
-						accent := c.Theme().Accent
+						accent := tabAccent
 						row.Background(c.Theme().Selection).DrawOver(func(p *ui.Painter, r ui.Rect) {
 							p.Fill(ui.Rect{X: r.X + 7, Y: r.Y + r.H - 2, W: r.W - 14, H: 2}, accent, 1)
 						})
@@ -409,6 +430,14 @@ func (a *App) groupTabBar(c *ui.Context, g *tabGroup) {
 		tabBarButton(c, "新建标签", plusIcon).ContextMenu(backgroundMenu).Menu(func(m *ui.Menu) { a.activateGroup(g); a.newTabMenu(m) })
 		space := ui.Box(c).Grow(1).MinWidth(24).Height(30).Label("标签栏空白区域").ContextMenu(backgroundMenu)
 		a.tabStripDropSpace(space, g)
+		if a.localUI.DoubleClickNewPrompt && space.DoubleClicked() {
+			a.post(func() {
+				if a.groupByID(g.id) == g && !g.hidden && !a.workspaceMenuBlocked() {
+					a.activateGroup(g)
+					a.newBlank()
+				}
+			})
+		}
 		if g.id == a.groups.active && !a.focusFullscreen.chrome {
 			a.workspaceMenus(c)
 		}
@@ -432,6 +461,7 @@ func (a *App) welcome(c *ui.Context) {
 		ui.Row(c).Gap(10).Margin(3, 0).Children(func() {
 			toolButton(c, "新建 SSH 会话", plusIcon, "新建 SSH 会话").OnClick(func() { a.edit(a.newProfile("ssh")) })
 			toolButton(c, "打开本地终端", terminalIcon, "打开本地终端").OnClick(a.local)
+			toolButton(c, "本地命令行", keyboardIcon, "打开本地命令行和内置连接工具").OnClick(a.newBlank)
 		})
 		ui.Text(c, "通过工具栏管理会话、创建分屏；使用底部输入栏快速发送命令。").FontSize(11).TextColor(c.Theme().TextMuted).Margin(9, 0, 0, 0)
 	})

@@ -43,6 +43,11 @@ func (a *App) tabStripMenu(m *ui.Menu, g *tabGroup, t *tab) {
 		return
 	}
 	p := t.active
+	if _, ok := a.bastionPasswordTarget(p); ok && m.Item("目标服务器密码…").Chosen() {
+		a.selectTab(t)
+		a.openBastionPassword(p)
+		return
+	}
 	if m.Item("复制会话").Disabled(p.closed).Chosen() {
 		a.selectTab(t)
 		profile := p.profile

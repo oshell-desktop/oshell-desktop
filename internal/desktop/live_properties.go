@@ -12,7 +12,7 @@ import (
 func blankProfile() core.Profile {
 	p := core.NewProfile()
 	p.Kind = "blank"
-	p.Name = "本机网络工具"
+	p.Name = "本地命令行"
 	return p
 }
 func (a *App) newBlank() {

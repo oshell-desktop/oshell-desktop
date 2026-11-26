@@ -150,7 +150,7 @@ func (a *App) managerContextMenu(c *ui.Context, m *ui.Menu, id string) {
 			return
 		}
 	}
-	for _, entry := range [][2]string{{"ssh", "新建 SSH 会话…"}, {"sftp", "新建 SFTP 会话…"}, {"ftp", "新建 FTP 会话…"}} {
+	for _, entry := range [][2]string{{"ssh", "新建 SSH 会话…"}, {bastionSSH, "新建堡垒机 SSH 会话…"}, {"sftp", "新建 SFTP 会话…"}, {"ftp", "新建 FTP 会话…"}} {
 		if m.Item(entry[1]).Chosen() {
 			a.editManagerProfile(a.newProfile(entry[0]))
 			return

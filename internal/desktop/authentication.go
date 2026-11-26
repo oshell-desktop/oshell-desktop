@@ -168,7 +168,7 @@ func (a *App) authenticationChallengeDialog(c *ui.Context) {
 		return
 	}
 	finish := func(cancelled bool) { a.finishChallenge(q, cancelled) }
-	desktopModal(c.Key(q.id), &q.open, func() {
+	terminalModal(c.Key(q.id), &q.open, func() {
 		dialogBody(c, 500).Gap(12).Children(func() {
 			title := q.request.Title
 			if title == "" {

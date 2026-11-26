@@ -11,6 +11,15 @@ import (
 )
 
 func (c Config) Validate() error {
+	if a := c.Settings.TerminalAppearance; a != nil {
+		raw, err := json.Marshal(a)
+		if err != nil {
+			return err
+		}
+		if _, err := canonicalSharedJSON(raw, "terminalAppearance"); err != nil {
+			return err
+		}
+	}
 	if e := ValidateProxyCatalog(c.Proxies, c.Profiles); e != nil {
 		return e
 	}
@@ -124,6 +133,10 @@ func (c Config) Clone() Config {
 		out.HighlightSets[i].Rules = slices.Clone(out.HighlightSets[i].Rules)
 	}
 	out.Settings.CustomSchemes = slices.Clone(c.Settings.CustomSchemes)
+	if c.Settings.TerminalAppearance != nil {
+		appearance := *c.Settings.TerminalAppearance
+		out.Settings.TerminalAppearance = &appearance
+	}
 	for i := range out.Settings.CustomSchemes {
 		out.Settings.CustomSchemes[i].ANSI = slices.Clone(c.Settings.CustomSchemes[i].ANSI)
 	}

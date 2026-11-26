@@ -12,6 +12,7 @@ func TestManagerCopyCommitsCredentialModeAndSelectsDuplicate(t *testing.T) {
 	p.Group = "team"
 	p.Name = "source"
 	p.Host = "fixture.invalid"
+	p.Username = "operator#UTF-8#fixture#SSH#worker"
 	cfg.Profiles = []core.Profile{p}
 	if err := store.Save(cfg); err != nil {
 		t.Fatal(err)
@@ -21,6 +22,10 @@ func TestManagerCopyCommitsCredentialModeAndSelectsDuplicate(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := a.vault.PutForRevision(p, "saved-secret", p.Identity(), a.vault.Revision(), "local"); err != nil {
+		t.Fatal(err)
+	}
+	target, _ := p.BastionTarget()
+	if err := a.vault.PutFor(target.Credential, "target-fixture", p.Identity()); err != nil {
 		t.Fatal(err)
 	}
 	a.managerAll = true
@@ -42,6 +47,10 @@ func TestManagerCopyCommitsCredentialModeAndSelectsDuplicate(t *testing.T) {
 		t.Fatal("credential mode or binding lost", err)
 	}
 	disk, err := store.Load()
+	copyTarget, _ := duplicate.BastionTarget()
+	if secret, err := a.vault.GetFor(copyTarget.Credential, p.Identity()); err != nil || secret != "target-fixture" {
+		t.Fatal("target credential not rebound to copied profile", err)
+	}
 	if err != nil || len(disk.Profiles) != 2 {
 		t.Fatal("copy not persisted", err)
 	}

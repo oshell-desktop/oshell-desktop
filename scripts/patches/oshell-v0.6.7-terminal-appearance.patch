@@ -1,0 +1,1411 @@
+diff --git a/Package.swift b/Package.swift
+--- a/Package.swift
++++ b/Package.swift
+@@ -22,7 +22,7 @@
+         .binaryTarget(name: "Sparkle", path: "Vendor/Sparkle/Sparkle.xcframework"),
+         .target(name: "OShellCore"),
+         .executableTarget(name: "OShell-MCP", dependencies: ["OShellCore", .product(name: "MCP", package: "swift-sdk")], path: "Sources/OShellMCP", linkerSettings: helperLinkerSettings),
+-        .executableTarget(name: "OShell", dependencies: ["OShellCore", "Sparkle", .product(name: "SwiftTerm", package: "SwiftTerm")], exclude: testHarness ? [] : ["TestSupport"], swiftSettings: appSettings, linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
++        .executableTarget(name: "OShell", dependencies: ["OShellCore", "Sparkle", .product(name: "SwiftTerm", package: "SwiftTerm")], exclude: testHarness ? [] : ["TestSupport"], resources: [.copy("xshell-colors.xcs")], swiftSettings: appSettings, linkerSettings: [.unsafeFlags(["-Xlinker", "-rpath", "-Xlinker", "@executable_path/../Frameworks"])]),
+         .executableTarget(name: "OShellProxy", dependencies: ["OShellCore"], linkerSettings: helperLinkerSettings),
+         .executableTarget(name: "OShellAskpass", dependencies: ["OShellCore"], linkerSettings: helperLinkerSettings),
+         .executableTarget(name: "OShellZOC", dependencies: ["OShellCore"], linkerSettings: helperLinkerSettings),
+diff --git a/Sources/OShell/AppearanceSettings.swift b/Sources/OShell/AppearanceSettings.swift
+--- a/Sources/OShell/AppearanceSettings.swift
++++ b/Sources/OShell/AppearanceSettings.swift
+@@ -23,6 +23,7 @@
+         guard (try? validate()) != nil else { return }
+         terminal.nativeBackgroundColor = NSColor(hex: background)!
+         terminal.nativeForegroundColor = NSColor(hex: foreground)!
++        terminal.boldForegroundColor = boldForeground.flatMap { NSColor(hex: $0) }
+         terminal.caretColor = NSColor(hex: cursor)!
+         terminal.caretTextColor = NSColor(hex: cursorText)!
+         terminal.selectedTextBackgroundColor = NSColor(hex: selection)!
+@@ -39,6 +40,7 @@
+     let theme = NSPopUpButton(), schemes = NSPopUpButton(), name = NSTextField()
+     let preview = TerminalView(frame: .zero, font: .monospacedSystemFont(ofSize: 12, weight: .regular))
+     let deleteButton = NSButton(), copyButton = NSButton()
++    private let customBold = NSButton(checkboxWithTitle: "单独设置粗体文字色", target: nil, action: nil)
+     private let note = NSTextField(labelWithString: "修改预设颜色会自动创建自定义副本；应用后更新全部终端，取消则不保存。")
+     private(set) var wells = [NSColorWell]()
+     private(set) var custom: [TerminalColorScheme]
+@@ -48,6 +50,19 @@
+     var onThemeChanged: (() -> Void)?
+     var selectedTheme: InterfaceTheme { InterfaceTheme.allCases[theme.indexOfSelectedItem] }
+     private var loading = false
++    private static let library: [TerminalColorScheme] = {
++        let packaged = Bundle.main.url(forResource: "OShell_OShell", withExtension: "bundle")
++            .flatMap { Bundle(url: $0) }?.url(forResource: "xshell-colors", withExtension: "xcs")
++        guard let url = packaged ?? Bundle.module.url(forResource: "xshell-colors", withExtension: "xcs"),
++              let data = try? Data(contentsOf: url), let colors = try? TerminalColorScheme.decodeImport(data) else { return [] }
++        return colors.map { original in
++            var scheme = original
++            scheme.id = "custom-xshell-" + scheme.name.lowercased().replacingOccurrences(of: " ", with: "-")
++            scheme.cursor = "#00FF00"
++            scheme.cursorText = "#000000"
++            return scheme
++        }
++    }()
+     init(preferences: Preferences) {
+         custom = preferences.customColorSchemes; selectedID = preferences.colorScheme.id
+         super.init(frame: NSRect(x: 0, y: 0, width: 820, height: 520))
+@@ -78,13 +93,16 @@
+             let title = (index < 8 ? "标准 · " : "明亮 · ") + TerminalColorScheme.ansiNames[index % 8]
+             label(title, NSRect(x: x, y: y, width: 90, height: 18)); addWell(index + 6, title: title, frame: NSRect(x: x, y: y - 30, width: 88, height: 27))
+         }
+-        note.font = .systemFont(ofSize: 11); note.textColor = .secondaryLabelColor; note.frame = NSRect(x: 18, y: 208, width: 778, height: 20)
++        customBold.target = self; customBold.action = #selector(toggleBoldColor)
++        customBold.frame = NSRect(x: 18, y: 206, width: 155, height: 22); addSubview(customBold)
++        addWell(22, title: "粗体文字", frame: NSRect(x: 175, y: 203, width: 70, height: 26))
++        note.font = .systemFont(ofSize: 11); note.textColor = .secondaryLabelColor; note.frame = NSRect(x: 252, y: 208, width: 544, height: 20)
+         preview.frame = NSRect(x: 18, y: 18, width: 778, height: 176); preview.wantsLayer = true
+         preview.toolTip = "预览基础颜色及 ANSI 色板。远端程序的真彩色与突出显示集使用各自指定的颜色。"
+         // Preview uses the actual ANSI renderer, without process creation.
+         [theme, schemes, name, copyButton, deleteButton, importButton, exportButton, note, preview].forEach(addSubview)
+         reload()
+-        preview.feed(text: "oshell@server:~$ ls -lah\r\n\u{1b}[32mSUCCESS\u{1b}[0m 已连接 · Unicode 中文 / UTF-8\r\n\u{1b}[33mWARNING\u{1b}[0m 配色预览，不会执行命令\r\n\u{1b}[31mERROR\u{1b}[0m connection refused\r\n")
++        preview.feed(text: "Normal  \u{1b}[1mBold\u{1b}[0m  \u{1b}[4mUnderline\u{1b}[0m  \u{1b}[7mReversed\u{1b}[0m\r\n终端文字 Aa 0123 中文\r\n")
+         for bold in [false, true] {
+             for index in 0..<8 { preview.feed(text: "\u{1b}[\(bold ? 90 + index : 30 + index)m■ ANSI \(index) \u{1b}[0m") }
+             preview.feed(text: "\r\n")
+@@ -101,10 +119,22 @@
+         loading = true; defer { loading = false }
+         schemes.removeAllItems(); schemes.addItems(withTitles: allSchemes.map { scheme in (custom.contains(where: { $0.id == scheme.id }) ? "自定义 · " : "") + scheme.name })
+         schemes.selectItem(at: allSchemes.firstIndex { $0.id == selectedID } ?? 0)
++        let library = NSMenuItem(title: "Xshell 配色库", action: nil, keyEquivalent: "")
++        let menu = NSMenu()
++        for (index, scheme) in Self.library.enumerated() {
++            let item = menu.addItem(withTitle: scheme.name, action: #selector(selectLibraryScheme(_:)), keyEquivalent: "")
++            item.target = self
++            item.tag = index
++            item.state = selectedID == scheme.id ? .on : .off
++        }
++        library.submenu = menu
++        schemes.menu?.addItem(library)
+         let value = selected, editable = custom.contains { $0.id == selectedID }
+         name.stringValue = value.name; name.isEditable = editable; name.isSelectable = editable; deleteButton.isEnabled = editable
+         let colors = [value.background, value.foreground, value.cursor, value.cursorText, value.selection, value.selectionText] + value.ansi
+-        for (well, color) in zip(wells, colors) { well.color = NSColor(hex: color)!; well.toolTip = color }
++        for (well, color) in zip(wells, colors + [value.boldForeground ?? value.foreground]) { well.color = NSColor(hex: color)!; well.toolTip = color }
++        customBold.state = value.boldForeground == nil ? .off : .on
++        wells[22].isEnabled = value.boldForeground != nil
+         value.apply(to: preview)
+         note.stringValue = value.background.lowercased() == value.foreground.lowercased() ? "文字与背景颜色相同，请调整以便阅读。" : "修改预设颜色会自动创建自定义副本；应用后更新全部终端，取消则不保存。"
+     }
+@@ -117,6 +147,16 @@
+         stashName(); let index = schemes.indexOfSelectedItem
+         guard allSchemes.indices.contains(index) else { return }; selectedID = allSchemes[index].id; reload()
+     }
++    @objc private func selectLibraryScheme(_ sender: NSMenuItem) {
++        stashName()
++        let scheme = Self.library[sender.tag]
++        if !custom.contains(where: { $0.id == scheme.id }) {
++            guard custom.count < 64 else { Dialogs.message("自定义配色最多 64 个。"); return }
++            custom.append(scheme)
++        }
++        selectedID = scheme.id
++        reload()
++    }
+     @objc func copyScheme() {
+         stashName(); guard custom.count < 64 else { Dialogs.message("自定义配色最多 64 个。"); return }
+         let copy = selected.editableCopy(); custom.append(copy); selectedID = copy.id; reload()
+@@ -124,6 +164,14 @@
+     @objc func deleteScheme() {
+         guard custom.contains(where: { $0.id == selectedID }) else { return }
+         custom.removeAll { $0.id == selectedID }; selectedID = TerminalColorScheme.presets[0].id; reload()
++    }
++    @objc private func toggleBoldColor() {
++        let enable = customBold.state == .on
++        stashName()
++        if !custom.contains(where: { $0.id == selectedID }) { copyScheme() }
++        guard let index = custom.firstIndex(where: { $0.id == selectedID }) else { reload(); return }
++        custom[index].boldForeground = enable ? custom[index].foreground : nil
++        reload()
+     }
+     @objc func colorChanged(_ sender: NSColorWell) {
+         guard !loading else { return }
+@@ -138,6 +186,7 @@
+         case 3: custom[position].cursorText = color
+         case 4: custom[position].selection = color
+         case 5: custom[position].selectionText = color
++        case 22: custom[position].boldForeground = color
+         default: if (6..<22).contains(index) { custom[position].ansi[index - 6] = color }
+         }
+         reload()
+diff --git a/Sources/OShell/Dialogs.swift b/Sources/OShell/Dialogs.swift
+--- a/Sources/OShell/Dialogs.swift
++++ b/Sources/OShell/Dialogs.swift
+@@ -69,6 +69,11 @@
+             windowSize.leadingAnchor.constraint(equalTo: windowPage.leadingAnchor, constant: 24),
+             windowSize.trailingAnchor.constraint(equalTo: windowPage.trailingAnchor, constant: -24)])
+         let windowTab = NSTabViewItem(identifier: "window"); windowTab.label = "窗口"; windowTab.view = windowPage; tabs.addTabViewItem(windowTab)
++        let rendering = TerminalAppearanceSettings(current.terminalAppearance)
++        let renderingTab = NSTabViewItem(identifier: "terminalAppearance")
++        renderingTab.label = "终端外观"
++        renderingTab.view = rendering
++        tabs.addTabViewItem(renderingTab)
+         let quickPage = NSView(frame: NSRect(x: 0, y: 0, width: 820, height: 520))
+         quickHistory.translatesAutoresizingMaskIntoConstraints = false; quickPage.addSubview(quickHistory)
+         NSLayoutConstraint.activate([quickHistory.topAnchor.constraint(equalTo: quickPage.topAnchor, constant: 24),
+@@ -82,7 +87,7 @@
+         var prefs = current
+         while true {
+             guard dialog.runModal() == .OK else { return nil }
+-            do { prefs = try updatesView.values(updating: appearanceView.values(updating: current)); prefs.keyboardShortcuts = try shortcutView.values(); prefs.scrollback = try history.value(); try storageView?.validateSelection(); try imagePasteView?.validate(); _ = try fileManagementView?.values(); _ = try selection.values(); _ = try windowSize.value(); _ = try quickHistory.value(); break }
++            do { prefs = try updatesView.values(updating: appearanceView.values(updating: current)); prefs.keyboardShortcuts = try shortcutView.values(); prefs.scrollback = try history.value(); try storageView?.validateSelection(); try imagePasteView?.validate(); _ = try fileManagementView?.values(); _ = try selection.values(); _ = try windowSize.value(); _ = try quickHistory.value(); prefs.terminalAppearance = try rendering.value(); break }
+             catch { Dialogs.message(error.localizedDescription) }
+         }
+         prefs.fontName = font.selectedItem?.representedObject as? String ?? ""
+@@ -94,6 +99,7 @@
+         clock.apply(to: &prefs)
+         localShortcutSelection?(prefs.keyboardShortcuts.overrides.removeValue(forKey: ShortcutAction.sessionSidebar.rawValue))
+         sidebarSelection?(sidebar.state == .on)
++        rendering.saveBackground()
+         prefs.clamp(); return prefs
+     }
+     static func message(_ text: String) {
+diff --git a/Sources/OShell/SettingsWindow.swift b/Sources/OShell/SettingsWindow.swift
+--- a/Sources/OShell/SettingsWindow.swift
++++ b/Sources/OShell/SettingsWindow.swift
+@@ -50,6 +50,7 @@
+         "security": ("lock.shield", "管理解锁方式和凭据保护。"),
+         "titles": ("rectangle.topthird.inset.filled", "设置会话标签的标题显示。"),
+         "files": ("folder", "选择内置文件管理或当前终端命令。"),
++        "terminalAppearance": ("textformat.size", "设置所有终端的字体、光标、边距与背景。"),
+         "window": ("macwindow", "设置启动和新建窗口时的默认尺寸。"),
+         "quickSend": ("paperplane", "设置本机快速发送命令的历史保留条数。"),
+         "about": ("info.circle", "版本信息、开源项目与许可。")
+diff --git a/Sources/OShell/TabStripView.swift b/Sources/OShell/TabStripView.swift
+--- a/Sources/OShell/TabStripView.swift
++++ b/Sources/OShell/TabStripView.swift
+@@ -155,6 +155,7 @@
+             clearDragMonitor(); dragOriginFrame = nil; dragCancelled = false
+             onDragEnd?(); onDragCompletion?(screenPoint, operation, cancelled)
+         }
++        var accent: NSColor?
+         var selected = false { didSet { needsDisplay = true } }
+         var hasUnreadOutput = false { didSet { if oldValue != hasUnreadOutput { needsDisplay = true } } }
+         var connectionStatus: ConnectionStatus? { didSet { if oldValue != connectionStatus { needsDisplay = true } } }
+@@ -186,10 +187,10 @@
+             closeButton.frame = NSRect(x: bounds.width - 26, y: 0, width: 22, height: bounds.height)
+         }
+         override func draw(_ dirtyRect: NSRect) {
+-            NSColor.labelColor.withAlphaComponent(selected ? 0.075 : 0.02).setFill()
++            (accent ?? .labelColor).withAlphaComponent(accent == nil ? (selected ? 0.075 : 0.02) : 0.18).setFill()
+             NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 4, yRadius: 4).fill()
+             if selected {
+-                TerminalChrome.flame.setFill()
++                (accent ?? TerminalChrome.flame).setFill()
+                 NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: bounds.width, height: 2), xRadius: 1, yRadius: 1).fill()
+             }
+             if let connectionStatus {
+@@ -279,6 +280,7 @@
+         var number: Int? = nil
+         var connectionStatus: ConnectionStatus? = nil
+         var sessionFields = [TabSessionField]()
++        var tabColor: String?
+     }
+     func setAddDescription(_ title: String) { addButton.toolTip = title; addButton.setAccessibilityLabel(title) }
+     func update(tabs: [TerminalTab], selected: TerminalTab?, numbers: [UUID: Int]? = nil) {
+@@ -286,7 +288,7 @@
+         update(entries: tabs.map { tab in
+             let title = tab.title
+             let action = tab.activePane.canDuplicateConnection ? "双击新建相同会话" : "当前状态不响应双击"
+-            return Entry(id: tab.id, title: title, detail: tab.splitTitleDetail + tab.activePane.connectionDetails + "\n\n\(tab.layout.panes.count) 个终端 · " + action, hasUnreadOutput: tab.hasUnreadOutput, number: numbers[tab.id], connectionStatus: tab.activePane.tabConnectionStatus, sessionFields: tab.activePane.tabSessionFields)
++            return Entry(id: tab.id, title: title, detail: tab.splitTitleDetail + tab.activePane.connectionDetails + "\n\n\(tab.layout.panes.count) 个终端 · " + action, hasUnreadOutput: tab.hasUnreadOutput, number: numbers[tab.id], connectionStatus: tab.activePane.tabConnectionStatus, sessionFields: tab.activePane.tabSessionFields, tabColor: tab.activePane.terminalTabColor)
+         }, selectedID: selected?.id)
+     }
+     func update(entries: [Entry], selectedID: UUID?) {
+@@ -321,6 +323,7 @@
+             if !rebuildMenu, !shortcutsChanged, previous?[index] == entry, item.selected == (entry.id == selectedID) { continue }
+             let title = entry.number.map { "\($0)  \(entry.title)" } ?? entry.title
+             item.selectButton.title = title; item.hasUnreadOutput = entry.hasUnreadOutput
++            item.accent = entry.tabColor.flatMap { NSColor(hex: $0) }
+             item.connectionStatus = entry.connectionStatus
+             item.selectButton.contentTintColor = entry.hasUnreadOutput ? .systemOrange : .labelColor
+             item.selected = entry.id == selectedID
+diff --git a/Sources/OShell/TerminalAppearanceSettings.swift b/Sources/OShell/TerminalAppearanceSettings.swift
+new file mode 100644
+--- /dev/null
++++ b/Sources/OShell/TerminalAppearanceSettings.swift
+@@ -0,0 +1,120 @@
++// SPDX-License-Identifier: GPL-3.0-only
++import AppKit
++import ImageIO
++import OShellCore
++
++final class TerminalAppearanceSettings: NSView {
++    static let backgroundKey = "OShell.terminal.backgroundFile"
++    private let enabled = NSButton(checkboxWithTitle: "自定义所有终端的外观", target: nil, action: nil)
++    private let fields = NSGridView()
++    private let picture = NSTextField(labelWithString: "")
++    private var path = UserDefaults.standard.string(forKey: backgroundKey)
++    private var readers = [(inout TerminalAppearance) throws -> Void]()
++
++    init(_ saved: TerminalAppearance?) {
++        let initial = saved ?? TerminalAppearance()
++        super.init(frame: NSRect(x: 0, y: 0, width: 820, height: 520))
++        enabled.state = saved == nil ? .off : .on
++        enabled.target = self
++        enabled.action = #selector(toggle)
++        func integer(_ key: WritableKeyPath<TerminalAppearance, Int>, _ title: String) -> NSView {
++            let field = NSTextField(string: String(initial[keyPath: key]))
++            field.setAccessibilityLabel(title)
++            readers.append { draft in
++                guard let number = Int(field.stringValue.trimmingCharacters(in: .whitespaces)) else {
++                    throw ModelError.invalid(title + "需要整数")
++                }
++                draft[keyPath: key] = number
++            }
++            return field
++        }
++        func text(_ key: WritableKeyPath<TerminalAppearance, String>, _ title: String) -> NSView {
++            let field = NSTextField(string: initial[keyPath: key])
++            field.placeholderString = title
++            readers.append { $0[keyPath: key] = field.stringValue.trimmingCharacters(in: .whitespaces) }
++            return field
++        }
++        func menu(_ key: WritableKeyPath<TerminalAppearance, String>, _ choices: [(String, String)]) -> NSView {
++            let button = NSPopUpButton()
++            button.addItems(withTitles: choices.map { $0.1 })
++            button.selectItem(at: choices.firstIndex { $0.0 == initial[keyPath: key] } ?? 0)
++            readers.append { $0[keyPath: key] = choices[button.indexOfSelectedItem].0 }
++            return button
++        }
++        func checkbox(_ key: WritableKeyPath<TerminalAppearance, Bool>, _ title: String) -> NSView {
++            let box = NSButton(checkboxWithTitle: title, target: nil, action: nil)
++            box.state = initial[keyPath: key] ? .on : .off
++            readers.append { $0[keyPath: key] = box.state == .on }
++            return box
++        }
++        func row(_ l: String, _ a: NSView, _ r: String, _ b: NSView) {
++            fields.addRow(with: [NSTextField(labelWithString: l), a, NSTextField(labelWithString: r), b])
++        }
++        row("上边距", integer(\.top, "上边距"), "下边距", integer(\.bottom, "下边距"))
++        row("左边距", integer(\.left, "左边距"), "右边距", integer(\.right, "右边距"))
++        row("行间距", integer(\.lineSpacing, "行间距"), "字符间距", integer(\.characterSpacing, "字符间距"))
++        row("主字体字重", integer(\.fontWeight, "主字体字重"), "", checkbox(\.allowProportional, "允许非等宽字体"))
++        row("东亚字体", text(\.asianFont, "跟随主字体"), "字号（0 跟随）", integer(\.asianSize, "东亚字号"))
++        row("东亚字重（0 跟随）", integer(\.asianWeight, "东亚字重"), "字体质量", menu(\.fontQuality, [("system","系统默认"),("grayscale","灰度抗锯齿")]))
++        row("粗体文本", menu(\.boldStyle, [("both","亮色和粗体"),("font","只使用粗体"),("bright","只使用亮色"),("none","普通字形和颜色")]),
++            "光标形状", menu(\.cursorShape, [("block","块"),("bar","竖线"),("underline","下划线")]))
++        row("", checkbox(\.cursorBlink, "闪烁光标"), "间隔（毫秒）", integer(\.blinkInterval, "闪烁间隔"))
++        row("标签颜色", text(\.tabColor, "#RRGGBB，留空跟随主题"), "图片位置", menu(\.imagePosition, [("center","居中"),("fit","适应窗口"),("fill","铺满并裁剪"),("stretch","拉伸")]))
++        row("本机背景", NSButton(title: "选择图片…", target: self, action: #selector(choosePicture)), "",
++            NSButton(title: "清除图片", target: self, action: #selector(clearPicture)))
++        fields.rowSpacing = 8
++        fields.columnSpacing = 12
++        let hint = NSTextField(wrappingLabelWithString: "边距 0–128，间距 −5–32，字重 100–900，字号 10–26，闪烁间隔 100–2000 毫秒。同步扩展外观需要两端支持，图片在各设备分别选择。")
++        let stack = NSStackView(views: [enabled, fields, picture, hint])
++        stack.orientation = .vertical
++        stack.alignment = .leading
++        stack.spacing = 12
++        stack.translatesAutoresizingMaskIntoConstraints = false
++        addSubview(stack)
++        NSLayoutConstraint.activate([
++            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 20),
++            stack.topAnchor.constraint(equalTo: topAnchor, constant: 16),
++            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -20),
++            hint.widthAnchor.constraint(lessThanOrEqualToConstant: 730)
++        ])
++        refreshPicture()
++        toggle()
++    }
++    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
++    @objc private func toggle() { fields.isHidden = enabled.state != .on; picture.isHidden = fields.isHidden }
++    private func refreshPicture() { picture.stringValue = path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? "" }
++    @objc private func clearPicture() { path = nil; refreshPicture() }
++    @objc private func choosePicture() {
++        let panel = NSOpenPanel()
++        panel.allowedFileTypes = ["png", "jpg", "jpeg", "gif", "bmp", "webp"]
++        guard panel.runPopupModal() == .OK, let url = panel.url else { return }
++        guard Self.backgroundImage(at: url.path) != nil else { Dialogs.message("无法读取背景图片，或已超过大小限制。"); return }
++        path = url.path
++        refreshPicture()
++    }
++    static func backgroundImage(at path: String) -> CGImage? {
++        let url = URL(fileURLWithPath: path)
++        guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]),
++              values.isRegularFile == true, let bytes = values.fileSize, bytes <= 16 << 20,
++              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
++              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
++              let w = properties[kCGImagePropertyPixelWidth as String] as? Int,
++              let h = properties[kCGImagePropertyPixelHeight as String] as? Int,
++              w > 0, h > 0, w <= (16 << 20) / h else { return nil }
++        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
++                                        kCGImageSourceCreateThumbnailWithTransform: true,
++                                        kCGImageSourceThumbnailMaxPixelSize: max(w,h)]
++        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
++    }
++    func saveBackground() {
++        if let path { UserDefaults.standard.set(path, forKey: Self.backgroundKey) }
++        else { UserDefaults.standard.removeObject(forKey: Self.backgroundKey) }
++    }
++    func value() throws -> TerminalAppearance? {
++        guard enabled.state == .on else { return nil }
++        var draft = TerminalAppearance()
++        for read in readers { try read(&draft) }
++        try draft.validate()
++        return draft
++    }
++}
+diff --git a/Sources/OShell/TerminalPane.swift b/Sources/OShell/TerminalPane.swift
+--- a/Sources/OShell/TerminalPane.swift
++++ b/Sources/OShell/TerminalPane.swift
+@@ -321,6 +321,10 @@
+     private(set) var hasUnreadOutput = false
+     func markOutputUnread() { hasUnreadOutput = true }
+     func markOutputRead() { hasUnreadOutput = false }
++    var terminalTabColor: String? { preferences.terminalAppearance?.tabColor }
++    private var terminalMargins = [NSLayoutConstraint]()
++    private let wallpaper = NSView()
++    private var wallpaperPath: String?
+     private var preferences: Preferences
+     private var fontZoomOffset: CGFloat = 0 // Local to this pane; never persisted or synced.
+     private var sshClientLocale: SSHClientLocale?
+@@ -601,7 +605,7 @@
+         self.oneTimePassword = oneTimePassword; self.externalTerminalType = terminalType
+         self.sshConnectionGroup = connectionGroup ?? (profile.kind == .ssh ? try? SSHConnectionGroup(profile: profile) : nil); self.reusesSSHConnection = reuseConnection
+         self.knownHostsFile = knownHostsFile
+-        let options = TerminalOptions(cols: 100, rows: 30, cursorStyle: .steadyBlock, scrollback: preferences.scrollback,
++        let options = TerminalOptions(cols: 100, rows: 30, cursorStyle: Self.cursorStyle(preferences.terminalAppearance), scrollback: preferences.scrollback,
+                                       enableSixelReported: false, kittyImageCacheLimitBytes: 4 * 1024 * 1024,
+                                       ambiguousCharactersAreWide: preferences.ambiguousCharactersAreWide)
+         terminal = OShellTerminal(frame: NSRect(x: 0, y: 0, width: 900, height: 580),
+@@ -651,6 +655,10 @@
+         agentControlBar.identifier = .init("terminal.mcp.status"); agentControlBar.isHidden = true
+         agentControlHeight = agentControlBar.heightAnchor.constraint(equalToConstant: 0)
+         for item in [agentControlLabel, stopAgent] { item.translatesAutoresizingMaskIntoConstraints = false; agentControlBar.addSubview(item) }
++        wallpaper.wantsLayer = true
++        wallpaper.layer?.masksToBounds = true
++        wallpaper.translatesAutoresizingMaskIntoConstraints = false
++        view.addSubview(wallpaper)
+         [headerBar, agentControlBar, searchPanel, terminal, transferProgress].forEach { $0.translatesAutoresizingMaskIntoConstraints = false; view.addSubview($0) }
+         NSLayoutConstraint.activate([
+             header.leadingAnchor.constraint(equalTo: headerBar.leadingAnchor),
+@@ -671,10 +679,15 @@
+             transferProgress.topAnchor.constraint(equalTo: terminal.topAnchor, constant: 8),
+             transferProgress.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+             transferProgress.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 12),
++            wallpaper.topAnchor.constraint(equalTo: terminal.topAnchor), wallpaper.bottomAnchor.constraint(equalTo: terminal.bottomAnchor),
++            wallpaper.leadingAnchor.constraint(equalTo: terminal.leadingAnchor), wallpaper.trailingAnchor.constraint(equalTo: terminal.trailingAnchor)
++        ])
++        terminalMargins = [
+             terminal.topAnchor.constraint(equalTo: searchPanel.bottomAnchor), terminal.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+             terminal.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 4),
+             terminal.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -4)
+-        ])
++        ]
++        NSLayoutConstraint.activate(terminalMargins)
+         focusStripe.translatesAutoresizingMaskIntoConstraints = false; view.addSubview(focusStripe)
+         NSLayoutConstraint.activate([
+             focusStripe.topAnchor.constraint(equalTo: view.topAnchor), focusStripe.heightAnchor.constraint(equalToConstant: 2),
+@@ -692,13 +705,37 @@
+     func apply(_ prefs: Preferences) {
+         guard !isShutdown else { return }
+         if prefs.fontName != preferences.fontName || prefs.fontSize != preferences.fontSize { fontZoomOffset = 0 }
++        let oldStyle = Self.cursorStyle(preferences.terminalAppearance)
+         preferences = prefs
++        let appearance = prefs.terminalAppearance
++        let newStyle = Self.cursorStyle(appearance)
++        if oldStyle.tagName != newStyle.tagName { terminal.getTerminal().setCursorStyle(newStyle) }
++        let margins = [appearance?.top ?? 0, -(appearance?.bottom ?? 0), appearance?.left ?? 4, -(appearance?.right ?? 4)]
++        for (constraint, margin) in zip(terminalMargins, margins) { constraint.constant = CGFloat(margin) }
++        terminal.applyTextAppearance(line: appearance?.lineSpacing ?? 0, character: appearance?.characterSpacing ?? 0,
++                                     bold: appearance?.boldStyle ?? (prefs.colorScheme.id.hasPrefix("custom-xshell-") || prefs.colorScheme.boldForeground != nil ? "both" : nil), smoothing: appearance?.fontQuality != "grayscale",
++                                     blink: Double(appearance?.blinkInterval ?? 700) / 1000)
+         terminal.preferColorEmoji = prefs.preferColorEmoji
+         applyFont()
+         terminal.changeScrollback(prefs.scrollback)
+         searchPanel.bufferDidChange(resized: true)
+         let scheme = prefs.colorScheme
+         scheme.apply(to: terminal)
++        let path = appearance == nil ? nil : UserDefaults.standard.string(forKey: TerminalAppearanceSettings.backgroundKey)
++        if wallpaperPath != path {
++            wallpaperPath = path
++            wallpaper.layer?.contents = path.flatMap { TerminalAppearanceSettings.backgroundImage(at: $0) }
++        }
++        let gravity: CALayerContentsGravity
++        switch appearance?.imagePosition {
++        case "fill": gravity = .resizeAspectFill
++        case "fit": gravity = .resizeAspect
++        case "stretch": gravity = .resize
++        default: gravity = .center
++        }
++        wallpaper.layer?.contentsGravity = gravity
++        wallpaper.layer?.contentsScale = terminal.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
++        terminal.backgroundOpacity = wallpaper.layer?.contents == nil ? 1 : 0
+         view.layer?.backgroundColor = NSColor(hex: scheme.background)!.cgColor
+         header.textColor = NSColor(hex: scheme.foreground)!.withAlphaComponent(0.75)
+         transferProgress.appearance = NSAppearance(named: scheme.isDark ? .darkAqua : .aqua)
+@@ -717,6 +754,14 @@
+     private func applyFont() {
+         let font = Self.font(preferences, size: preferences.fontSize + fontZoomOffset)
+         if terminal.font.fontName != font.fontName || terminal.font.pointSize != font.pointSize { terminal.font = font }
++        let appearance = preferences.terminalAppearance
++        var asian: NSFont?
++        if let a = appearance, !a.asianFont.isEmpty || a.asianSize != 0 || a.asianWeight != 0 {
++            let size = a.asianSize == 0 ? font.pointSize : CGFloat(a.asianSize)
++            let base = UserTerminalFonts.resolve(a.asianFont, size: size) ?? NSFontManager.shared.convert(font, toSize: size)
++            asian = Self.weighted(base, weight: a.asianWeight == 0 ? a.fontWeight : a.asianWeight)
++        }
++        if terminal.eastAsianFont != asian { terminal.eastAsianFont = asian }
+         let fallback = TerminalSymbolFont.matching(font)
+         if terminal.privateUseFallbackFont?.fontName != fallback?.fontName || terminal.privateUseFallbackFont?.pointSize != fallback?.pointSize {
+             terminal.privateUseFallbackFont = fallback
+@@ -725,8 +770,25 @@
+     private static func font(_ prefs: Preferences, size: CGFloat? = nil) -> NSFont {
+         UserTerminalFonts.register()
+         let pointSize: CGFloat = size ?? CGFloat(prefs.fontSize)
+-        if !prefs.fontName.isEmpty, let font = UserTerminalFonts.resolve(prefs.fontName, size: pointSize) { return font }
+-        return .monospacedSystemFont(ofSize: pointSize, weight: .regular)
++        let system = NSFont.monospacedSystemFont(ofSize: pointSize, weight: .regular)
++        let font = UserTerminalFonts.resolve(prefs.fontName, size: pointSize) ?? system
++        guard let a = prefs.terminalAppearance else { return font }
++        let base = a.allowProportional || TerminalFontCatalog.isMonospaced(font) ? font : system
++        return weighted(base, weight: a.fontWeight)
++    }
++    private static func weighted(_ font: NSFont, weight: Int) -> NSFont {
++        if weight == 400 { return font }
++        let steps: [NSFont.Weight] = [.ultraLight, .thin, .light, .regular, .medium, .semibold, .bold, .heavy, .black]
++        let value = steps[min(8, max(0, (weight + 50) / 100 - 1))]
++        let descriptor = font.fontDescriptor.addingAttributes([.traits: [NSFontDescriptor.TraitKey.weight: value.rawValue]])
++        return NSFont(descriptor: descriptor, size: font.pointSize) ?? font
++    }
++    private static func cursorStyle(_ a: TerminalAppearance?) -> CursorStyle {
++        switch a?.cursorShape {
++        case "bar": return a?.cursorBlink == true ? .blinkBar : .steadyBar
++        case "underline": return a?.cursorBlink == true ? .blinkUnderline : .steadyUnderline
++        default: return a?.cursorBlink == true ? .blinkBlock : .steadyBlock
++        }
+     }
+     func setSelected(_ value: Bool, showFocusIndicator: Bool = true) {
+         view.layer?.borderWidth = 0
+diff --git a/Sources/OShell/xshell-colors.xcs b/Sources/OShell/xshell-colors.xcs
+new file mode 100644
+--- /dev/null
++++ b/Sources/OShell/xshell-colors.xcs
+@@ -0,0 +1,419 @@
++[Afterglow]
++background=212121
++text=D0D0D0
++text(bold)=D0D0D0
++black=505050
++red=AC4142
++green=7E8E50
++yellow=E5B567
++blue=6C99BB
++magenta=9F4E85
++cyan=7DD6CF
++white=F5F5F5
++black(bold)=151515
++red(bold)=AC4142
++green(bold)=7E8E50
++yellow(bold)=E5B567
++blue(bold)=6C99BB
++magenta(bold)=9F4E85
++cyan(bold)=7DD6CF
++white(bold)=D0D0D0
++
++[ANSI Colors on Black]
++background=000000
++text=FFFFFF
++text(bold)=FFFFFF
++black=000000
++red=C00000
++green=00C000
++yellow=C0C000
++blue=0000C0
++magenta=C000C0
++cyan=00C0C0
++white=C0C0C0
++black(bold)=808080
++red(bold)=FF0000
++green(bold)=00FF00
++yellow(bold)=FFFF00
++blue(bold)=0000FF
++magenta(bold)=FF00FF
++cyan(bold)=00FFFF
++white(bold)=FFFFFF
++
++[ANSI Colors on White]
++background=FFFFFF
++text=000000
++text(bold)=000000
++black=000000
++red=C00000
++green=00C000
++yellow=C0C000
++blue=0000C0
++magenta=C000C0
++cyan=00C0C0
++white=C0C0C0
++black(bold)=808080
++red(bold)=FF0000
++green(bold)=00FF00
++yellow(bold)=FFFF00
++blue(bold)=0000FF
++magenta(bold)=FF00FF
++cyan(bold)=00FFFF
++white(bold)=FFFFFF
++
++[Arthur]
++background=1C1C1C
++text=DDEEDD
++text(bold)=DDEEDD
++black=554444
++red=CC5533
++green=88AA22
++yellow=FFA75D
++blue=87CEEB
++magenta=996600
++cyan=B0C4DE
++white=DDCCBB
++black(bold)=3D352A
++red(bold)=CD5C5C
++green(bold)=86AF80
++yellow(bold)=E8AE5B
++blue(bold)=6495ED
++magenta(bold)=DEB887
++cyan(bold)=B0C4DE
++white(bold)=BBAA99
++
++[Belafonte Day]
++background=D5CCBA
++text=45373C
++text(bold)=45373C
++black=5E5252
++red=BE100E
++green=858162
++yellow=EAA549
++blue=426A79
++magenta=97522C
++cyan=989A9C
++white=D5CCBA
++black(bold)=20111B
++red(bold)=BE100E
++green(bold)=858162
++yellow(bold)=EAA549
++blue(bold)=426A79
++magenta(bold)=97522C
++cyan(bold)=989A9C
++white(bold)=968C83
++
++[Black on White]
++background=FFFFFF
++text=000000
++text(bold)=000000
++black=000000
++red=000000
++green=000000
++yellow=000000
++blue=000000
++magenta=000000
++cyan=000000
++white=000000
++black(bold)=000000
++red(bold)=000000
++green(bold)=000000
++yellow(bold)=000000
++blue(bold)=000000
++magenta(bold)=000000
++cyan(bold)=000000
++white(bold)=000000
++
++[Chalk]
++background=2B2D2E
++text=D2D8D9
++text(bold)=D2D8D9
++black=888888
++red=F24840
++green=80C470
++yellow=FFEB62
++blue=4196FF
++magenta=FC5275
++cyan=53CDBD
++white=D2D8D9
++black(bold)=7D8B8F
++red(bold)=B23A52
++green(bold)=789B6A
++yellow(bold)=B9AC4A
++blue(bold)=2A7FAC
++magenta(bold)=BD4F5A
++cyan(bold)=44A799
++white(bold)=D2D8D9
++
++[Chalkboard]
++background=29262F
++text=D9E6F2
++text(bold)=D9E6F2
++black=323232
++red=DBAAAA
++green=AADBAA
++yellow=DADBAA
++blue=AAAADB
++magenta=DBAADA
++cyan=AADADB
++white=FFFFFF
++black(bold)=000000
++red(bold)=C37372
++green(bold)=72C373
++yellow(bold)=C2C372
++blue(bold)=7372C3
++magenta(bold)=C372C2
++cyan(bold)=72C2C3
++white(bold)=D9D9D9
++
++[codeschool]
++background=192124
++text=FFFFFF
++text(bold)=FFFFFF
++black=8B9895
++red=DD9179
++green=6AB450
++yellow=D0CD6E
++blue=A1CEF6
++magenta=B693BF
++cyan=71A9FF
++white=ECECEC
++black(bold)=000000
++red(bold)=7F0005
++green(bold)=1C7B09
++yellow(bold)=E7B747
++blue(bold)=4E93E9
++magenta(bold)=B693BF
++cyan(bold)=4E93E9
++white(bold)=707679
++
++[Earthsong]
++background=292520
++text=E5C7A9
++text(bold)=E5C7A9
++black=675F54
++red=FF645A
++green=98E036
++yellow=E0D561
++blue=5FDAFF
++magenta=FF9269
++cyan=84F088
++white=F6F7EC
++black(bold)=121418
++red(bold)=C94234
++green(bold)=85C54C
++yellow(bold)=F5AE2E
++blue(bold)=1398B9
++magenta(bold)=D0633D
++cyan(bold)=509552
++white(bold)=E5C6AA
++
++[Espresso]
++background=323232
++text=FFFFFF
++text(bold)=FFFFFF
++black=535353
++red=F00C0C
++green=C2E075
++yellow=E1E48B
++blue=8AB7D9
++magenta=EFB5F7
++cyan=DCF4FF
++white=FFFFFF
++black(bold)=353535
++red(bold)=D25252
++green(bold)=A5C261
++yellow(bold)=FFC66D
++blue(bold)=6C99BB
++magenta(bold)=D197D9
++cyan(bold)=BED6FF
++white(bold)=EEEEEC
++
++[idleToes]
++background=323232
++text=FFFFFF
++text(bold)=FFFFFF
++black=535353
++red=F07070
++green=9DFF91
++yellow=FFE48B
++blue=5EB7F7
++magenta=FF9DFF
++cyan=DCF4FF
++white=FFFFFF
++black(bold)=323232
++red(bold)=D25252
++green(bold)=7FE173
++yellow(bold)=FFC66D
++blue(bold)=4099FF
++magenta(bold)=F680FF
++cyan(bold)=BED6FF
++white(bold)=EEEEEC
++
++[IR_Black]
++background=000000
++text=F1F1F1
++text(bold)=F1F1F1
++black=7B7B7B
++red=FCB6B0
++green=CFFFAB
++yellow=FFFFCC
++blue=B5DCFF
++magenta=FB9CFE
++cyan=E0E0FE
++white=FFFFFF
++black(bold)=4F4F4F
++red(bold)=FA6C60
++green(bold)=A8FF60
++yellow(bold)=FFFEB7
++blue(bold)=96CAFE
++magenta(bold)=FA73FD
++cyan(bold)=C6C5FE
++white(bold)=EFEDEF
++
++[New Black]
++background=242424
++text=F2F2F2
++text(bold)=FFFFFF
++black=36342E
++red=A56434
++green=008000
++yellow=999606
++blue=4646FF
++magenta=7B5175
++cyan=00A2C4
++white=CFD8D3
++black(bold)=535755
++red(bold)=CF9E72
++green(bold)=1CC470
++yellow(bold)=E2E234
++blue(bold)=6F6FF4
++magenta(bold)=A97EAD
++cyan(bold)=50EBFC
++white(bold)=ECEEEE
++
++[New White]
++background=FFFFFF
++text=292929
++text(bold)=000000
++black=36342E
++red=A56434
++green=008000
++yellow=999606
++blue=0000CC
++magenta=7B5175
++cyan=00A2C4
++white=CFD8D3
++black(bold)=535755
++red(bold)=CF9E72
++green(bold)=1CC470
++yellow(bold)=E2E234
++blue(bold)=2929EF
++magenta(bold)=A97EAD
++cyan(bold)=50EBFC
++white(bold)=ECEEEE
++
++[Obsidian]
++background=283033
++text=CDCDCD
++text(bold)=CDCDCD
++black=555555
++red=FF0003
++green=93C863
++yellow=FEF874
++blue=A1D7FF
++magenta=FF55FF
++cyan=55FFFF
++white=FFFFFF
++black(bold)=000000
++red(bold)=A60001
++green(bold)=00BB00
++yellow(bold)=FECD22
++blue(bold)=3A9BDB
++magenta(bold)=BB00BB
++cyan(bold)=00BBBB
++white(bold)=BBBBBB
++
++[Pastel on Black]
++background=000000
++text=FFFFFF
++text(bold)=FFFFFF
++black=000000
++red=C00000
++green=00C000
++yellow=C0C000
++blue=0000C0
++magenta=C000C0
++cyan=00C0C0
++white=C0C0C0
++black(bold)=555555
++red(bold)=FF5555
++green(bold)=55FF55
++yellow(bold)=FFFF55
++blue(bold)=5555FF
++magenta(bold)=FF55FF
++cyan(bold)=55FFFF
++white(bold)=FFFFFF
++
++[Pastel on White]
++background=FFFFFF
++text=000000
++text(bold)=000000
++black=000000
++red=C00000
++green=00C000
++yellow=C0C000
++blue=0000C0
++magenta=C000C0
++cyan=00C0C0
++white=C0C0C0
++black(bold)=555555
++red(bold)=FF5555
++green(bold)=55FF55
++yellow(bold)=FFFF55
++blue(bold)=5555FF
++magenta(bold)=FF55FF
++cyan(bold)=55FFFF
++white(bold)=FFFFFF
++
++[White on Black]
++background=000000
++text=FFFFFF
++text(bold)=FFFFFF
++black=FFFFFF
++red=FFFFFF
++green=FFFFFF
++yellow=FFFFFF
++blue=FFFFFF
++magenta=FFFFFF
++cyan=FFFFFF
++white=FFFFFF
++black(bold)=FFFFFF
++red(bold)=FFFFFF
++green(bold)=FFFFFF
++yellow(bold)=FFFFFF
++blue(bold)=FFFFFF
++magenta(bold)=FFFFFF
++cyan(bold)=FFFFFF
++white(bold)=FFFFFF
++
++[XTerm]
++background=000000
++text=E5E5E5
++text(bold)=FFFFFF
++black=000000
++red=BB0000
++green=006400
++yellow=C8AF00
++blue=1E90F5
++magenta=BB00BB
++cyan=00CDCD
++white=EBEBEB
++black(bold)=555555
++red(bold)=FF5555
++green(bold)=55FF55
++yellow(bold)=FFF555
++blue(bold)=50BEFF
++magenta(bold)=FF55FF
++cyan(bold)=55FFFF
++white(bold)=FFFFFF
+diff --git a/Sources/OShellCore/Models.swift b/Sources/OShellCore/Models.swift
+--- a/Sources/OShellCore/Models.swift
++++ b/Sources/OShellCore/Models.swift
+@@ -157,6 +157,7 @@
+     public var errorDescription: String? { if case .invalid(let text) = self { return text }; return nil }
+ }
+ public struct Preferences: Codable {
++    public var terminalAppearance: TerminalAppearance?
+     public var fontName: String = ""
+     public var fontSize: Double = 13
+     public static let scrollbackRange = 500...100_000
+@@ -203,10 +204,12 @@
+     public var keyboardShortcuts = KeyboardShortcuts()
+     public var highlightSetID: UUID? = HighlightSet.standardID
+     public init() {}
+-    private enum CodingKeys: String, CodingKey { case preferColorEmoji, ambiguousCharactersAreWide, terminalClockEnabled, terminalClockPosition, terminalClockFontName, terminalClockFontSize, terminalClockColor, terminalClockOpacity, keyboardShortcuts, fontName, fontSize, scrollback, darkTheme, metal, autoZmodem, copyOnSelect, copyTrimLeadingWhitespace, copyTrimTrailingWhitespace, rightClickPaste, confirmMultilinePaste, updateRepository, automaticUpdateChecks, masterWarningAcknowledged, quickSendBarVisible, quickSendScope, highlightSetID, interfaceTheme, colorSchemeID, customColorSchemes }
++    private enum CodingKeys: String, CodingKey { case preferColorEmoji, ambiguousCharactersAreWide, terminalClockEnabled, terminalClockPosition, terminalClockFontName, terminalClockFontSize, terminalClockColor, terminalClockOpacity, keyboardShortcuts, fontName, fontSize, scrollback, darkTheme, metal, autoZmodem, copyOnSelect, copyTrimLeadingWhitespace, copyTrimTrailingWhitespace, rightClickPaste, confirmMultilinePaste, updateRepository, automaticUpdateChecks, masterWarningAcknowledged, quickSendBarVisible, quickSendScope, highlightSetID, interfaceTheme, colorSchemeID, customColorSchemes, terminalAppearance }
+     public init(from decoder: Decoder) throws {
+         self.init()
+         let values = try decoder.container(keyedBy: CodingKeys.self)
++        terminalAppearance = try values.decodeIfPresent(TerminalAppearance.self, forKey: .terminalAppearance)
++        try terminalAppearance?.validate()
+         fontName = try values.decodeIfPresent(String.self, forKey: .fontName) ?? ""
+         fontSize = try values.decodeIfPresent(Double.self, forKey: .fontSize) ?? 13
+         scrollback = try values.decodeIfPresent(Int.self, forKey: .scrollback) ?? 3000
+@@ -250,6 +253,8 @@
+         try values.encode(terminalClockColor, forKey: .terminalClockColor)
+         try values.encode(terminalClockOpacity, forKey: .terminalClockOpacity)
+         try values.encode(keyboardShortcuts, forKey: .keyboardShortcuts)
++        try terminalAppearance?.validate()
++        try values.encodeIfPresent(terminalAppearance, forKey: .terminalAppearance)
+         try values.encode(fontName, forKey: .fontName); try values.encode(fontSize, forKey: .fontSize)
+         try values.encode(scrollback, forKey: .scrollback); try values.encode(darkTheme, forKey: .darkTheme)
+         try values.encode(metal, forKey: .metal); try values.encode(autoZmodem, forKey: .autoZmodem)
+diff --git a/Sources/OShellCore/SharedConfigurationContract.swift b/Sources/OShellCore/SharedConfigurationContract.swift
+--- a/Sources/OShellCore/SharedConfigurationContract.swift
++++ b/Sources/OShellCore/SharedConfigurationContract.swift
+@@ -1,5 +1,5 @@
+ // Generated by oshell-desktop/scripts/sync-configuration-contract.py; do not edit.
+-// SHA256: 9a82a335e40d315f9a54455c874f87bcaea0fe3551a69770d67955f439261657
++// SHA256: 74282f38e0ce2abafd9eed3725d19396de99ff061c4188477ae3474eba71669a
+ let sharedConfigurationContract = #"""
+ {
+   "format": "OShell.configuration-contract",
+@@ -510,6 +510,10 @@
+       }
+     },
+     "palette": {
++      "boldForeground": {
++        "type": "string",
++        "pattern": "^#[0-9a-fA-F]{6}$"
++      },
+       "background": {
+         "type": "string",
+         "pattern": "^#[0-9a-fA-F]{6}$",
+@@ -898,6 +902,10 @@
+         "default": 0.5,
+         "minimum": 0,
+         "maximum": 1
++      },
++      "terminalAppearance": {
++        "type": "object",
++        "ref": "terminalAppearance"
+       }
+     },
+     "configuration": {
+@@ -1042,6 +1050,141 @@
+         },
+         "default": []
+       }
++    },
++    "terminalAppearance": {
++      "top": {
++        "type": "integer",
++        "minimum": 0,
++        "maximum": 128,
++        "default": 5
++      },
++      "bottom": {
++        "type": "integer",
++        "minimum": 0,
++        "maximum": 128,
++        "default": 5
++      },
++      "left": {
++        "type": "integer",
++        "minimum": 0,
++        "maximum": 128,
++        "default": 5
++      },
++      "right": {
++        "type": "integer",
++        "minimum": 0,
++        "maximum": 128,
++        "default": 5
++      },
++      "lineSpacing": {
++        "type": "integer",
++        "minimum": -5,
++        "maximum": 32,
++        "default": 0
++      },
++      "characterSpacing": {
++        "type": "integer",
++        "minimum": -5,
++        "maximum": 32,
++        "default": 0
++      },
++      "cursorShape": {
++        "type": "string",
++        "values": [
++          "block",
++          "bar",
++          "underline"
++        ],
++        "default": "block"
++      },
++      "cursorBlink": {
++        "type": "boolean",
++        "default": false
++      },
++      "blinkInterval": {
++        "type": "integer",
++        "minimum": 100,
++        "maximum": 2000,
++        "default": 600
++      },
++      "boldStyle": {
++        "type": "string",
++        "values": [
++          "both",
++          "font",
++          "bright",
++          "none"
++        ],
++        "default": "both"
++      },
++      "asianFont": {
++        "type": "string",
++        "pattern": "^[^\\x00-\\x1F\\x7F]{0,128}$",
++        "default": ""
++      },
++      "asianSize": {
++        "type": "integer",
++        "values": [
++          0,
++          10,
++          11,
++          12,
++          13,
++          14,
++          15,
++          16,
++          17,
++          18,
++          19,
++          20,
++          21,
++          22,
++          23,
++          24,
++          25,
++          26
++        ],
++        "default": 0
++      },
++      "fontWeight": {
++        "type": "integer",
++        "minimum": 100,
++        "maximum": 900,
++        "default": 400
++      },
++      "asianWeight": {
++        "type": "integer",
++        "minimum": 0,
++        "maximum": 900,
++        "default": 0
++      },
++      "allowProportional": {
++        "type": "boolean",
++        "default": true
++      },
++      "fontQuality": {
++        "type": "string",
++        "values": [
++          "system",
++          "grayscale"
++        ],
++        "default": "system"
++      },
++      "tabColor": {
++        "type": "string",
++        "pattern": "^(|#[0-9A-Fa-f]{6})$",
++        "default": ""
++      },
++      "imagePosition": {
++        "type": "string",
++        "values": [
++          "center",
++          "fit",
++          "fill",
++          "stretch"
++        ],
++        "default": "center"
++      }
+     }
+   }
+ }
+diff --git a/Sources/OShellCore/SharedConfigurationProtocol.swift b/Sources/OShellCore/SharedConfigurationProtocol.swift
+--- a/Sources/OShellCore/SharedConfigurationProtocol.swift
++++ b/Sources/OShellCore/SharedConfigurationProtocol.swift
+@@ -9,6 +9,7 @@
+     private static let definitions = (try! JSONSerialization.jsonObject(with: contractData) as! [String: Any])["definitions"] as! [String: [String: [String: Any]]]
+     private static func failure(_ path: String) -> Error { ModelError.invalid("共享配置协议字段不支持或类型无效：\(path)；请升级所有节点后重试，未覆盖数据") }
+     public static func canonicalData(_ data: Data) throws -> Data {try canonical(data,rootType:"configuration")}
++    public static func canonicalAppearanceData(_ data: Data) throws -> Data { try canonical(data, rootType: "terminalAppearance") }
+     public static func canonicalArchiveData(_ data:Data)throws->Data {try canonical(data,rootType:"archive")}
+     private static func canonical(_ data:Data,rootType:String)throws->Data {
+         guard var root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw failure("configuration") }
+diff --git a/Sources/OShellCore/TerminalAppearance.swift b/Sources/OShellCore/TerminalAppearance.swift
+new file mode 100644
+--- /dev/null
++++ b/Sources/OShellCore/TerminalAppearance.swift
+@@ -0,0 +1,16 @@
++// SPDX-License-Identifier: GPL-3.0-only
++import Foundation
++
++public struct TerminalAppearance: Codable, Equatable {
++    public var top = 5, bottom = 5, left = 5, right = 5
++    public var lineSpacing = 0, characterSpacing = 0
++    public var cursorShape = "block", cursorBlink = false, blinkInterval = 600
++    public var boldStyle = "both", asianFont = "", asianSize = 0
++    public var fontWeight = 400, asianWeight = 0, allowProportional = true
++    public var fontQuality = "system", tabColor = "", imagePosition = "center"
++
++    public init() {}
++    public func validate() throws {
++        _ = try SharedConfigurationProtocol.canonicalAppearanceData(JSONEncoder().encode(self))
++    }
++}
+diff --git a/Sources/OShellCore/TerminalColorScheme.swift b/Sources/OShellCore/TerminalColorScheme.swift
+--- a/Sources/OShellCore/TerminalColorScheme.swift
++++ b/Sources/OShellCore/TerminalColorScheme.swift
+@@ -13,6 +13,7 @@
+     public var name: String
+     public var background: String
+     public var foreground: String
++    public var boldForeground: String?
+     public var cursor: String
+     public var cursorText: String
+     public var autoCursor = false
+@@ -24,11 +25,12 @@
+         self.cursor = cursor ?? foreground; cursorText = background
+         self.selection = selection; self.selectionText = selectionText ?? foreground; self.ansi = ansi
+     }
+-    private enum CodingKeys: String, CodingKey {case id,name,background,foreground,cursor,cursorText,autoCursor,selection,selectionText,ansi}
++    private enum CodingKeys: String, CodingKey {case id,name,background,foreground,boldForeground,cursor,cursorText,autoCursor,selection,selectionText,ansi}
+     public init(from decoder:Decoder)throws {
+         let c=try decoder.container(keyedBy:CodingKeys.self)
+         id=try c.decode(String.self,forKey:.id);name=try c.decode(String.self,forKey:.name)
+         background=try c.decode(String.self,forKey:.background);foreground=try c.decode(String.self,forKey:.foreground)
++        boldForeground = try c.decodeIfPresent(String.self, forKey: .boldForeground)
+         cursor=try c.decode(String.self,forKey:.cursor);cursorText=try c.decode(String.self,forKey:.cursorText)
+         selection=try c.decode(String.self,forKey:.selection);selectionText=try c.decode(String.self,forKey:.selectionText)
+         ansi=try c.decode([String].self,forKey:.ansi);autoCursor=try c.decodeIfPresent(Bool.self,forKey:.autoCursor) ?? false
+@@ -44,6 +46,7 @@
+     public func validate() throws {
+         guard !id.isEmpty, id.utf8.count <= 128, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               name.count <= 80, !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains), ansi.count == 16,
++              boldForeground.map(Self.isHex) ?? true,
+               ([background, foreground, cursor, cursorText, selection, selectionText] + ansi).allSatisfy(Self.isHex) else {
+             throw ModelError.invalid("配色方案需要有效名称、6 个基础颜色及 16 个 ANSI 颜色（#RRGGBB）。")
+         }
+@@ -92,6 +95,10 @@
+             let bg = try hex("background"), fg = try hex("text")
+             var scheme = TerminalColorScheme(id: "custom-" + UUID().uuidString, name: name, background: bg, foreground: fg,
+                                              selection: "#405A78", selectionText: "#FFFFFF", ansi: try (keys + keys.map { $0 + "(bold)" }).map(hex))
++            if fields["text(bold)"] != nil {
++                let bold = try hex("text(bold)")
++                if bold != fg { scheme.boldForeground = bold }
++            }
+             if !scheme.isDark { scheme.selection = "#C7D8EC"; scheme.selectionText = "#20252A" }
+             try scheme.validate(); result.append(scheme)
+         }
+diff --git a/Tests/OShellCoreTests/CoreTests.swift b/Tests/OShellCoreTests/CoreTests.swift
+--- a/Tests/OShellCoreTests/CoreTests.swift
++++ b/Tests/OShellCoreTests/CoreTests.swift
+@@ -663,6 +663,31 @@
+         data["quickSendScope"] = 999
+         XCTAssertEqual(try JSONDecoder().decode(Preferences.self, from: JSONSerialization.data(withJSONObject: data)).quickSendScope, .current)
+     }
++    func testPortableTerminalAppearance() throws {
++        var preferences = Preferences()
++        let original = try JSONSerialization.jsonObject(with: JSONEncoder().encode(preferences)) as? [String: Any]
++        XCTAssertNil(original?["terminalAppearance"])
++        var appearance = TerminalAppearance()
++        appearance.left = 17
++        appearance.characterSpacing = -3
++        appearance.cursorShape = "bar"
++        appearance.asianFont = "Fixture CJK"
++        appearance.tabColor = "#8967B5"
++        preferences.terminalAppearance = appearance
++        var scheme = TerminalColorScheme.presets[0].editableCopy()
++        scheme.boldForeground = "#ABCDEF"
++        preferences.customColorSchemes = [scheme]
++        let saved = try JSONEncoder().encode(preferences)
++        let restored = try JSONDecoder().decode(Preferences.self, from: saved)
++        XCTAssertEqual(restored.terminalAppearance, appearance)
++        XCTAssertEqual(restored.customColorSchemes, [scheme])
++        let defaults = try SharedConfigurationProtocol.canonicalAppearanceData(Data("{}".utf8))
++        XCTAssertEqual(try JSONDecoder().decode(TerminalAppearance.self, from: defaults), TerminalAppearance())
++        appearance.lineSpacing = -6
++        XCTAssertThrowsError(try appearance.validate())
++        XCTAssertThrowsError(try SharedConfigurationProtocol.canonicalAppearanceData(Data(#"{"other":true}"#.utf8)))
++    }
++
+     func testColorSchemesAndMigration() throws {
+         XCTAssertEqual(TerminalColorScheme.presets.count, 9)
+         XCTAssertEqual(Set(TerminalColorScheme.presets.map(\.id)).count, 9)
+@@ -2518,6 +2543,7 @@
+         try tests.testKeyboardShortcuts()
+         try tests.testThirdPartySessionImports()
+         try tests.testXshellMasterPasswordMigration()
++        try tests.testPortableTerminalAppearance()
+         try tests.testColorSchemesAndMigration()
+         try tests.testColorSchemeImport()
+         try tests.testLiveIdleSettingsMerge()
+diff --git a/Vendor/SwiftTerm/Sources/SwiftTerm/Apple/AppleTerminalView.swift b/Vendor/SwiftTerm/Sources/SwiftTerm/Apple/AppleTerminalView.swift
+--- a/Vendor/SwiftTerm/Sources/SwiftTerm/Apple/AppleTerminalView.swift
++++ b/Vendor/SwiftTerm/Sources/SwiftTerm/Apple/AppleTerminalView.swift
+@@ -193,10 +193,19 @@
+         #endif
+     }
+ 
++    #if os(macOS)
++    private static let eastAsianScripts = try! NSRegularExpression(pattern: #"^[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}\p{Bopomofo}]"#)
++    #endif
++
+     func cellFallbackFont(for character: Character, base: TTFont) -> TTFont? {
+         if let symbol = privateUseFont(for: character, base: base) { return symbol }
+         #if os(macOS)
+         let scalars = character.unicodeScalars
++        if let asian = eastAsianFont, !character.isASCII,
++           Self.eastAsianScripts.firstMatch(in: String(character), range: NSRange(location: 0, length: String(character).utf16.count)) != nil {
++            let traits = NSFontManager.shared.traits(of: base).intersection([.boldFontMask, .italicFontMask])
++            return traits.isEmpty ? asian : NSFontManager.shared.convert(asian, toHaveTrait: traits)
++        }
+         guard preferColorEmoji, !scalars.contains(where: { $0.value == 0xFE0E }),
+               let first = scalars.first, first.properties.isEmoji,
+               first.properties.isEmojiPresentation || scalars.contains(where: { $0.value == 0xFE0F || $0.value == 0x20E3 }) else { return nil }
+@@ -496,10 +505,14 @@
+         let lineAscent = CTFontGetAscent (fontSet.normal)
+         let lineDescent = CTFontGetDescent (fontSet.normal)
+         let lineLeading = CTFontGetLeading (fontSet.normal)
+-        let cellHeight = ceil((lineAscent + lineDescent + lineLeading) * _lineSpacing)
++        var cellHeight = ceil((lineAscent + lineDescent + lineLeading) * _lineSpacing)
+         #if os(macOS)
+         let glyph = fontSet.normal.glyph(withName: "W")
+-        let cellWidth = fontSet.proportionalCellWidth ?? fontSet.normal.advancement(forGlyph: glyph).width
++        let cellWidth = (fontSet.proportionalCellWidth ?? fontSet.normal.advancement(forGlyph: glyph).width) + CGFloat(extraCharacterSpacing)
++        if let asian = eastAsianFont {
++            cellHeight = max(cellHeight, ceil(CTFontGetAscent(asian) + CTFontGetDescent(asian) + CTFontGetLeading(asian)))
++        }
++        cellHeight += CGFloat(extraLineSpacing)
+         #else
+         let fontAttributes = [NSAttributedString.Key.font: fontSet.normal]
+         let cellWidth = "W".size(withAttributes: fontAttributes).width
+@@ -513,7 +526,7 @@
+ 
+     var usesProportionalGrid: Bool {
+         #if os(macOS)
+-        return fontSet.proportionalCellWidth != nil
++        return fontSet.proportionalCellWidth != nil || extraCharacterSpacing != 0
+         #else
+         return false
+         #endif
+@@ -579,6 +592,11 @@
+     {
+         switch color {
+         case .defaultColor:
++            #if os(macOS)
++            if isFg && isBold && boldPresentation != "font" && boldPresentation != "none", let boldForegroundColor {
++                return boldForegroundColor
++            }
++            #endif
+             if isFg {
+                 return effectiveNativeForegroundColor
+             } else {
+@@ -605,11 +623,22 @@
+             var midx: Int
+             // if high - bright colors are enabled we will represent bold text by using more intense colors
+             // otherwise we will reduce colors but use bold fonts
++            #if os(macOS)
++            if let policy = boldPresentation {
++                let brighten = isFg && isBold && ansi < 8 && (policy == "both" || policy == "bright")
++                midx = Int(ansi) + (brighten ? 8 : 0)
++            } else if useBrightColors {
++                midx = ansi < 7 ? (Int(ansi) + (isBold ? 8 : 0)) : Int(ansi)
++            } else {
++                midx = ansi > 7 ? Int(ansi) - 8 : Int(ansi)
++            }
++            #else
+             if useBrightColors {
+                 midx = ansi < 7 ? (Int (ansi) + (isBold ? 8 : 0)) : Int (ansi)
+             } else {
+                 midx = ansi > 7 ? (Int (ansi) - 8) : Int(ansi)
+             }
++            #endif
+             if let c = colors [midx] {
+                 return c
+             }
+@@ -898,6 +927,14 @@
+ #endif
+     }
+     
++    private var drawBoldFont: Bool {
++        #if os(macOS)
++        return boldPresentation != "bright" && boldPresentation != "none"
++        #else
++        return true
++        #endif
++    }
++
+     func getAttributedValue (_ attribute: Attribute, usingFg: TTColor, andBg: TTColor) -> [NSAttributedString.Key:Any]?
+     {
+         let flags = attribute.style
+@@ -910,7 +947,7 @@
+         
+         var tf: TTFont
+         let isBold = flags.contains(.bold)
+-        if isBold {
++        if isBold && drawBoldFont {
+             if flags.contains (.italic) {
+                 tf = fontSet.boldItalic
+             } else {
+@@ -975,7 +1012,7 @@
+         var tf: TTFont
+         let isBold = flags.contains(.bold)
+         
+-        if isBold || useBoldForBrightColor {
++        if (isBold || useBoldForBrightColor) && drawBoldFont {
+             if flags.contains (.italic) {
+                 tf = fontSet.boldItalic
+             } else {
+diff --git a/Vendor/SwiftTerm/Sources/SwiftTerm/Apple/Metal/MetalTerminalRenderer.swift b/Vendor/SwiftTerm/Sources/SwiftTerm/Apple/Metal/MetalTerminalRenderer.swift
+--- a/Vendor/SwiftTerm/Sources/SwiftTerm/Apple/Metal/MetalTerminalRenderer.swift
++++ b/Vendor/SwiftTerm/Sources/SwiftTerm/Apple/Metal/MetalTerminalRenderer.swift
+@@ -398,7 +398,10 @@
+             return
+         }
+ #if os(macOS)
+-        rasterizer.fontSmoothing = terminalView.fontSmoothing
++        if rasterizer.fontSmoothing != terminalView.fontSmoothing {
++            rasterizer.fontSmoothing = terminalView.fontSmoothing
++            glyphCache.removeAll()
++        }
+         let scale = terminalView.metalRenderingScaleFactor()
+         if let layer = view.layer, layer.contentsScale != scale {
+             layer.contentsScale = scale
+diff --git a/Vendor/SwiftTerm/Sources/SwiftTerm/Mac/MacCaretView.swift b/Vendor/SwiftTerm/Sources/SwiftTerm/Mac/MacCaretView.swift
+--- a/Vendor/SwiftTerm/Sources/SwiftTerm/Mac/MacCaretView.swift
++++ b/Vendor/SwiftTerm/Sources/SwiftTerm/Mac/MacCaretView.swift
+@@ -96,7 +96,7 @@
+         self.layer?.opacity = 1
+         if to {
+             let anim = CABasicAnimation.init(keyPath: #keyPath (CALayer.opacity))
+-            anim.duration = 0.7
++            anim.duration = terminal?.cursorBlinkInterval ?? 0.7
+             anim.autoreverses = true
+             anim.repeatCount = Float.infinity
+             anim.fromValue = NSNumber (floatLiteral: 1)
+diff --git a/Vendor/SwiftTerm/Sources/SwiftTerm/Mac/MacTerminalView.swift b/Vendor/SwiftTerm/Sources/SwiftTerm/Mac/MacTerminalView.swift
+--- a/Vendor/SwiftTerm/Sources/SwiftTerm/Mac/MacTerminalView.swift
++++ b/Vendor/SwiftTerm/Sources/SwiftTerm/Mac/MacTerminalView.swift
+@@ -318,6 +318,29 @@
+     var caretView: CaretView!
+     var _fontSmoothing: Bool = true
+     var _lineSpacing: CGFloat = 1.0
++    var extraLineSpacing = 0, extraCharacterSpacing = 0
++    public var boldForegroundColor: NSColor?
++    var boldPresentation: String?
++    var cursorBlinkInterval = 0.7
++    public var eastAsianFont: NSFont? {
++        didSet { if oldValue != eastAsianFont { resetFont() } }
++    }
++
++    public func applyTextAppearance(line: Int, character: Int, bold: String?, smoothing: Bool, blink: Double) {
++        if blink != cursorBlinkInterval {
++            cursorBlinkInterval = blink
++            caretView?.updateCursorStyle()
++        }
++        guard extraLineSpacing != line || extraCharacterSpacing != character ||
++              boldPresentation != bold || fontSmoothing != smoothing else { return }
++        extraLineSpacing = line
++        extraCharacterSpacing = character
++        boldPresentation = bold
++        fontSmoothing = smoothing
++        resetFont()
++        terminal.updateFullScreen()
++        queuePendingDisplay()
++    }
+     public var terminal: Terminal!
+ 
+     /// Marked (uncommitted) text from an input source (IME, dictation, etc.).

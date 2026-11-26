@@ -3,6 +3,7 @@ package terminal
 
 import (
 	"fmt"
+	"io"
 
 	"regexp"
 	"strings"
@@ -69,6 +70,8 @@ func (t *Terminal) SetSelectionPolicy(separators string, shiftWhitespace bool) {
 	t.opts.WordSeparators = separators
 	t.opts.ShiftWhitespace = shiftWhitespace
 }
+
+func (t *Terminal) SetMiddleClickPaste(enabled bool) { t.opts.MiddleClickPaste = enabled }
 
 type HighlightRule struct {
 	Pattern                    string
@@ -282,4 +285,121 @@ func (t *Terminal) HostPrompt() (string, bool) {
 		return "", false
 	}
 	return t.term.CursorLine(), true
+}
+
+// Match only a fresh channel's opening dialogue. Screen contents alone can be
+// redrawn later by a shell or restored from a previous connection.
+type initialTargetLogin struct {
+	account, prefix             string
+	ready, checkingRetry, retry bool
+}
+
+func (s *initialTargetLogin) observe(data []byte) {
+	if s.account == "" || len(data) == 0 {
+		return
+	}
+	if s.ready || s.retry {
+		for len(data) > 0 && data[0] == ' ' {
+			data = data[1:]
+		}
+		if len(data) == 0 {
+			return
+		}
+		if s.retry {
+			*s = initialTargetLogin{}
+			return
+		}
+		s.ready, s.checkingRetry, s.prefix = false, true, ""
+	}
+	if s.checkingRetry {
+		if len(s.prefix)+len(data) <= 128 {
+			s.prefix += string(data)
+			response := strings.ReplaceAll(s.prefix, "\r\n", "\n")
+			for _, message := range []string{"\nPassword:", "\nPermission denied, please try again.\nPassword:", "\nLogin incorrect\nPassword:", "\nAccess denied\nPassword:"} {
+				if strings.TrimRight(response, " ") == message {
+					s.retry = true
+					return
+				}
+				if strings.HasPrefix(message, strings.TrimSuffix(response, "\r")) {
+					return
+				}
+			}
+		}
+		*s = initialTargetLogin{}
+		return
+	}
+	want := "Login: " + s.account + "\nPassword:"
+	if len(s.prefix)+len(data) <= len(want)+32 {
+		s.prefix += string(data)
+		text := strings.TrimLeft(strings.ReplaceAll(s.prefix, "\r\n", "\n"), "\r\n")
+		s.ready = strings.TrimRight(text, " ") == want
+		if s.ready || strings.HasPrefix(want, strings.TrimSuffix(text, "\r")) {
+			return
+		}
+	}
+	*s = initialTargetLogin{}
+}
+
+func (t *Terminal) targetLoginPromptLocked(account string) bool {
+	if !t.initialLogin.ready || t.initialLogin.account != account || t.term == nil || t.term.AltScreen() || strings.TrimSpace(t.term.CursorLine()) != "Password:" {
+		return false
+	}
+	fields := strings.Fields(t.term.PreviousCursorLine())
+	return len(fields) == 2 && fields[0] == "Login:" && fields[1] == account
+}
+
+func (t *Terminal) TargetLoginPrompt(account string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.targetLoginPromptLocked(account)
+}
+
+func (t *Terminal) TargetLoginRetry(account string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.initialLogin.retry && t.initialLogin.account == account && t.term != nil &&
+		!t.term.AltScreen() && strings.TrimSpace(t.term.CursorLine()) == "Password:"
+}
+
+func (t *Terminal) FillServerPassword(conn *core.Connection, prompt, password, submitAccount string) (<-chan error, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if conn == nil || t.opts.Conn != conn || t.opts.Replay || t.InLocalToolsMode() ||
+		t.term == nil || t.term.AltScreen() || prompt == "" || t.term.CursorLine() != prompt ||
+		password == "" || len(password) > 4096 || strings.ContainsFunc(password, unicode.IsControl) ||
+		submitAccount != "" && !t.targetLoginPromptLocked(submitAccount) {
+		return nil, false
+	}
+	result := make(chan error, 1)
+	packet := inputPacket{data: []byte(password), result: result}
+	packet.writePassword = func(data []byte) error {
+		if line, ok := t.HostPrompt(); !ok || line != prompt || !t.Available() || t.InLocalToolsMode() || !conn.Alive() ||
+			submitAccount != "" && !t.TargetLoginPrompt(submitAccount) {
+			return fmt.Errorf("密码提示或终端连接已变化")
+		}
+		// Deliver only to this SSH channel, even if the view has fallen back to a local console.
+		write := func() error {
+			if submitAccount != "" {
+				line := make([]byte, len(data)+1)
+				copy(line, data)
+				line[len(data)] = '\r'
+				defer clear(line)
+				return conn.WriteInitialTargetLogin(line)
+			}
+			n, err := conn.Write(data)
+			if err == nil && n != len(data) {
+				return io.ErrShortWrite
+			}
+			return err
+		}
+		if t.opts.Agent != nil {
+			return t.opts.Agent.GatePasswordInput(data, write)
+		}
+		return write()
+	}
+	if !t.in.pushInput(packet, nil) {
+		clear(packet.data)
+		return nil, false
+	}
+	return result, true
 }

@@ -47,6 +47,7 @@ import (
 
 // Options configure a terminal.
 type Options struct {
+	InitialTargetAccount string
 	ReconnectHistory     *ReconnectHistory
 	OnReconnect          func()
 	Replay               bool
@@ -82,6 +83,7 @@ type Options struct {
 	OnActivity                                                       func()
 	OnProcessState                                                   func()
 	CopyOnSelect, RightClickPaste, TrimCopyLeading, TrimCopyTrailing bool
+	MiddleClickPaste                                                 bool
 
 	// Command is the program the terminal runs and its arguments. Empty
 	// runs the user's shell as a login shell, as terminal apps do: $SHELL,
@@ -109,6 +111,8 @@ type Options struct {
 	// Ghostty's themes). Without either, the terminal follows the window's
 	// light or dark appearance, with LightTheme and DarkTheme.
 	Theme, DarkTheme *Theme
+	Appearance       *core.TerminalAppearance
+	BackgroundImage  *ui.Bitmap
 	// Cursor is the shape of the cursor, which programs may change, and
 	// NoBlink keeps it from blinking unless a program asks it to.
 	Cursor  CursorStyle
@@ -150,6 +154,7 @@ const (
 // Terminal is a terminal emulator and the program it runs. Its methods are
 // safe from any goroutine.
 type Terminal struct {
+	initialLogin          initialTargetLogin
 	progress              terminalProgress
 	outputActivity        core.OutputActivity
 	idleEditing           atomic.Bool
@@ -238,6 +243,7 @@ func New(opts Options) (*Terminal, error) {
 	opts.Font.Features = append([]string(nil), opts.Font.Features...)
 	opts.KeyAliases = append([]KeyAlias(nil), opts.KeyAliases...)
 	t := &Terminal{opts: opts, done: make(chan struct{})}
+	t.initialLogin.account = opts.InitialTargetAccount
 	t.in.agent = opts.Agent
 	if opts.TransferHandler != nil {
 		t.transfers = newTransferController(t)
@@ -299,7 +305,8 @@ func New(opts Options) (*Terminal, error) {
 	default:
 		t.term.SetScrollback(10 << 20)
 	}
-	t.term.SetDefaultCursor(vtCursor(opts.Cursor), !opts.NoBlink)
+	style, blink := opts.defaultCursor()
+	t.term.SetDefaultCursor(style, blink)
 	if history := opts.ReconnectHistory; history != nil {
 		t.size.cols, t.size.rows = history.Cols, history.Rows
 		if err := t.term.Resize(t.size.cols, t.size.rows, t.size.cellW, t.size.cellH); err != nil {
@@ -489,6 +496,11 @@ func (t *Terminal) read() {
 	for {
 		n, err := t.src.Read(buf)
 		if n > 0 {
+			if t.opts.InitialTargetAccount != "" {
+				t.mu.Lock()
+				t.initialLogin.observe(buf[:n])
+				t.mu.Unlock()
+			}
 			if t.transfers != nil {
 				t.transfers.feed(buf[:n])
 			} else {
@@ -666,6 +678,32 @@ func (t *Terminal) SetFont(f Font) {
 	t.redraw()
 }
 
+func (opts *Options) defaultCursor() (vt.CursorStyle, bool) {
+	if opts.Appearance == nil {
+		return vtCursor(opts.Cursor), !opts.NoBlink
+	}
+	style := vt.CursorBlock
+	switch opts.Appearance.CursorShape {
+	case "bar":
+		style = vt.CursorBar
+	case "underline":
+		style = vt.CursorUnderline
+	}
+	return style, opts.Appearance.CursorBlink
+}
+
+// SetAppearance installs an immutable settings snapshot without restarting the PTY.
+func (t *Terminal) SetAppearance(a *core.TerminalAppearance, image *ui.Bitmap) {
+	t.mu.Lock()
+	oldStyle, oldBlink := t.opts.defaultCursor()
+	t.opts.Appearance, t.opts.BackgroundImage = a, image
+	if style, blink := t.opts.defaultCursor(); t.term != nil && (style != oldStyle || blink != oldBlink) {
+		t.term.SetDefaultCursor(style, blink)
+	}
+	t.mu.Unlock()
+	t.redraw()
+}
+
 // SetTheme changes the colors, as Options.Theme and DarkTheme.
 func (t *Terminal) SetTheme(theme, dark *Theme) {
 	t.mu.Lock()
@@ -748,7 +786,7 @@ func (t *Terminal) sendInputLocked(data []byte) bool {
 	if len(data) == 0 {
 		return false
 	}
-	return t.in.pushBefore(append([]byte(nil), data...), func() {
+	return t.in.pushInput(inputPacket{data: append([]byte(nil), data...)}, func() {
 		if t.term != nil {
 			t.term.RegisterUserInput(data)
 		}
@@ -976,12 +1014,13 @@ func unhex(c byte) (byte, bool) {
 // goroutine of its own: a program that does not read its input must not
 // block the reader, which answers its queries.
 type inputPacket struct {
-	ticket     string
-	generation uint64
-	data       []byte
-	result     chan error
-	raw        bool
-	ctx        context.Context
+	writePassword func([]byte) error
+	ticket        string
+	generation    uint64
+	data          []byte
+	result        chan error
+	raw           bool
+	ctx           context.Context
 }
 type inputQueue struct {
 	agent          *core.AgentSession
@@ -998,21 +1037,23 @@ func (q *inputQueue) init() {
 	}
 }
 func (q *inputQueue) push(p []byte) {
-	q.pushBefore(p, nil)
+	q.pushInput(inputPacket{data: p}, nil)
 }
-func (q *inputQueue) pushBefore(p []byte, before func()) bool {
+func (q *inputQueue) pushInput(packet inputPacket, before func()) bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.init()
 	if !q.closed && !q.paused {
+		if q.generation != nil {
+			packet.generation = q.generation()
+		}
+		if packet.writePassword != nil && packet.generation != 0 {
+			return false // The remote connection has become a local console.
+		}
 		if before != nil {
 			before()
 		}
-		epoch := uint64(0)
-		if q.generation != nil {
-			epoch = q.generation()
-		}
-		q.queue = append(q.queue, inputPacket{data: p, generation: epoch})
+		q.queue = append(q.queue, packet)
 		q.cond.Signal()
 		return true
 	}
@@ -1027,6 +1068,9 @@ func (q *inputQueue) pause(paused bool) {
 		for _, packet := range q.queue {
 			if packet.raw {
 				next = append(next, packet)
+			} else if packet.writePassword != nil {
+				clear(packet.data)
+				packet.result <- io.ErrClosedPipe
 			}
 		}
 		q.queue = next
@@ -1066,6 +1110,9 @@ func (q *inputQueue) close() {
 	q.init()
 	q.closed = true
 	for _, packet := range q.queue {
+		if packet.writePassword != nil {
+			clear(packet.data)
+		}
 		if packet.result != nil {
 			packet.result <- io.ErrClosedPipe
 		}
@@ -1086,9 +1133,19 @@ func (q *inputQueue) run(w io.Writer) {
 			return
 		}
 		packet := q.queue[0]
+		q.queue[0] = inputPacket{}
 		q.queue = q.queue[1:]
 		paused := q.paused
 		q.mu.Unlock()
+		if packet.writePassword != nil {
+			err := io.ErrClosedPipe
+			if !paused {
+				err = packet.writePassword(packet.data)
+			}
+			clear(packet.data)
+			packet.result <- err
+			continue
+		}
 		if !packet.raw && paused {
 			continue
 		}

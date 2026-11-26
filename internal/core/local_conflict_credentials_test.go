@@ -6,6 +6,57 @@ import (
 	"testing"
 )
 
+func TestLocalConflictTargetPasswordFollowsSelectedSession(t *testing.T) {
+	dir := t.TempDir()
+	store := &Store{Dir: dir}
+	cfg := DefaultConfig()
+	p := NewProfile()
+	p.Host, p.Username = "gateway.invalid", "operator#UTF-8#asset-id#SSH#worker"
+	cfg.Profiles = []Profile{p}
+	if err := store.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	v, err := OpenVault(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, _ := p.BastionTarget()
+	if err = v.PutFor(target.Credential, "base-fixture", p.Identity()); err != nil {
+		t.Fatal(err)
+	}
+	disk, err := OpenVault(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = disk.PutFor(target.Credential, "disk-fixture", p.Identity()); err != nil {
+		t.Fatal(err)
+	}
+	change := CredentialUpdate{Profile: target.Credential, Identity: p.Identity(), Password: "editor-fixture"}
+	plan, err := store.PrepareLocalResolution(context.Background(), cfg, v, []CredentialUpdate{change})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plan.Close()
+	if len(plan.Merge.Conflicts) != 1 {
+		t.Fatal("missing target credential conflict")
+	}
+	for choice, want := range map[SharedMergeChoice]string{SharedKeepLocal: "editor-fixture", SharedKeepRemote: "disk-fixture"} {
+		_, updates, err := plan.ResolveCredentials(map[string]SharedMergeChoice{plan.Merge.Conflicts[0].Key: choice})
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, update := range updates {
+			if update.Profile.ID == target.Credential.ID {
+				found = !update.Delete && update.Password == want && update.Identity == p.Identity()
+			}
+		}
+		if !found {
+			t.Fatal("target password lost or selected from wrong version")
+		}
+	}
+}
+
 func TestLocalConflictChoiceKeepsProfileAndCredentialTogether(t *testing.T) {
 	dir := t.TempDir()
 	store := &Store{Dir: dir}

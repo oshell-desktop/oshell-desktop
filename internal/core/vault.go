@@ -339,7 +339,22 @@ func (v *Vault) putForLocked(p Profile, password string, resolved *SSHIdentity, 
 func (v *Vault) Delete(ids []string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	return v.deleteLocked(ids)
+}
 
+func (v *Vault) DeleteForRevision(id, revision string) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.data.Master && len(v.key) == 0 {
+		return ErrVaultLocked
+	}
+	if revision != v.revisionLocked() {
+		return ErrVaultChanged
+	}
+	return v.deleteLocked([]string{id})
+}
+
+func (v *Vault) deleteLocked(ids []string) error {
 	data := v.data
 	data.Entries = map[string]vaultEntry{}
 	for id, e := range v.data.Entries {

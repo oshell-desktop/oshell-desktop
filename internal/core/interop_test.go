@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 )
@@ -403,8 +404,13 @@ func TestSwiftAllSharedFieldsAndUnknownRejection(t *testing.T) {
 	cfg.Profiles = []Profile{profile}
 	cfg.Settings.FontSize = 13.123456789012345
 	cfg.Settings.TerminalClockOpacity = .123456789012345
+	style := DefaultTerminalAppearance()
+	style.Left, style.LineSpacing, style.CursorShape = 17, -3, "bar"
+	style.AsianFont, style.TabColor = "Fixture CJK", "#8967B5"
+	cfg.Settings.TerminalAppearance = &style
 	palette := ColorPresets()[0].Copy()
 	palette.AutoCursor = true
+	palette.BoldForeground = "#ABCDEF"
 	cfg.Settings.CustomSchemes = []ColorScheme{palette}
 	cfg.Settings.ColorSchemeID = palette.ID
 	rule := &cfg.HighlightSets[0].Rules[0]
@@ -476,7 +482,7 @@ func TestSwiftAllSharedFieldsAndUnknownRejection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if config.Settings.FontSize != cfg.Settings.FontSize || !config.Settings.CustomSchemes[0].AutoCursor || config.HighlightSets[0].Rules[0].Name != rule.Name || !config.HighlightSets[0].Rules[0].Bold || config.HighlightSets[0].Rules[0].Background != rule.Background {
+		if config.Settings.TerminalAppearance == nil || *config.Settings.TerminalAppearance != style || config.Settings.FontSize != cfg.Settings.FontSize || !reflect.DeepEqual(config.Settings.CustomSchemes, cfg.Settings.CustomSchemes) || config.HighlightSets[0].Rules[0].Name != rule.Name || !config.HighlightSets[0].Rules[0].Bold || config.HighlightSets[0].Rules[0].Background != rule.Background {
 			t.Fatal("model fields/precision lost")
 		}
 		exported, _, err := vault.ExportSharedDocument(context.Background(), config, master, &doc, nil)

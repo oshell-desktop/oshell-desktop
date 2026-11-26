@@ -81,7 +81,7 @@ func (a *App) modalActive() bool {
 	return len(a.challenges) > 0 || a.nonAuthenticationModalActive()
 }
 func (a *App) nonAuthenticationModalActive() bool {
-	if a.mcp.quickOpen || a.mcp.open && !a.mcp.sidebarShown || a.sidebar.rename != nil || a.imagePaste != nil || a.hostKeyCleanupOpen {
+	if a.mcp.quickOpen || a.mcp.open && !a.mcp.sidebarShown || a.sidebar.rename != nil || a.imagePaste != nil || a.hostKeyCleanupOpen || a.bastionPassword != nil {
 		return true
 	}
 	f := &a.features
@@ -502,6 +502,7 @@ func (h *applicationHub) menuItems() []*mygo.MenuItem {
 	viewMenu.Submenu = append(viewMenu.Submenu, h.workspaceMenuItem("刷新标题识别", func(a *App) { a.refreshActiveHostFromMenu() }))
 	toolsMenu := menu("工具", "logging", "links", "quickSend", "focusQuickSend", "composer", "syncInput", "stopSync", "files", "quickCommands", "highlights", "appearance")
 	toolsMenu.Submenu = append(toolsMenu.Submenu, h.workspaceMenuItem("MCP 控制中心…", func(a *App) { a.showMCP() }), mygo.Separator(), h.workspaceMenuItem("全局代理设置…", func(a *App) { a.showGlobalProxy() }))
+	toolsMenu.Submenu = append(toolsMenu.Submenu, mygo.Separator(), h.workspaceMenuItem("选项…", func(a *App) { a.showPreferenceSection(8) }))
 	return []*mygo.MenuItem{
 		appMenu,
 		sessionMenu,

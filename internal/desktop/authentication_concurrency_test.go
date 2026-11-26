@@ -164,6 +164,11 @@ func TestAuthenticationQueueCancellationAndMove(t *testing.T) {
 		t.Fatal("moving a tab lost its authentication position")
 	}
 	view := ui.NewTester(b.authenticationChallengeDialog, 700, 500)
+	view.ClickAt(1, 1)
+	view.Key(0, ui.KeyEscape)
+	if b.nextChallenge() != q || !q.open || q.answers[0] != "secret" {
+		t.Fatal("outside click or Escape dismissed authentication or lost input")
+	}
 	if !view.HasText("moved session") {
 		t.Fatal("prompt did not move with the session")
 	}

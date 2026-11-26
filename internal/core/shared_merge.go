@@ -33,6 +33,13 @@ type SharedMerge struct {
 	order                                   []string
 }
 
+// SameStoredProperties compares editable profile data across a sync round trip.
+func (p Profile) SameStoredProperties(other Profile) bool {
+	left, e1 := json.Marshal(PortableProfile{Definition: p})
+	right, e2 := json.Marshal(PortableProfile{Definition: other})
+	return e1 == nil && e2 == nil && equalSharedJSON(left, right)
+}
+
 func equalSharedJSON(a, b json.RawMessage) bool {
 	var x, y any
 	if len(a) > 0 && json.Unmarshal(a, &x) != nil {

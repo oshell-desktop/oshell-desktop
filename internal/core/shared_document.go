@@ -249,6 +249,11 @@ func preferencesForShared(cfg Config) map[string]json.RawMessage {
 	put("terminalClockOpacity", s.TerminalClockOpacity)
 	put("fontName", font)
 	put("fontSize", s.FontSize)
+	if s.TerminalAppearance != nil {
+		put("terminalAppearance", s.TerminalAppearance)
+	} else {
+		delete(prefs, "terminalAppearance")
+	}
 	put("scrollback", s.ScrollbackLines)
 	put("darkTheme", sharedSchemeIsDark(s))
 	put("metal", s.Metal)
@@ -285,6 +290,7 @@ func (d SharedDocument) Configuration() (Config, error) {
 		}
 	}
 	values := map[string]any{"metal": &s.Metal, "masterWarningAcknowledged": &s.MasterWarningAcknowledged, "updateRepository": &s.UpdateRepository, "automaticUpdateChecks": &s.AutomaticUpdateChecks, "preferColorEmoji": &s.PreferColorEmoji, "ambiguousCharactersAreWide": &s.AmbiguousCharactersAreWide, "terminalClockEnabled": &s.TerminalClockEnabled, "terminalClockPosition": &s.TerminalClockPosition, "terminalClockFontName": &s.TerminalClockFontName, "terminalClockFontSize": &s.TerminalClockFontSize, "terminalClockColor": &s.TerminalClockColor, "terminalClockOpacity": &s.TerminalClockOpacity, "fontName": &s.FontFamily, "fontSize": &s.FontSize, "scrollback": &s.ScrollbackLines, "darkTheme": &s.Dark, "autoZmodem": &s.AutoZmodem, "interfaceTheme": &s.InterfaceTheme, "colorSchemeID": &s.ColorSchemeID, "customColorSchemes": &s.CustomSchemes, "keyboardShortcuts": &s.KeyboardShortcuts, "copyOnSelect": &s.Input.CopyOnSelect, "rightClickPaste": &s.Input.RightClickPaste, "copyTrimLeadingWhitespace": &s.Input.TrimLeading, "copyTrimTrailingWhitespace": &s.Input.TrimTrailing, "confirmMultilinePaste": &s.Input.ConfirmMultiline, "quickSendBarVisible": &s.QuickSendVisible, "highlightSetID": &s.HighlightSetID}
+	values["terminalAppearance"] = &s.TerminalAppearance
 	if raw, ok := d.Preferences["quickSendScope"]; ok {
 		scope, err := decodeSharedQuickSendScope(raw)
 		if err != nil {

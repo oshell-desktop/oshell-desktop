@@ -13,6 +13,10 @@
 
 Windows 单文件版会自动释放内嵌运行库，无需另放 DLL。配置保存在 EXE 同级目录；迁移时复制整个目录，手动升级时退出程序并只替换 EXE。
 
+**在堡垒机中使用 OShell。** 打开 **设置 → 堡垒机客户端**，勾选 `接管 putty.exe`、`接管 xshell.exe` 中需要的项，点击 **应用**，再重新打开堡垒机客户端。网页上仍选择 PuTTY 或 Xshell。两个开关默认关闭，分别对当前 Windows 用户生效。取消勾选并应用即可恢复原注册。
+
+OShell 通过 Windows App Paths 和用户 PATH 注册同名启动器。若堡垒机记住了原客户端的完整路径，或优先找到安装目录中的原程序，在堡垒机里将客户端路径改为 `OShell Desktop.exe`。文件选择器限定名称时，使用设置页显示的 `putty.exe` 或 `xshell.exe` 启动入口。手动指定的路径也需在堡垒机里恢复。移动便携目录前先关闭接管，移动后再启用。
+
 在 Windows 上使用安恒运维审计系统 USM 9.1.2 时，进入 **运维配置 → SSH / TELNET / Rlogin**，将本地客户端设为 **PuTTY**，编码选择 **UTF-8**。在 USM 选择本地 PuTTY 程序时，指定平时使用的 `OShell Desktop.exe`。从 USM 点击 SSH 资产即可打开临时标签页，无需另建 OShell 会话。首次连接仍需核对主机指纹。
 
 Windows USM 客户端 4.1.3 的运维配置页不显示程序路径，保存后也不一定弹出文件选择窗口。已经配置过 PuTTY 时，退出 USM，用记事本打开 `%APPDATA%\DASUSM\SSOProfile.ini`，在相应 SSH 配置段中保留 `ClientName=PuTTY` 和其他设置，只将 `ClientPath` 改为 `OShell Desktop.exe` 的完整路径（不加引号），保存后重新打开 USM。外部连接由同一数据目录中先启动的 OShell 进程接收；若该窗口尚未解锁，会先显示窗口等待主密码，解锁后继续打开临时会话。

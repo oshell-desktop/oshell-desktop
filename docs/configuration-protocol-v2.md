@@ -115,3 +115,9 @@ Y06/Y09/Y10/Y11/Y17 使用 OShell 0.6.0 的独立字体协议。`fontFiles` 是�
 - 未变化不重复上传/重写；下载应用前复核远端清单 ETag。取消或错误不发布缺对象的清单，不删除历史对象。E01 归档字体附件未授权，不改变现有归档格式。
 
 Windows Go 与本地 HTTP WebDAV 回归、共享合同检查已通过；不等同于真实 Swift↔Go 运行。真实双端、实际服务与原生窗口验收步骤见 [字体同步范围清单](oshell-desktop-0.6.0-d1-scope-confirmation.md#字体同步实施与有限验收2026-10-29)，未完成前保留待验收。
+
+## 7. 可选的终端外观
+
+Desktop 和配套的 Mac OShell v0.6.7 源码从同一合同读取 `preferences.terminalAppearance`。启用后同步四边距、行列间距、字重、东亚字体与字号、粗体呈现、光标、字体质量、标签色和背景图位置。主字体及字号沿用 `fontName` 和 `fontSize`。背景图片及其路径仅存本机。关闭扩展外观后，下次生成共享配置时省略这个对象。
+
+从配色库选用的方案随 `customColorSchemes` 保存完整颜色表。`boldForeground` 仅在普通和粗体默认文字颜色不同时写入。未修改的 v0.6.7 能导入 XCS 和单方案 JSON，也能交换未含扩展字段的共享配置。含新增字段的共享配置需要两端同时更新；旧合同会拒绝应用。字段定义及范围见 [共享字段合同](../internal/core/shared_configuration_schema.json)。

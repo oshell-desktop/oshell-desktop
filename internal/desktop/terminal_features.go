@@ -31,6 +31,7 @@ type pasteDestination struct {
 	pane       *pane
 	term       *terminal.Terminal
 	localTools bool
+	context    string
 }
 
 func validPaste(text string) bool {
@@ -46,14 +47,24 @@ func (a *App) requestPaste(source *pane, text string) {
 		return
 	}
 	text = core.NormalizeInput(text)
-	local := source.term.InLocalToolsMode() && !source.term.ManagedInputAvailable()
-	targets := []pasteDestination{{source, source.term, local}}
+	if a.localUI.TrimPasteNewlines {
+		text = strings.TrimRight(text, "\n")
+		if text == "" {
+			return
+		}
+	}
+	local := source.term.ToolsProcessActive() && !source.term.ManagedInputAvailable()
+	targets := []pasteDestination{{source, source.term, local, source.term.PasteContextToken()}}
 	if !local && a.features.syncEnabled && a.features.syncTargets[source.id] {
 		targets = nil
 		found := map[string]bool{}
 		for _, p := range a.allPanes() {
 			if a.features.syncTargets[p.id] {
-				targets = append(targets, pasteDestination{p, p.term, false})
+				target := pasteDestination{pane: p, term: p.term}
+				if p.term != nil {
+					target.context = p.term.PasteContextToken()
+				}
+				targets = append(targets, target)
 				found[p.id] = true
 			}
 		}
@@ -86,8 +97,9 @@ func (a *App) dispatchPaste(targets []pasteDestination, text string) bool {
 	for _, target := range targets {
 		p := target.pane
 		if p == nil || !current[p] || p.closed || p.term == nil || p.term != target.term ||
+			(target.context != "" && target.context != p.term.PasteContextToken()) ||
 			(!target.localTools && !p.term.ManagedInputAvailable()) ||
-			(target.localTools && (!p.term.InLocalToolsMode() || !p.term.Available())) {
+			(target.localTools && (!p.term.ToolsProcessActive() || !p.term.Available())) {
 			a.status = "目标会话正在登录、传输、运行交互式本机工具或标签已关闭，未粘贴。"
 			return false
 		}
@@ -182,7 +194,7 @@ func (a *App) applyTerminalPreferences(p *pane) {
 }
 func (a *App) inputDialogs(c *ui.Context) {
 	f := &a.features
-	desktopModal(c, &f.syncOpen, func() {
+	terminalModal(c, &f.syncOpen, func() {
 		dialogBody(c, 480).Gap(12).Children(func() {
 			windowHeading(c, "同步键盘输入")
 			ui.Text(c, "仅在勾选的终端之间同步输入；不复制协议回复或鼠标上报。").TextColor(c.Theme().TextMuted)
@@ -212,7 +224,7 @@ func (a *App) inputDialogs(c *ui.Context) {
 			})
 		})
 	})
-	desktopModal(c, &f.pasteOpen, func() {
+	terminalModal(c, &f.pasteOpen, func() {
 		dialogBody(c, 600).Gap(12).Children(func() {
 			windowHeading(c, "多行粘贴预览")
 			ui.Text(c, "请确认内容；粘贴会保留原有引号、缩进和换行。").TextColor(c.Theme().TextMuted)

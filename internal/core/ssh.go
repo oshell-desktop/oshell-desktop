@@ -25,6 +25,7 @@ type AuthenticationPrompt struct {
 }
 
 type Credentials struct {
+	PlainSSH           bool // Treat a routed-looking username as an ordinary SSH login.
 	ExternalLaunch     bool // Ephemeral external launch; never persisted.
 	OpenTerminal       bool // Desktop launch mode; does not change the saved credential identity.
 	PasswordProtection string

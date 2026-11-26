@@ -255,7 +255,7 @@ func (a *App) imagePasteDialog(c *ui.Context) {
 	if s == nil {
 		return
 	}
-	desktopModal(c, &s.open, func() {
+	terminalModal(c, &s.open, func() {
 		dialogBody(c, 460).Gap(12).Children(func() {
 			windowHeading(c, "粘贴图片")
 			if s.remote {

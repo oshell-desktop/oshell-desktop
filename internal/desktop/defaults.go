@@ -9,6 +9,11 @@ import (
 )
 
 func (a *App) newProfile(kind string) core.Profile {
+	if kind == bastionSSH {
+		p := a.config.SessionDefaults.MakeProfile("ssh", a.sessionActionGroup())
+		p.Kind, p.Name, p.Username = bastionSSH, "新堡垒机 SSH 会话", ""
+		return p
+	}
 	return a.config.SessionDefaults.MakeProfile(kind, a.sessionActionGroup())
 }
 func (a *App) showDefaults() {

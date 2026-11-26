@@ -414,6 +414,7 @@ func (a *App) commitSharedSync() {
 				}
 			}
 			a.invalidateSyncPresentation()
+			a.resumeSessionSaves(loadErr)
 		}
 		if !a.post(complete) {
 			// A native/forced window close must not strand the shared busy

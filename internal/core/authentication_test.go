@@ -125,6 +125,56 @@ func TestRejectedPasswordIsNotVerifiedByPasswordlessInteractiveSuccess(t *testin
 		})
 	}
 }
+func TestRejectedSSHMethodTriesAlternativeBeforePromptingAgain(t *testing.T) {
+	for _, saved := range []bool{false, true} {
+		t.Run(fmt.Sprintf("saved=%t", saved), func(t *testing.T) {
+			var plain, interactive atomic.Int32
+			server := startSSH(t, "unused", func(c *ssh.ServerConfig) {
+				c.PasswordCallback = func(_ ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {
+					plain.Add(1)
+					if saved || string(password) != "fixture-manual" {
+						return nil, fmt.Errorf("password rejected")
+					}
+					return nil, nil
+				}
+				c.KeyboardInteractiveCallback = func(_ ssh.ConnMetadata, ask ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
+					interactive.Add(1)
+					if !saved {
+						return nil, fmt.Errorf("interactive unavailable")
+					}
+					answers, err := ask("", "", []string{"Gateway password:"}, []bool{false})
+					if err != nil || len(answers) != 1 || answers[0] != "fixture-manual" {
+						return nil, fmt.Errorf("gateway answer required")
+					}
+					return nil, nil
+				}
+			})
+			prompts := 0
+			cred := Credentials{
+				Challenge: func(context.Context, AuthenticationPrompt) ([]string, error) {
+					prompts++
+					return []string{"fixture-manual"}, nil
+				},
+				PasswordChallenge: func(context.Context, AuthenticationPrompt) (string, error) {
+					prompts++
+					return "fixture-manual", nil
+				},
+			}
+			if saved {
+				cred.Password = "fixture-stale"
+			}
+			conn, err := Dial(context.Background(), testProfile(server.address), cred, testTrust(t), acceptHost)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			if plain.Load() != 1 || interactive.Load() != 1 || prompts != 1 || conn.PasswordVerified == saved {
+				t.Fatalf("password attempts=%d interactive attempts=%d prompts=%d verified=%v", plain.Load(), interactive.Load(), prompts, conn.PasswordVerified)
+			}
+		})
+	}
+}
+
 func TestPasswordPartialSuccessRemainsVerifiedAfterOTP(t *testing.T) {
 	server := startSSH(t, "unused", func(config *ssh.ServerConfig) {
 		config.PasswordCallback = func(_ ssh.ConnMetadata, password []byte) (*ssh.Permissions, error) {

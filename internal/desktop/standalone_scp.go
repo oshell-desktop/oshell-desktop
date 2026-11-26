@@ -93,7 +93,7 @@ func (a *App) standaloneSCPDialog(c *ui.Context) {
 			return client.Download(ctx, remote, target, false, a.transferProgress(p, ctx))
 		})
 	}
-	desktopModal(c.Key("standalone-scp"), &draft.open, func() {
+	terminalModal(c.Key("standalone-scp"), &draft.open, func() {
 		dialogBody(c, 530).Gap(10).Children(func() {
 			windowHeading(c, "SCP 文件传输")
 			ui.Text(c, "可用于没有 SFTP 子系统的 SSH 服务器。填写完整远程路径；上传可能覆盖该路径，下载重名自动编号。")

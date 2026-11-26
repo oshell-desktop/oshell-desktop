@@ -239,7 +239,7 @@ func (a *App) resolveLocalConflict(reload bool) {
 			f.choices = nil
 			a.setConfigurationBusy(false)
 			a.editing = false
-			a.features.sessionPassword.password = ""
+			a.features.sessionPassword.clearInputs()
 			a.features.commandsOpen = false
 			a.features.commandEdit = nil
 			a.features.linkEditor.open = false

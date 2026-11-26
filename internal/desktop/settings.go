@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -38,6 +39,7 @@ func (a *App) prepareSettings() {
 	a.filePresentation.original, a.filePresentation.loadError = core.LoadFileManagementSettings(a.store.Dir)
 	a.filePresentation.draft = a.filePresentation.original
 	a.prepareUpdateSettings()
+	a.prepareClientAliases()
 	if a.features.settingsDraft.KeyboardShortcuts.Overrides == nil {
 		a.features.settingsDraft.KeyboardShortcuts.Overrides = map[string]core.ShortcutOverride{}
 	}
@@ -46,7 +48,7 @@ func (a *App) prepareSettings() {
 	a.features.historyCustom = historyPresetIndex(a.features.settingsLines) == len(historyPresets)
 	a.features.settingsError = ""
 	a.prepareStorageSettings()
-	a.features.colorDraft = a.features.settingsDraft.Scheme()
+	a.resetColorDraft()
 	a.features.settingsCapture = ""
 	a.features.shortcutError = ""
 	a.settingsOpen = true
@@ -62,9 +64,7 @@ func (a *App) openSettings() {
 	if a.settingsOpen || a.features.sharedSync.conflictOpen {
 		return
 	}
-	owner := a.syncStatusOwner()
-	committingSync := owner.configBusy && owner.features.sharedSync.busy && owner.features.sharedSync.plan != nil && owner.features.sharedSync.cancel != nil
-	if a.configurationBusy() && !committingSync {
+	if a.configurationBusy() && !a.syncCommitting() {
 		a.status = "配置正在保存，请稍后打开设置"
 		return
 	}
@@ -151,12 +151,41 @@ func (a *App) commitColorDraft() error {
 		}
 	}
 	if !custom {
+		if len(f.settingsDraft.CustomSchemes) >= 64 {
+			return fmt.Errorf("最多可保存 64 套自定义配色")
+		}
 		value = value.Copy()
 		f.settingsDraft.CustomSchemes = append(f.settingsDraft.CustomSchemes, value)
 	}
 	f.settingsDraft.ColorSchemeID = value.ID
-	f.colorDraft = value
+	a.resetColorDraft()
 	return nil
+}
+
+func (a *App) resetColorDraft() {
+	f := &a.features
+	f.colorDraft = f.settingsDraft.Scheme()
+	f.colorDraft.ANSI = slices.Clone(f.colorDraft.ANSI)
+}
+
+func (a *App) selectColorScheme(scheme core.ColorScheme, fromLibrary bool) {
+	f := &a.features
+	if err := a.commitColorDraft(); err != nil {
+		f.settingsError = err.Error()
+		return
+	}
+	s := &f.settingsDraft
+	if fromLibrary && !slices.ContainsFunc(s.CustomSchemes, func(saved core.ColorScheme) bool { return saved.ID == scheme.ID }) {
+		if len(s.CustomSchemes) >= 64 {
+			f.settingsError = "最多可保存 64 套自定义配色"
+			return
+		}
+		// Native OShell resolves custom IDs against the accompanying color table.
+		s.CustomSchemes = append(s.CustomSchemes, scheme)
+	}
+	s.ColorSchemeID = scheme.ID
+	a.resetColorDraft()
+	f.settingsError = ""
 }
 func (a *App) applySettings() {
 	if a.settingsWaitingForSync || a.configurationBusy() || a.syncOperationBusy() {
@@ -249,10 +278,16 @@ func (a *App) applySettings() {
 			a.applyTitleDraft()
 		}
 		if a.changeConfig(func(cfg *core.Config) error { cfg.Settings = f.settingsDraft; return nil }) {
+			// Session types are edited in session properties, possibly in another window.
+			a.localUIDraft.PlainSSH = a.localUI.PlainSSH
 			if !a.saveLocalPreferences(a.localUIDraft) {
 				return
 			}
 			if err := a.applyFileSettingsDraft(); err != nil {
+				f.settingsError = err.Error()
+				return
+			}
+			if err := a.applyClientAliases(); err != nil {
 				f.settingsError = err.Error()
 				return
 			}
@@ -392,10 +427,12 @@ func (a *App) settingsView(c *ui.Context) {
 }
 
 // Page IDs remain stable for native menu entry points and existing drafts.
-var settingsPages = []struct {
+type settingsPageInfo struct {
 	title, detail string
 	icon          *ui.SVG
-}{
+}
+
+var settingsPages = []settingsPageInfo{
 	{"常规", "终端显示、输入与传输的常用选项。", settingsIcon},
 	{"主题与配色", "设置界面外观和终端配色，预览当前更改。", paletteIcon},
 	{"快捷键", "查找操作并自定义键盘快捷键。", keyboardIcon},
@@ -484,10 +521,15 @@ func (a *App) settingsPage(c *ui.Context) {
 		a.fileManagementSettings(c)
 	case 10:
 		a.windowSizeSettings(c)
+		ui.Checkbox(c, &a.localUIDraft.StartLocalPrompt, "启动和新建已解锁窗口时打开本地命令行")
+		ui.Checkbox(c, &a.localUIDraft.DoubleClickNewPrompt, "双击标签栏空白处打开本地命令行")
+		a.terminalAppearanceSettings(c)
 	case 11:
 		ui.Field(c, "快速发送历史保留条数", func() { ui.TextInput(c, &a.quickHistoryLimitDraft).Width(160).Placeholder("1–100000") })
 		ui.Text(c, "仅在本机保存，所有窗口共用；不参与同步或归档。降低上限会删除较旧的记录。").Wrap().FontSize(11).TextColor(c.Theme().TextMuted)
 		ui.Button(c, "清空快速发送历史…").OnClick(a.clearQuickHistory)
+	case 12:
+		a.clientAliasesView(c)
 	}
 }
 
@@ -502,24 +544,39 @@ func (a *App) colorSettings(c *ui.Context) {
 			ui.MenuButton(c, f.colorDraft.Name, func(m *ui.Menu) {
 				for _, scheme := range s.Schemes() {
 					if m.Item(scheme.Name).Checked(scheme.ID == s.ColorSchemeID).Chosen() {
-						if e := a.commitColorDraft(); e != nil {
-							f.settingsError = e.Error()
-							return
-						}
-						s.ColorSchemeID = scheme.ID
-						f.colorDraft = scheme
+						a.selectColorScheme(scheme, false)
 					}
 				}
+				m.Submenu("Xshell 配色库", func(library *ui.Menu) {
+					for _, scheme := range core.XshellSchemes() {
+						if library.Item(scheme.Name).Checked(scheme.ID == s.ColorSchemeID).Chosen() {
+							a.selectColorScheme(scheme, true)
+						}
+					}
+				})
 			})
 		})
 	})
+	ui.Button(c, "使用 IR_Black 终端样式").Tooltip("Cascadia Code Light，15 点，四边距 5，绿色块状光标").OnClick(a.useIRBlackAppearance)
 	ui.Row(c).Gap(6).Children(func() {
 		ui.TextInput(c, &f.colorDraft.Name).Grow(1)
 		ui.Button(c, "复制为自定义").OnClick(func() {
+			if len(s.CustomSchemes) >= 64 {
+				f.settingsError = "最多可保存 64 套自定义配色"
+				return
+			}
 			f.colorDraft = f.colorDraft.Copy()
 			s.CustomSchemes = append(s.CustomSchemes, f.colorDraft)
 			s.ColorSchemeID = f.colorDraft.ID
+			a.resetColorDraft()
 		})
+		if slices.ContainsFunc(s.CustomSchemes, func(saved core.ColorScheme) bool { return saved.ID == s.ColorSchemeID }) {
+			ui.Button(c, "移除").OnClick(func() {
+				s.CustomSchemes = slices.DeleteFunc(s.CustomSchemes, func(saved core.ColorScheme) bool { return saved.ID == s.ColorSchemeID })
+				s.ColorSchemeID = core.ColorPresets()[0].ID
+				a.resetColorDraft()
+			})
+		}
 		ui.Button(c, "导入").OnClick(a.importColorSettings)
 		ui.Button(c, "导出").OnClick(a.exportColorSettings)
 	})
@@ -533,12 +590,42 @@ func (a *App) colorSettings(c *ui.Context) {
 			colorSettingField(c.Key(field.label), field.label, field.value)
 		}
 	})
+	separateBold := f.colorDraft.BoldForeground != ""
+	if ui.Checkbox(c, &separateBold, "单独设置粗体文字色").Changed() {
+		if separateBold {
+			f.colorDraft.BoldForeground = f.colorDraft.Foreground
+		} else {
+			f.colorDraft.BoldForeground = ""
+		}
+	}
+	if separateBold {
+		colorSettingField(c.Key("boldForeground"), "粗体文字", &f.colorDraft.BoldForeground)
+	}
 	sectionTitle(c, "ANSI 颜色")
 	ui.Grid(c).Columns(4).Gap(8).Children(func() {
 		for i := range f.colorDraft.ANSI {
 			colorSettingField(c.Key(fmt.Sprintf("ansi-%d", i)), fmt.Sprintf("%d · %s", i, ansiColorNames[i]), &f.colorDraft.ANSI[i])
 		}
 	})
+}
+
+func (a *App) useIRBlackAppearance() {
+	for _, scheme := range core.XshellSchemes() {
+		if scheme.Name != "IR_Black" {
+			continue
+		}
+		a.selectColorScheme(scheme, true)
+		if a.features.settingsError != "" {
+			return
+		}
+		s := &a.features.settingsDraft
+		style := core.DefaultTerminalAppearance()
+		style.FontWeight = 300
+		s.FontFamily, s.FontSize = "CascadiaCode-Light", 15
+		s.TerminalAppearance = &style
+		a.localUIDraft.TerminalBackgroundFile = ""
+		return
+	}
 }
 func (a *App) importColorSettings() {
 	parent := a.preferencesWindow
@@ -559,9 +646,16 @@ func (a *App) importColorSettings() {
 				return
 			}
 			f := &a.features
+			if !a.settingsOpen || parent != a.preferencesWindow {
+				return
+			}
+			if len(f.settingsDraft.CustomSchemes)+len(schemes) > 64 {
+				f.settingsError = "导入后将超过 64 套自定义配色"
+				return
+			}
 			f.settingsDraft.CustomSchemes = append(f.settingsDraft.CustomSchemes, schemes...)
 			f.settingsDraft.ColorSchemeID = schemes[0].ID
-			f.colorDraft = schemes[0]
+			a.resetColorDraft()
 			if parent != nil {
 				parent.Invalidate()
 			}

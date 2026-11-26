@@ -62,8 +62,31 @@ func (a *App) colorSchemePreview(c *ui.Context) {
 		return
 	}
 	cursor, cursorText := ui.Hex(scheme.Cursor), ui.Hex(scheme.CursorText)
-	ui.Column(c).Padding(12).Gap(8).Radius(5).Background(ui.Hex(scheme.Background)).Children(func() {
-		ui.Text(c, "user@server:~$ ls -la").Font(terminalFamily(a.features.settingsDraft.FontFamily)).FontSize(14).TextColor(ui.Hex(scheme.Foreground))
+	font := terminalFamily(a.features.settingsDraft.FontFamily)
+	size := float32(a.features.settingsDraft.FontSize)
+	weight := 400
+	if style := a.features.settingsDraft.TerminalAppearance; style != nil {
+		weight = style.FontWeight
+	}
+	ui.Column(c).Font(font).FontSize(size).FontWeight(weight).Padding(12).Gap(8).Radius(5).Background(ui.Hex(scheme.Background)).Children(func() {
+		ui.Row(c).Gap(8).Children(func() {
+			ink := ui.Hex(scheme.Foreground)
+			ui.Text(c, "Normal").Font(font).FontSize(size).TextColor(ink)
+			policy := "both"
+			if style := a.features.settingsDraft.TerminalAppearance; style != nil {
+				policy = style.BoldStyle
+			}
+			boldInk := ink
+			if (policy == "both" || policy == "bright") && scheme.BoldForeground != "" {
+				boldInk = ui.Hex(scheme.BoldForeground)
+			}
+			bold := ui.Text(c, "Bold").Font(font).FontSize(size).TextColor(boldInk)
+			if policy == "both" || policy == "font" {
+				bold.Bold()
+			}
+			ui.Text(c, "Underline").Font(font).FontSize(size).Underline().TextColor(ink)
+			ui.Text(c, "Reversed").Font(font).FontSize(size).Background(ink).TextColor(ui.Hex(scheme.Background))
+		})
 		ui.Row(c).Gap(8).Children(func() {
 			ui.Text(c, "终端文字 Aa 0123 中文").TextColor(ui.Hex(scheme.Foreground))
 			ui.Text(c, "选中文字").Padding(3, 6).Background(ui.Hex(scheme.Selection)).TextColor(ui.Hex(scheme.SelectionText))

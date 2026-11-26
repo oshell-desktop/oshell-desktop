@@ -121,7 +121,7 @@ func (a *App) buildManagerRows() []sessionRow {
 		}
 	}
 	add := func(r sessionRow) {
-		if a.managerProtocol != "" && r.profile.Kind != a.managerProtocol {
+		if a.managerProtocol != "" && a.sessionType(r.profile) != a.managerProtocol && r.profile.Kind != a.managerProtocol {
 			return
 		}
 		if len(terms) > 0 {
@@ -215,9 +215,9 @@ func (a *App) managerView(c *ui.Context) {
 	ui.Column(c).Fill().Padding(6).Gap(4).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
 			ui.Toolbar(c, func() {
-				toolButton(c, "新建会话", plusIcon, "新建").Disabled(a.configurationBusy()).OnClick(func() {
+				toolButton(c, "新建会话", plusIcon, "新建").Disabled(a.configurationBusy() && !a.syncCommitting()).OnClick(func() {
 					kind := a.managerProtocol
-					if kind != "ssh" && kind != "sftp" && kind != "ftp" {
+					if kind != "ssh" && kind != bastionSSH && kind != "sftp" && kind != "ftp" {
 						kind = "ssh"
 					}
 					p := a.newProfile(kind)
@@ -237,7 +237,7 @@ func (a *App) managerView(c *ui.Context) {
 			if search.Changed() {
 				a.refreshManagerSearchSelection()
 			}
-			selectValue(c, "协议分类", &a.managerProtocol, [][2]string{{"", "全部协议"}, {"ssh", "SSH"}, {"sftp", "SFTP"}, {"ftp", "FTP"}, {"local", "本地"}})
+			selectValue(c, "协议分类", &a.managerProtocol, [][2]string{{"", "全部协议"}, {"ssh", "SSH"}, {bastionSSH, "堡垒机 SSH"}, {"sftp", "SFTP"}, {"ftp", "FTP"}, {"local", "本地"}})
 			scope := a.managerSearchScope
 			ui.Row(c).Disabled(len(core.NewSessionQuery(a.query).Terms) == 0).Children(func() {
 				selectValue(c, "会话搜索范围", &a.managerSearchScope, [][2]string{{"", "当前目录及子目录"}, {"all", "全部目录"}})
@@ -309,7 +309,8 @@ func (a *App) managerView(c *ui.Context) {
 			p := r.profile
 			if col == 5 {
 				if !r.parent && !(r.folder && r.group == "Links") {
-					rowIconButton(c, "编辑 "+r.name, editIcon, c.Theme().TextMuted).Size(24, 20).Disabled(a.configurationBusy()).OnClick(func() {
+					busy := a.configurationBusy() && (!a.syncCommitting() || r.folder || r.linkID != "")
+					rowIconButton(c, "编辑 "+r.name, editIcon, c.Theme().TextMuted).Size(24, 20).Disabled(busy || !r.folder && r.linkID == "" && p.Kind == "local").OnClick(func() {
 						if r.folder {
 							a.openDirectory("移动 / 重命名目录", r.group)
 						} else if r.linkID != "" {
@@ -365,6 +366,9 @@ func (a *App) managerView(c *ui.Context) {
 						value = p.Username
 					case 3:
 						value = strings.ToUpper(p.Kind)
+						if a.sessionType(p) == bastionSSH {
+							value = "堡垒机 SSH"
+						}
 						if p.Kind == "local" {
 							value = "本地"
 						}
@@ -477,7 +481,9 @@ func (a *App) managerView(c *ui.Context) {
 			}
 			ui.PrimaryButton(c, label).Disabled(count == 0 && label != "打开").OnClick(a.connectManagerSelection)
 		})
-		if a.configurationBusy() {
+		if a.syncCommitting() {
+			ui.Text(c, "同步期间可以编辑会话属性，保存将在同步完成后执行。").TextColor(c.Theme().TextMuted).FontSize(11)
+		} else if a.configurationBusy() {
 			ui.Text(c, "配置正在保存或同步，完成后可继续编辑、复制和粘贴。").TextColor(c.Theme().TextMuted).FontSize(11)
 		} else if strings.HasPrefix(a.status, "错误") || strings.Contains(a.status, "失败") || strings.HasPrefix(a.status, "已复制") || strings.HasPrefix(a.status, "已粘贴") {
 			color := c.Theme().TextMuted

@@ -17,10 +17,9 @@ type LocalToolCommand struct {
 	Arguments  []string
 }
 
-func ParseToolCommand(text string) (LocalToolCommand, error) {
-	var out LocalToolCommand
+func SplitLocalCommand(text string) ([]string, error) {
 	if len(text) > 8192 || strings.ContainsFunc(text, func(r rune) bool { return unicode.IsControl(r) && r != '\t' }) {
-		return out, fmt.Errorf("命令过长或包含控制字符")
+		return nil, fmt.Errorf("命令过长或包含控制字符")
 	}
 	var words []string
 	var word strings.Builder
@@ -72,13 +71,22 @@ func ParseToolCommand(text string) (LocalToolCommand, error) {
 		started = true
 	}
 	if escaped || quote != 0 {
-		return out, fmt.Errorf("引号或反斜杠未结束")
+		return nil, fmt.Errorf("引号或反斜杠未结束")
 	}
 	if started {
 		words = append(words, word.String())
 	}
 	if len(words) == 0 {
-		return out, fmt.Errorf("请输入工具名称")
+		return nil, fmt.Errorf("请输入工具名称")
+	}
+	return words, nil
+}
+
+func ParseToolCommand(text string) (LocalToolCommand, error) {
+	var out LocalToolCommand
+	words, err := SplitLocalCommand(text)
+	if err != nil {
+		return out, err
 	}
 	name := filepath.Base(words[0])
 	if strings.EqualFold(filepath.Ext(name), ".exe") {
@@ -112,11 +120,26 @@ func ParseToolCommand(text string) (LocalToolCommand, error) {
 	return out, nil
 }
 func ToolAvailability() string {
+	return toolAvailability(nil)
+}
+
+func LocalPromptAvailability() string {
+	return toolAvailability(map[string]bool{"telnet": true, "ssh": true, "sftp": true, "ftp": true})
+}
+
+func toolAvailability(builtin map[string]bool) string {
 	var lines []string
-	for _, n := range LocalTools {
+	names := LocalTools
+	if builtin != nil {
+		names = append(append([]string(nil), names...), "sftp", "ftp")
+	}
+	for _, n := range names {
 		path, e := resolveLocalTool(n, n)
 		if e != nil {
 			path = "未安装"
+			if builtin[n] {
+				path = "OShell 内置"
+			}
 		}
 		lines = append(lines, n+"  "+path)
 	}

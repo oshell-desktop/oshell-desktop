@@ -153,6 +153,7 @@ func (s *Store) commitCredentials(ctx context.Context, cfg Config, v *Vault, upd
 		}
 		next.Entries[change.Profile.ID] = entry
 	}
+	pruneBastionTargets(next.Entries, cfg.Profiles)
 	next.Check, e = seal(v.key, []byte("OShell"), "OShell vault check v1")
 	if e != nil {
 		return e

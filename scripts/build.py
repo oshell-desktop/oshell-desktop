@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build a native app locally; add --archive for GitHub Actions artifacts."""
 import argparse
+import json
 import os
 from pathlib import Path
 import platform
@@ -18,6 +19,23 @@ TARGETS = ('windows/amd64', 'linux/amd64')
 
 def run(*args, env=None):
     subprocess.run(args, cwd=ROOT, env=env, check=True)
+
+
+def build_windows_client(stage):
+    # Some bastions inspect the selected EXE's version before choosing their
+    # SSH argument format. Use the same PE resource generator as the main app.
+    app = json.loads((ROOT / 'mygo.json').read_text(encoding='utf-8'))
+    with tempfile.TemporaryDirectory(prefix='.oshell-client-', dir=ROOT) as work:
+        project = Path(work)
+        shutil.copyfile(ROOT / 'cmd/oshell-client/main_windows.go', project / 'main.go')
+        config = {key: app[key] for key in ('windows', 'version')}
+        config.update(name='OShell Client', identifier='dev.oshell.desktop.client',
+                      icon=str(ROOT / app['icon']))
+        (project / 'mygo.json').write_text(json.dumps(config), encoding='utf-8')
+        run('go', 'tool', 'mygo', 'build', '-platform', 'windows/amd64',
+            '-skip-build-command', '-o', str(stage / 'client'), str(project))
+    shutil.copyfile(stage / 'client/windows-amd64/OShell Client.exe',
+                    stage / 'windows-amd64/oshell-client.bin')
 
 
 def prepare_linux_archive(product):
@@ -90,6 +108,8 @@ def build_prepared(target, output, archive=False, single_file=False):
         try:
             run('go', 'tool', 'mygo', 'build', '-platform', target,
                 '-skip-build-command', '-skip-dmg', '-o', str(stage))
+            if goos == 'windows':
+                build_windows_client(stage)
             if single_file:
                 # First collect exactly the resources selected by mygo, then
                 # rebuild with those bytes embedded. Both outputs are clean

@@ -12,7 +12,11 @@ func (a *App) tabSessionMenu(m *ui.Menu, t *tab) bool {
 
 	if m.Item("会话配置属性…").Disabled(p.closed || (p.profile.Kind != "ssh" && !p.terminalOnly)).Chosen() {
 		a.selectTab(t)
-		a.edit(p.profile)
+		profile := p.profile
+		if saved, ok := a.profileByID(profile.ID); ok {
+			profile = saved
+		}
+		a.edit(profile)
 		return true
 	}
 	if m.Item("当前会话属性…").Disabled(!canEditLiveKeepAlive(p)).Chosen() {

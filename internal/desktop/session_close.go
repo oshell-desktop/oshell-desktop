@@ -57,7 +57,7 @@ func (a *App) sessionCloseDialog(c *ui.Context) {
 	if request == nil {
 		return
 	}
-	desktopModal(c, &request.open, func() {
+	terminalModal(c, &request.open, func() {
 		dialogBody(c, 440).Gap(12).Children(func() {
 			title := "关闭此标签？"
 			detail := "此标签中的连接、本机工具与文件传输会结束。"

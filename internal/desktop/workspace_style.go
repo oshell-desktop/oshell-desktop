@@ -88,15 +88,34 @@ func dialogBody(c *ui.Context, preferredWidth float32) ui.Element {
 	return ui.Column(c).Width(min(preferredWidth, max(1, w-64))).MinWidth(0)
 }
 
-// Retain MyGo's modal focus, backdrop and Escape handling; only the panel
-// presentation is ours. Fixed-size dialog content still respects window bounds.
 func desktopModal(c *ui.Context, open *bool, content func()) ui.Element {
+	return windowModal(c, open, true, content)
+}
+
+func terminalModal(c *ui.Context, open *bool, content func()) ui.Element {
+	return windowModal(c, open, false, content)
+}
+
+func windowModal(c *ui.Context, open *bool, escapeCancels bool, content func()) ui.Element {
+	var panel ui.Element
+	if !*open {
+		return panel
+	}
 	w, h := c.Size()
-	return ui.DialogBase(c, open, func(backdrop, panel ui.Element) {
-		backdrop.Background(ui.RGBA(10, 16, 26, .48))
-		panel.Padding(12).Gap(6).Radius(3).Background(panelColor(c)).
-			Border(1, c.Theme().Border).MaxWidth(max(1, w-24)).MaxHeight(max(1, h-24)).
-			Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, .22))
-		ui.Scroll(c).MaxWidth(max(1, w-64)).MaxHeight(max(1, h-64)).Label("对话框内容").Children(content)
+	ui.Overlay(c, func() {
+		back := ui.Box(c).Absolute().Left(0).Top(0).Right(0).Bottom(0).Center().Modal().
+			Background(ui.RGBA(10, 16, 26, .48)).OnClick(func() {})
+		if back.OverlayShortcut(0, ui.KeyEscape) && escapeCancels {
+			*open = false
+		}
+		back.Children(func() {
+			panel = ui.Box(c).Role(ui.RoleDialog).Padding(12).Gap(6).Radius(3).Background(panelColor(c)).
+				Border(1, c.Theme().Border).MaxWidth(max(1, w-24)).MaxHeight(max(1, h-24)).
+				Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, .22)).OnClick(func() {})
+			panel.Children(func() {
+				ui.Scroll(c).MaxWidth(max(1, w-64)).MaxHeight(max(1, h-64)).Label("对话框内容").Children(content)
+			})
+		})
 	})
+	return panel
 }

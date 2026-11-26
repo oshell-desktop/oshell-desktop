@@ -115,6 +115,7 @@ type Connection struct {
 	output           *io.PipeWriter
 	writer           io.WriteCloser
 	writeMu          sync.Mutex
+	inputStarted     bool // protected by writeMu
 	once             sync.Once
 	done             chan struct{}
 	waitMu           sync.Mutex
@@ -197,13 +198,15 @@ func authenticate(ctx context.Context, c net.Conn, p Profile, cred Credentials, 
 	var offered, manual atomic.Bool
 	attemptPassword, acceptedPassword := "", ""
 	suppliedPasswordUsed := false
+	_, routed := p.BastionTarget()
+	routedLogin := routed && !cred.PlainSSH && !cred.ExternalLaunch && cred.ExpectedIdentity != nil && *cred.ExpectedIdentity == p.Identity()
+	interactiveAnswered := false
+	partialCount := 0
 	authAttempts := map[string]int{}
 	var challengeError error
-	var auth []ssh.AuthMethod
-	var authNames []string
+	methods := make(map[string]ssh.AuthMethod)
 	if cred.Method != "privateKey" && (cred.Password != "" || cred.Challenge != nil || cred.PasswordChallenge != nil) {
-		authNames = append(authNames, "password")
-		auth = append(auth, ssh.PasswordCallback(func() (string, error) {
+		methods["password"] = ssh.PasswordCallback(func() (string, error) {
 			if cred.Password != "" && !suppliedPasswordUsed {
 				suppliedPasswordUsed = true
 				offered.Store(true)
@@ -234,16 +237,20 @@ func authenticate(ctx context.Context, c net.Conn, p Profile, cred Credentials, 
 			}
 			manual.Store(true)
 			return answers[0], nil
-		}))
+		})
 	}
 	if cred.Method != "privateKey" && (cred.Password != "" || cred.Challenge != nil || cred.PasswordChallenge != nil || cred.MixedPasswordChallenge != nil) {
-		authNames = append(authNames, "keyboard-interactive")
-		auth = append(auth, ssh.KeyboardInteractive(func(name, instruction string, questions []string, echo []bool) ([]string, error) {
+		methods["keyboard-interactive"] = ssh.KeyboardInteractive(func(name, instruction string, questions []string, echo []bool) ([]string, error) {
 			if len(questions) > 32 || len(questions) != len(echo) {
 				return nil, fmt.Errorf("认证问题数量无效")
 			}
+			first := !interactiveAnswered
+			if len(questions) != 0 {
+				interactiveAnswered = true
+			}
 			if len(questions) == 1 && !echo[0] {
-				if loginPasswordPrompt(p.Identity(), questions[0]) {
+				gatewayPassword := first && routedLogin && partialCount == 0 && name == "" && instruction == "" && strings.TrimSpace(questions[0]) == "Password:"
+				if loginPasswordPrompt(p.Identity(), questions[0]) || gatewayPassword {
 					if cred.Password != "" && !suppliedPasswordUsed {
 						suppliedPasswordUsed = true
 						offered.Store(true)
@@ -273,7 +280,7 @@ func authenticate(ctx context.Context, c net.Conn, p Profile, cred Credentials, 
 				return nil, fmt.Errorf("认证回答数量无效")
 			}
 			return answers, e
-		}))
+		})
 	}
 	if !passwordOnly {
 		var agentSigners []ssh.Signer
@@ -298,18 +305,21 @@ func authenticate(ctx context.Context, c net.Conn, p Profile, cred Credentials, 
 			if err != nil {
 				return nil, err
 			}
-			auth = append([]ssh.AuthMethod{ssh.PublicKeys(signers...)}, auth...)
-			authNames = append([]string{"publickey"}, authNames...)
+			methods["publickey"] = ssh.PublicKeys(signers...)
 		}
 	}
-	if len(auth) == 0 {
+	if len(methods) == 0 {
 		return nil, fmt.Errorf("请提供密码、私钥或可用的 SSH Agent")
 	}
-	cfg := &ssh.ClientConfig{User: p.Username, Auth: auth, HostKeyCallback: trust.Callback(ctx, approve), Timeout: 15 * time.Second}
+	order := []string{"publickey", "password", "keyboard-interactive"}
+	if (cred.Password == "" || routedLogin) && !passwordOnly && cred.Challenge != nil {
+		// Let the server ask for the factors it needs before inventing a password prompt.
+		order = []string{"publickey", "keyboard-interactive", "password"}
+	}
+	cfg := &ssh.ClientConfig{User: p.Username, HostKeyCallback: trust.Callback(ctx, approve), Timeout: 15 * time.Second}
 	// Reset evidence before each protocol-level attempt, including methods that
 	// can succeed without invoking a challenge callback. Partial password success
 	// is retained, but is published only after the complete handshake succeeds.
-	partialCount := 0
 	cfg.AuthCallback = func(state *ssh.ClientAuthContext) (ssh.AuthMethod, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -324,14 +334,25 @@ func authenticate(ctx context.Context, c net.Conn, p Profile, cred Credentials, 
 		offered.Store(false)
 		manual.Store(false)
 		attemptPassword = ""
-		for i, name := range authNames {
-			retry := authAttempts[name] < 3 && ((name == "password" && (cred.PasswordChallenge != nil || cred.Challenge != nil)) || (name == "keyboard-interactive" && (cred.PasswordChallenge != nil || cred.Challenge != nil)))
-			if slices.Contains(state.AllowedMethods, name) && (!slices.Contains(state.TriedMethods, name) || retry) {
-				authAttempts[name]++
-				return auth[i], nil
+		next := ""
+		for _, name := range order {
+			if methods[name] == nil || !slices.Contains(state.AllowedMethods, name) {
+				continue
+			}
+			if slices.Contains(state.TriedMethods, name) &&
+				(name == "publickey" || authAttempts[name] >= 3 || (cred.Challenge == nil && cred.PasswordChallenge == nil)) {
+				continue
+			}
+			// Try another offered method before asking the operator to retry a rejected one.
+			if next == "" || authAttempts[name] < authAttempts[next] {
+				next = name
 			}
 		}
-		return nil, nil
+		if next == "" {
+			return nil, nil
+		}
+		authAttempts[next]++
+		return methods[next], nil
 	}
 
 	if p.LegacySSH {
@@ -545,11 +566,26 @@ func (c *Connection) Write(b []byte) (int, error) {
 	defer c.writeMu.Unlock()
 	return c.write(b)
 }
+
+// A stored target password can be submitted only as the first input on a fresh SSH channel.
+func (c *Connection) WriteInitialTargetLogin(line []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	if c.inputStarted {
+		return fmt.Errorf("终端已有输入，请手动登录")
+	}
+	n, err := c.write(line)
+	if err == nil && n != len(line) {
+		return io.ErrShortWrite
+	}
+	return err
+}
 func (c *Connection) write(b []byte) (int, error) {
 	if c.writer == nil {
 		return 0, fmt.Errorf("文件会话没有终端输入")
 	}
 	if len(b) > 0 {
+		c.inputStarted = true
 		c.lastActivity.Store(time.Now().UnixNano())
 	}
 	return c.writer.Write(b)

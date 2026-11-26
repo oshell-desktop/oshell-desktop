@@ -5,17 +5,23 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"oshell-desktop/internal/core"
-	"oshell-desktop/internal/terminal/internal/pty"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"oshell-desktop/internal/core"
+	"oshell-desktop/internal/terminal/internal/pty"
 )
 
 type ToolsConsole struct {
-	epoch        atomic.Uint64
-	mu           sync.Mutex
-	process      *pty.PTY
+	epoch   atomic.Uint64
+	mu      sync.Mutex
+	process interface {
+		io.WriteCloser
+		Resize(int, int, int, int) error
+	}
+	local        *localPrompt
 	processName  string
 	starting     bool
 	stateChanged func()
@@ -33,7 +39,14 @@ func NewToolsConsole() *ToolsConsole {
 	return newToolsConsole(nil)
 }
 func newToolsConsole(reconnect func()) *ToolsConsole {
-	c := &ToolsConsole{cols: 80, rows: 24, reconnect: reconnect}
+	return startConsole(reconnect, nil)
+}
+func NewLocalConsole(connect func(core.Profile)) *ToolsConsole {
+	dir, _ := os.UserHomeDir()
+	return startConsole(nil, &localPrompt{dir: dir, connect: connect})
+}
+func startConsole(reconnect func(), local *localPrompt) *ToolsConsole {
+	c := &ToolsConsole{cols: 80, rows: 24, reconnect: reconnect, local: local}
 	c.output, c.writer = io.Pipe()
 	c.editor = newPromptEditor(c.writer)
 	c.managed.Store(true)
@@ -85,8 +98,24 @@ func (c *ToolsConsole) Close() error {
 }
 func (c *ToolsConsole) run() {
 	defer c.Close()
-	io.WriteString(c.writer, "OShell 本机网络工具\r\nhelp 查看用法，tools 查看安装状态，exit 关闭。\r\n")
+	commands := c.editor.commands
+	if c.local != nil {
+		commands = append(commands, "cd", "pwd", "clear", "cls", "sftp", "ftp")
+		if runtime.GOOS == "windows" {
+			commands = append(commands, "realcmd")
+		}
+		io.WriteString(c.writer, "OShell 本地命令行\r\n可运行本机命令，help 查看内置命令，tools 查看工具来源。\r\n")
+	} else {
+		io.WriteString(c.writer, "OShell 本机网络工具\r\nhelp 查看用法，tools 查看安装状态，exit 关闭。\r\n")
+	}
 	for {
+		if c.local != nil {
+			c.editor.prompt = c.local.prompt()
+			c.editor.commands = commands
+			if c.local.telnetMode {
+				c.editor.commands = []string{"open", "quit", "close", "exit", "help"}
+			}
+		}
 		c.editor.SetBracketedPasteMode(true)
 		line, e := c.editor.ReadLine()
 		if e != nil {
@@ -94,7 +123,10 @@ func (c *ToolsConsole) run() {
 		}
 		empty := line == ""
 		line = strings.TrimSpace(line)
-		switch line {
+		if c.local != nil && c.local.handle(c, line) {
+			continue
+		}
+		switch strings.ToLower(line) {
 		case "":
 			if c.reconnect != nil && empty {
 				c.reconnect()
@@ -109,7 +141,16 @@ func (c *ToolsConsole) run() {
 			io.WriteString(c.writer, core.ToolAvailability()+"\r\n")
 			continue
 		}
-		command, e := core.ParseToolCommand(line)
+		var command core.LocalToolCommand
+		dir, _ := os.UserHomeDir()
+		if c.local != nil {
+			dir = c.local.dir
+			// The local shell owns its syntax, including redirection, pipelines
+			// and OS-specific quoting. The restricted reconnect prompt keeps argv.
+			command = localShellCommand(line)
+		} else {
+			command, e = core.ParseToolCommand(line)
+		}
 		if e != nil {
 			io.WriteString(c.writer, e.Error()+"\r\n")
 			continue
@@ -127,7 +168,6 @@ func (c *ToolsConsole) run() {
 		c.starting = true
 		c.epoch.Add(1)
 		c.mu.Unlock()
-		dir, _ := os.UserHomeDir()
 		proc, e := pty.Start(pty.Options{Path: command.Path, Args: append([]string{command.Path}, command.Arguments...), Dir: dir, Env: environment(nil), Cols: cols, Rows: rows})
 		if e != nil {
 			c.mu.Lock()
@@ -151,7 +191,7 @@ func (c *ToolsConsole) run() {
 		if changed != nil {
 			changed()
 		}
-		c.managed.Store(command.ManagedInputAllowed())
+		c.managed.Store(c.local == nil && command.ManagedInputAllowed())
 		code := drainToolProcess(c.writer, proc)
 		c.mu.Lock()
 		c.epoch.Add(1)

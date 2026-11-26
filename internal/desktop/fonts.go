@@ -35,6 +35,14 @@ func registerFonts() error {
 	return fontRegistration.err
 }
 func terminalFamily(name string) string {
+	switch name {
+	case "CascadiaCode-Regular":
+		name = "Cascadia Code"
+	case "CascadiaCode-Light":
+		name = "Cascadia Code Light, Cascadia Code"
+	case "DejaVuSansMono":
+		name = "DejaVu Sans Mono"
+	}
 	if name == "" {
 		name = "monospace"
 		if runtime.GOOS == "darwin" {
@@ -52,6 +60,10 @@ func terminalFamily(name string) string {
 }
 func terminalTheme(s core.ColorScheme) *terminal.Theme {
 	t := &terminal.Theme{Foreground: ui.Hex(s.Foreground), Background: ui.Hex(s.Background), Cursor: ui.Hex(s.Cursor), CursorText: ui.Hex(s.CursorText), Selection: ui.Hex(s.Selection), SelectionText: ui.Hex(s.SelectionText)}
+	t.BrightBold = strings.HasPrefix(s.ID, "custom-xshell-") || s.BoldForeground != ""
+	if s.BoldForeground != "" {
+		t.BoldForeground = ui.Hex(s.BoldForeground)
+	}
 	for i, c := range s.ANSI {
 		t.Palette[i] = ui.Hex(c)
 	}

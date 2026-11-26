@@ -13,6 +13,20 @@ func (a *App) queueDetachedTab(t *tab) {
 	// Capture on release, before queuing work: the pointer can move again while
 	// the new window is being created.
 	position := captureTabWindowPosition()
+	if position != nil && a.hub != nil {
+		// The native drag may finish with no registered drop target, e.g.
+		// over a Windows title bar. Resolve the topmost window at release,
+		// before focus or window stacking can change.
+		if dest := position.windowAtRelease(a.hub.windows); dest != nil && dest != a {
+			g := dest.groupByID(dest.groups.active)
+			a.post(func() {
+				if a.tabByID(t.id) == t && dest.acceptsTabDrag(tabDrag{t.id}, g) {
+					a.transferTabAt(t, dest, g.id, "", false)
+				}
+			})
+			return
+		}
+	}
 	if a.tabDropOverWorkspace(position) {
 		return
 	}

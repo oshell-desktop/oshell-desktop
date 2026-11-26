@@ -23,6 +23,7 @@ type featureState struct {
 	managerReturn                                                                                           *managerReturnState
 	nativeMigration                                                                                         nativeMigrationState
 	editorKind                                                                                              string
+	editorChoice                                                                                            string
 	pendingTerminal                                                                                         bool
 	about                                                                                                   *aboutDetails
 	commandEdit, commandOriginal, commandDelete                                                             *core.QuickCommand
@@ -106,8 +107,16 @@ type featureState struct {
 }
 
 func (a *App) initConnectionEditor() {
+	a.features.editorChoice = a.draft.Kind
+	_, exists := a.profileByID(a.draft.ID)
+	if exists && a.draft.Kind == "ssh" {
+		a.features.editorChoice = a.sessionType(a.draft)
+	}
+	if a.draft.Kind == bastionSSH {
+		a.draft.Kind = "ssh"
+	}
 	a.draftTitleMode = a.sessionTitleMode(a.draft)
-	if _, exists := a.profileByID(a.draft.ID); !exists {
+	if !exists {
 		a.draftTitleMode = a.localUI.DefaultTitleMode
 	}
 	a.initSessionPassword()
@@ -152,6 +161,9 @@ func selectValue(c *ui.Context, label string, value *string, choices [][2]string
 	})
 }
 func (a *App) connectionEditor(c *ui.Context) {
+	if a.editing && a.features.sessionPassword.queuedSave && !a.configurationBusy() {
+		a.resumeSessionSaves(nil)
+	}
 	a.syncEditorProtocol()
 	desktopModal(c, &a.editing, func() {
 		dialogBody(c, 640).Gap(12).Children(func() {
@@ -165,12 +177,18 @@ func (a *App) connectionEditor(c *ui.Context) {
 			}
 			ui.Tabs(c, &a.features.editTab, pages...)
 			field := func(label string, v *string) { ui.Field(c, label, func() { ui.TextInput(c, v) }) }
-			ui.Scroll(c).Height(335).Disabled(a.features.sessionPassword.busy).Children(func() {
+			f := &a.features.sessionPassword
+			saving := f.busy || f.queuedSave
+			ui.Scroll(c).Height(335).Disabled(saving).Children(func() {
 				switch sections[a.features.editTab] {
 				case 0:
 					ui.Form(c, func() {
 						ui.Field(c, "协议", func() {
-							selectValue(c, "协议", &a.draft.Kind, [][2]string{{"ssh", "SSH 终端"}, {"sftp", "SFTP 文件会话"}, {"ftp", "FTP 文件会话（明文）"}})
+							selectValue(c, "协议", &a.features.editorChoice, [][2]string{{"ssh", "SSH 终端"}, {bastionSSH, "堡垒机 SSH"}, {"sftp", "SFTP 文件会话"}, {"ftp", "FTP 文件会话（明文）"}})
+							a.draft.Kind = a.features.editorChoice
+							if a.draft.Kind == bastionSSH {
+								a.draft.Kind = "ssh"
+							}
 							a.syncEditorProtocol()
 							if a.draft.Kind == "ssh" {
 								selectValue(c, "标签标题（仅本机）", &a.draftTitleMode, sessionTitleModes)
@@ -180,7 +198,17 @@ func (a *App) connectionEditor(c *ui.Context) {
 						a.sessionDirectoryField(c)
 						field("主机地址", &a.draft.Host)
 						field("端口", &a.port)
-						field("用户名", &a.draft.Username)
+						if a.features.editorChoice == bastionSSH {
+							ui.Field(c, "快速登录字符串", func() {
+								ui.TextInput(c, &a.draft.Username).Label("快速登录字符串").Placeholder("user#UTF-8#2437#SSH#root")
+							})
+							a.editorLogin()
+							ui.Field(c, "服务器登录账号", func() {
+								ui.TextInput(c, &a.features.sessionPassword.serverAccount).Label("服务器登录账号").Placeholder("例如 root")
+							})
+						} else {
+							field("用户名", &a.draft.Username)
+						}
 						a.sessionPasswordFields(c)
 						ui.Checkbox(c, &a.draft.QuickConnect, "显示在快捷连接菜单中")
 						if a.draft.Kind != "ftp" {
@@ -253,7 +281,9 @@ func (a *App) connectionEditor(c *ui.Context) {
 					}).Gap(10)
 				}
 			})
-			if a.features.sessionPassword.busy {
+			if f.queuedSave {
+				ui.Text(c, "正在等待同步完成，随后将检查并保存会话。").TextColor(c.Theme().TextMuted)
+			} else if f.busy {
 				ui.Text(c, "正在保存会话和密码…").TextColor(c.Theme().TextMuted)
 			}
 			if a.formError != "" {
@@ -261,8 +291,8 @@ func (a *App) connectionEditor(c *ui.Context) {
 			}
 			dialogActions(c).Children(func() {
 				ui.Button(c, "取消").OnClick(func() { a.editing = false })
-				ui.Button(c, "保存").Disabled(a.features.sessionPassword.busy).OnClick(func() { a.saveDraft(false) })
-				ui.PrimaryButton(c, "保存并连接").Disabled(a.features.sessionPassword.busy).OnClick(func() { a.saveDraft(true) })
+				ui.Button(c, "保存").Disabled(saving).OnClick(func() { a.saveDraft(false) })
+				ui.PrimaryButton(c, "保存并连接").Disabled(saving).OnClick(func() { a.saveDraft(true) })
 			})
 		})
 	})

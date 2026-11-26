@@ -7,25 +7,54 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
+	"sync"
 	"unicode/utf16"
 )
 
 type ColorScheme struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name"`
-	Background    string   `json:"background"`
-	Foreground    string   `json:"foreground"`
-	Cursor        string   `json:"cursor"`
-	CursorText    string   `json:"cursorText"`
-	AutoCursor    bool     `json:"autoCursor"` // Preserved for shared configuration round trips.
-	Selection     string   `json:"selection"`
-	SelectionText string   `json:"selectionText"`
-	ANSI          []string `json:"ansi"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	Background     string   `json:"background"`
+	Foreground     string   `json:"foreground"`
+	BoldForeground string   `json:"boldForeground,omitempty"`
+	Cursor         string   `json:"cursor"`
+	CursorText     string   `json:"cursorText"`
+	AutoCursor     bool     `json:"autoCursor"` // Preserved for shared configuration round trips.
+	Selection      string   `json:"selection"`
+	SelectionText  string   `json:"selectionText"`
+	ANSI           []string `json:"ansi"`
 }
 
 //go:embed colors-presets.json
 var presetJSON []byte
+
+//go:embed xshell-colors.xcs
+var xshellColors []byte
+
+// The XCS file can also be imported directly by native macOS OShell.
+var xshellTemplates = sync.OnceValue(func() []ColorScheme {
+	schemes, err := ImportColors(xshellColors)
+	if err != nil {
+		panic(err)
+	}
+	for i := range schemes {
+		s := &schemes[i]
+		s.ID = "custom-xshell-" + strings.ReplaceAll(strings.ToLower(s.Name), " ", "-")
+		// Xshell's cursor is a session preference, separate from its color table.
+		s.Cursor, s.CursorText = "#00FF00", "#000000"
+	}
+	return schemes
+})
+
+func XshellSchemes() []ColorScheme {
+	out := slices.Clone(xshellTemplates())
+	for i := range out {
+		out[i].ANSI = slices.Clone(out[i].ANSI)
+	}
+	return out
+}
 
 func ColorPresets() []ColorScheme {
 	var out []ColorScheme
@@ -37,6 +66,9 @@ func (s ColorScheme) Validate() error {
 		return fmt.Errorf("配色需要有效名称和 16 个 ANSI 颜色")
 	}
 	colors := append([]string{s.Background, s.Foreground, s.Cursor, s.CursorText, s.Selection, s.SelectionText}, s.ANSI...)
+	if s.BoldForeground != "" {
+		colors = append(colors, s.BoldForeground)
+	}
 	for _, c := range colors {
 		if len(c) != 7 || c[0] != '#' {
 			return fmt.Errorf("颜色应为 #RRGGBB")
@@ -92,8 +124,7 @@ func ImportColors(data []byte) ([]ColorScheme, error) {
 		if fields == nil || strings.EqualFold(name, "names") {
 			return nil
 		}
-		scheme := ColorPresets()[0].Copy()
-		scheme.Name = name
+		scheme := ColorScheme{ID: "custom-" + NewID(), Name: name, ANSI: make([]string, 16)}
 		pick := func(key string) (string, error) {
 			v, ok := fields[key]
 			if !ok {
@@ -109,6 +140,15 @@ func ImportColors(data []byte) ([]ColorScheme, error) {
 		scheme.Foreground, e = pick("text")
 		if e != nil {
 			return e
+		}
+		if _, ok := fields["text(bold)"]; ok {
+			bold, err := pick("text(bold)")
+			if err != nil {
+				return err
+			}
+			if bold != scheme.Foreground {
+				scheme.BoldForeground = bold
+			}
 		}
 		keys := []string{"black", "red", "green", "yellow", "blue", "magenta", "cyan", "white"}
 		for i := 0; i < 16; i++ {

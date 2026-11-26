@@ -49,6 +49,12 @@ func NewID() string {
 	b[8] = (b[8] & 63) | 128
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[:4], b[4:6], b[6:8], b[8:10], b[10:])
 }
+
+// MatchesUUID also recognizes Swift's uppercase spelling of the same UUID.
+// Older desktop-only profiles can have case-sensitive, non-UUID identifiers.
+func (p Profile) MatchesUUID(id string) bool {
+	return strings.EqualFold(p.ID, id) && uuidText.MatchString(id)
+}
 func NewProfile() Profile {
 	return Profile{ID: NewID(), Name: "新会话", Group: "服务器", Kind: "ssh", Port: 22, Proxy: ProxySettings{ID: NewID(), Kind: "none", Port: 1080}, KeepAlive: DefaultKeepAlive(), InitialDirectory: ".", QuickConnect: true, TitleMode: "shellIntegration"}
 }
@@ -188,34 +194,35 @@ type SessionLink struct {
 }
 
 type Settings struct {
-	Metal                      bool              `json:"metal"`
-	MasterWarningAcknowledged  bool              `json:"masterWarningAcknowledged"`
-	UpdateRepository           string            `json:"updateRepository"`
-	AutomaticUpdateChecks      bool              `json:"automaticUpdateChecks"`
-	PreferColorEmoji           bool              `json:"preferColorEmoji"`
-	AmbiguousCharactersAreWide bool              `json:"ambiguousCharactersAreWide"`
-	TerminalClockEnabled       bool              `json:"terminalClockEnabled"`
-	TerminalClockFontName      string            `json:"terminalClockFontName"`
-	TerminalClockFontSize      float64           `json:"terminalClockFontSize"`
-	TerminalClockColor         string            `json:"terminalClockColor"`
-	TerminalClockOpacity       float64           `json:"terminalClockOpacity"`
-	TerminalClockPosition      string            `json:"terminalClockPosition"`
-	KeyboardShortcuts          KeyboardShortcuts `json:"keyboardShortcuts"`
-	LinksVisible               bool              `json:"linksVisible"`
-	HighlightSetID             string            `json:"highlightSetID"`
-	QuickSendScope             string            `json:"quickSendScope"`
-	QuickSendVisible           bool              `json:"quickSendBarVisible"`
-	AutoZmodem                 bool              `json:"autoZmodem"`
-	InterfaceTheme             string            `json:"interfaceTheme"`
-	ColorSchemeID              string            `json:"colorSchemeID"`
-	CustomSchemes              []ColorScheme     `json:"customColorSchemes"`
-	Input                      InputPreferences  `json:"input"`
-	Highlights                 []HighlightRule   `json:"highlights"`
-	ScrollbackLines            int               `json:"scrollbackLines"`
-	FontFamily                 string            `json:"fontFamily,omitempty"`
-	Dark                       bool              `json:"dark"`
-	FontSize                   float64           `json:"fontSize"`
-	ScrollbackMB               int               `json:"scrollbackMB"`
+	TerminalAppearance         *TerminalAppearance `json:"terminalAppearance,omitempty"`
+	Metal                      bool                `json:"metal"`
+	MasterWarningAcknowledged  bool                `json:"masterWarningAcknowledged"`
+	UpdateRepository           string              `json:"updateRepository"`
+	AutomaticUpdateChecks      bool                `json:"automaticUpdateChecks"`
+	PreferColorEmoji           bool                `json:"preferColorEmoji"`
+	AmbiguousCharactersAreWide bool                `json:"ambiguousCharactersAreWide"`
+	TerminalClockEnabled       bool                `json:"terminalClockEnabled"`
+	TerminalClockFontName      string              `json:"terminalClockFontName"`
+	TerminalClockFontSize      float64             `json:"terminalClockFontSize"`
+	TerminalClockColor         string              `json:"terminalClockColor"`
+	TerminalClockOpacity       float64             `json:"terminalClockOpacity"`
+	TerminalClockPosition      string              `json:"terminalClockPosition"`
+	KeyboardShortcuts          KeyboardShortcuts   `json:"keyboardShortcuts"`
+	LinksVisible               bool                `json:"linksVisible"`
+	HighlightSetID             string              `json:"highlightSetID"`
+	QuickSendScope             string              `json:"quickSendScope"`
+	QuickSendVisible           bool                `json:"quickSendBarVisible"`
+	AutoZmodem                 bool                `json:"autoZmodem"`
+	InterfaceTheme             string              `json:"interfaceTheme"`
+	ColorSchemeID              string              `json:"colorSchemeID"`
+	CustomSchemes              []ColorScheme       `json:"customColorSchemes"`
+	Input                      InputPreferences    `json:"input"`
+	Highlights                 []HighlightRule     `json:"highlights"`
+	ScrollbackLines            int                 `json:"scrollbackLines"`
+	FontFamily                 string              `json:"fontFamily,omitempty"`
+	Dark                       bool                `json:"dark"`
+	FontSize                   float64             `json:"fontSize"`
+	ScrollbackMB               int                 `json:"scrollbackMB"`
 }
 type Config struct {
 	Proxies           []ProxyProfile             `json:"proxies,omitempty"`

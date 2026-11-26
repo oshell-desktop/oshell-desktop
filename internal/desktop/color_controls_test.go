@@ -44,6 +44,48 @@ func TestColorSettingsPickerPreviewAndDraft(t *testing.T) {
 		t.Fatal("Cancel retained draft color")
 	}
 }
+
+func TestXshellTemplateApplyCancelAndReselect(t *testing.T) {
+	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
+	scheme := core.XshellSchemes()[0]
+	a.prepareSettings()
+	a.selectColorScheme(scheme, true)
+	a.features.colorDraft.ANSI[0] = "#ABCDEF"
+	a.closeSettings()
+	if len(a.config.Settings.CustomSchemes) != 0 || core.XshellSchemes()[0].ANSI[0] == "#ABCDEF" {
+		t.Fatal("cancel modified a saved scheme or template")
+	}
+	a.prepareSettings()
+	a.selectColorScheme(scheme, true)
+	a.features.colorDraft.ANSI[0] = "#654321"
+	a.selectColorScheme(core.ColorPresets()[0], false)
+	a.selectColorScheme(scheme, true)
+	a.applySettings()
+	saved, err := a.store.Load()
+	if err != nil || len(saved.Settings.CustomSchemes) != 1 || saved.Settings.Scheme().ANSI[0] != "#654321" || saved.Settings.ColorSchemeID != scheme.ID {
+		t.Fatal("changed or duplicated saved template", err)
+	}
+}
+func TestIRBlackAppearanceShortcut(t *testing.T) {
+	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
+	a.prepareSettings()
+	a.useIRBlackAppearance()
+	if a.config.Settings.TerminalAppearance != nil {
+		t.Fatal("preset applied before confirmation")
+	}
+	a.applySettings()
+	config, err := a.store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := config.Settings
+	if s.Scheme().Name != "IR_Black" || s.Scheme().Cursor != "#00FF00" || s.FontSize != 15 || s.TerminalAppearance == nil || s.TerminalAppearance.FontWeight != 300 || s.TerminalAppearance.Top != 5 {
+		t.Fatal("screenshot preset not saved")
+	}
+	a.prepareSettings()
+	preview := ui.NewTester(func(c *ui.Context) { a.colorSchemePreview(c) }, 680, 158)
+	snapshot(t, preview, "IR_Black-preview.png")
+}
 func TestColorInputRejectsInvalidHexWithoutPanic(t *testing.T) {
 	for _, value := range []string{"", "#", "#12345Z", "#12345678", "ffffff"} {
 		if _, ok := parseSettingColor(value); ok {

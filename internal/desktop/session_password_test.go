@@ -84,6 +84,44 @@ func TestSessionEditorSavesPreservesAndRemovesPasswordAtomically(t *testing.T) {
 		t.Fatal("configuration not committed with removal")
 	}
 }
+func TestManagerRenameSavedSSHWithoutResolver(t *testing.T) {
+	a, manager := managerClipboardFixture(t)
+	p := a.config.Profiles[0]
+	before := a.vault.CredentialVersion(p)
+	t.Setenv("PATH", t.TempDir())
+	if err := manager.Click("编辑"); err != nil || !a.editing {
+		t.Fatal("open properties", err)
+	}
+	a.draft.Name = "offline rename"
+	view := ui.NewTester(a.connectionEditor, 1000, 750)
+	if err := view.Click("保存"); err != nil {
+		t.Fatal(err)
+	}
+	waitOperator(t, a, func() bool { return !a.features.sessionPassword.busy })
+	disk, err := a.store.Load()
+	if err != nil || a.editing || disk.Profiles[0].Name != "offline rename" || a.vault.CredentialVersion(p) != before {
+		t.Fatal("offline property edit changed credential or failed", a.formError, err)
+	}
+}
+
+func TestManagerEditIncompleteLegacyRouteAsSSH(t *testing.T) {
+	store := &core.Store{Dir: t.TempDir()}
+	cfg := core.DefaultConfig()
+	p := core.NewProfile()
+	p.Host, p.Username = "fixture.invalid", "operator#UTF-8#asset#SSH#"
+	cfg.Profiles = []core.Profile{p}
+	if err := store.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	a := newApp(store, cfg)
+	a.editManagerProfile(p)
+	a.draft.Name = "renamed"
+	a.saveDraft(false)
+	if a.editing || a.config.Profiles[0].Name != "renamed" || a.config.Profiles[0].Username != p.Username {
+		t.Fatal("ordinary SSH username forced through bastion validation", a.formError)
+	}
+}
+
 func TestSessionEditorCancelDropsPasswordDraft(t *testing.T) {
 	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
 	p := core.NewProfile()
@@ -96,6 +134,175 @@ func TestSessionEditorCancelDropsPasswordDraft(t *testing.T) {
 	tt.Frame()
 	if a.editing || a.features.sessionPassword.password != "" || a.vault.HasStoredCredential(p.ID) {
 		t.Fatal("cancel retained or saved password")
+	}
+}
+
+func TestSessionEditorTargetPasswordLifecycle(t *testing.T) {
+	t.Setenv("OSHELL_TEST_IGNORE_SSH_CONFIG", "1")
+	store := &core.Store{Dir: t.TempDir()}
+	cfg := core.DefaultConfig()
+	if err := store.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	a := newApp(store, cfg)
+	p := core.NewProfile()
+	p.Host, p.Username = "gateway.invalid", "operator#UTF-8#fixture-asset#SSH#worker"
+	a.config.Profiles = append(a.config.Profiles, p)
+	a.edit(p)
+	f := &a.features.sessionPassword
+	view := ui.NewTester(a.view, 1000, 750)
+	if !view.HasText("服务器登录密码") || !view.HasText("堡垒机登录密码") {
+		t.Fatal("routed session fields missing")
+	}
+	save := func() {
+		t.Helper()
+		a.saveDraft(false)
+		waitOperator(t, a, func() bool { return !f.busy })
+		if a.editing {
+			t.Fatal(a.formError)
+		}
+	}
+	target, _ := p.BastionTarget()
+	check := func(want string) {
+		t.Helper()
+		got, err := a.vault.GetFor(target.Credential, p.Identity())
+		if err != nil || got != want {
+			t.Fatal("unexpected target credential", err)
+		}
+	}
+	f.targetPassword = "first-fixture"
+	save()
+	check("first-fixture")
+	if a.vault.HasStoredCredential(p.ID) || len(a.tabs) != 0 {
+		t.Fatal("saving target required a connection or wrote the gateway credential")
+	}
+	a.edit(p)
+	if f.targetPassword != "" || f.targetVersion == "" {
+		t.Fatal("saved state is missing or revealed")
+	}
+	a.draft.Name = "renamed"
+	save()
+	check("first-fixture")
+	a.edit(p)
+	f.targetPassword = "replacement-fixture"
+	save()
+	check("replacement-fixture")
+	a.edit(p)
+	f.targetPassword = "cancelled-fixture"
+	a.cancelSessionPassword()
+	if f.targetPassword != "" {
+		t.Fatal("cancel retained draft")
+	}
+	check("replacement-fixture")
+	a.edit(p)
+	f.forgetTarget = true
+	if err := a.vault.PutFor(target.Credential, "other-window-fixture", p.Identity()); err != nil {
+		t.Fatal(err)
+	}
+	a.saveDraft(false)
+	if !a.editing || f.busy || a.formError == "" {
+		t.Fatal("stale editor overwrote a later change")
+	}
+	check("other-window-fixture")
+	a.edit(p)
+	f.forgetTarget = true
+	save()
+	check("")
+	a.edit(p)
+	f.targetPassword = "old-asset-fixture"
+	a.draft.Username = "anotheruser"
+	view.Frame()
+	if f.targetPassword != "" {
+		t.Fatal("unrelated account inherited target editor")
+	}
+	a.saveDraft(false)
+	if !a.editing || a.formError == "" {
+		t.Fatal("accepted malformed bastion login")
+	}
+}
+
+func TestBastionEditorComposesLoginInEitherOrder(t *testing.T) {
+	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
+	const prefix = "operator#UTF-8#fixture-asset#SSH#"
+	p := a.newProfile(bastionSSH)
+	a.editManagerProfile(p)
+	f := &a.features.sessionPassword
+	f.serverAccount = "worker"
+	a.draft.Username = prefix
+	check := func(account string) {
+		t.Helper()
+		got, err := a.editorLogin()
+		if err != nil || got != prefix+account || a.draft.Username != got || f.serverAccount != account {
+			t.Fatal("incorrect composed account", err)
+		}
+	}
+	check("worker")
+	a.draft.Username = prefix + "admin"
+	check("admin")
+	f.serverAccount = "other"
+	check("other")
+	f.serverAccount = ""
+	if _, err := a.editorLogin(); err == nil || a.draft.Username != prefix {
+		t.Fatal("cleared account was reused")
+	}
+	a.draft.Username = prefix + "invalid#extra"
+	if _, err := a.editorLogin(); err == nil {
+		t.Fatal("invalid route accepted")
+	}
+}
+
+func TestOrdinarySSHPropertiesKeepProtocolAndIgnoreHiddenPassword(t *testing.T) {
+	store := &core.Store{Dir: t.TempDir()}
+	cfg := core.DefaultConfig()
+	if err := store.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	a := newApp(store, cfg)
+	p := a.newProfile("ssh")
+	p.Host, p.Username = "gateway.invalid", "operator#UTF-8#fixture#SSH#worker"
+	a.editManagerProfile(p)
+	view := ui.NewTester(a.connectionEditor, 1000, 750)
+	checkPlain := func() {
+		t.Helper()
+		view.Frame()
+		if a.features.editorChoice != "ssh" || !view.HasText("用户名") || !view.HasText("保存密码") ||
+			view.HasText("快速登录字符串") || view.HasText("服务器登录密码") || view.HasText("堡垒机登录密码") {
+			t.Fatal("ordinary SSH did not retain its original fields")
+		}
+	}
+	checkPlain()
+	a.features.editorChoice = bastionSSH
+	view.Frame()
+	if !view.HasText("服务器登录密码") {
+		t.Fatal("missing bastion fields")
+	}
+	a.features.sessionPassword.targetPassword = "discarded-fixture"
+	a.features.editorChoice = "ssh"
+	checkPlain()
+	a.saveDraft(false)
+	if a.editing {
+		t.Fatal(a.formError)
+	}
+	target, _ := p.BastionTarget()
+	if a.vault.HasStoredCredential(target.Credential.ID) {
+		t.Fatal("saved hidden target password")
+	}
+	loaded, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a = newApp(store, loaded)
+	p, ok := a.profileByID(p.ID)
+	if !ok || a.sessionType(p) != "ssh" {
+		t.Fatal("explicit SSH choice lost after reload")
+	}
+	a.edit(p)
+	view = ui.NewTester(a.connectionEditor, 1000, 750)
+	checkPlain()
+	a.features.editorChoice = bastionSSH
+	a.saveDraft(false)
+	if a.editing || a.sessionType(p) != bastionSSH {
+		t.Fatal("explicit bastion selection not restored", a.formError)
 	}
 }
 

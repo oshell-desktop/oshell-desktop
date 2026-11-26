@@ -1,10 +1,75 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestXshellLibraryAndSharedAppearance(t *testing.T) {
+	schemes := XshellSchemes()
+	if len(schemes) != 20 {
+		t.Fatal(len(schemes))
+	}
+	file, err := os.ReadFile("../../resources/color-schemes/IR_Black.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ir ColorScheme
+	if err := json.Unmarshal(file, &ir); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, scheme := range schemes {
+		if scheme.Validate() != nil || seen[scheme.ID] {
+			t.Fatalf("invalid template %s", scheme.Name)
+		}
+		seen[scheme.ID] = true
+		if scheme.Name == "IR_Black" && !reflect.DeepEqual(scheme, ir) {
+			t.Fatal("Mac import differs from the built-in template")
+		}
+	}
+	if !seen[ir.ID] || ir.Cursor != "#00FF00" || ir.ANSI[9] != "#FA6C60" {
+		t.Fatal("IR_Black missing or inaccurate")
+	}
+	cfg := DefaultConfig()
+	if _, exists := preferencesForShared(cfg)["terminalAppearance"]; exists {
+		t.Fatal("legacy document gained extended preferences")
+	}
+	var defaults TerminalAppearance
+	canonical, err := canonicalSharedJSON([]byte("{}"), "terminalAppearance")
+	if err != nil || json.Unmarshal(canonical, &defaults) != nil || defaults != DefaultTerminalAppearance() {
+		t.Fatal("contract defaults differ", err)
+	}
+	defaults.Left, defaults.Right, defaults.CharacterSpacing, defaults.CursorShape = 17, 4, -3, "bar"
+	cfg.Settings.TerminalAppearance = &defaults
+	cfg.Settings.ColorSchemeID, cfg.Settings.CustomSchemes = ir.ID, schemes
+	prefs := preferencesForShared(cfg)
+	raw, _ := json.Marshal(map[string]any{"profiles": []any{}, "preferences": prefs})
+	doc, err := decodeNativeDocument(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := doc.Configuration()
+	if err != nil || back.Settings.TerminalAppearance == nil || *back.Settings.TerminalAppearance != defaults || !reflect.DeepEqual(back.Settings.Scheme(), ir) {
+		t.Fatal("appearance lost", err)
+	}
+	if again := preferencesForShared(back); !bytes.Equal(again["terminalAppearance"], prefs["terminalAppearance"]) {
+		t.Fatal("no-op round trip changed preferences")
+	}
+	back.Settings.TerminalAppearance = nil
+	if _, ok := preferencesForShared(back)["terminalAppearance"]; ok {
+		t.Fatal("disabled appearance resurrected from previous shared document")
+	}
+	for _, invalid := range []string{`{"other":1}`, `{"lineSpacing":-6}`, `{"cursorShape":"bad"}`, `{"blinkInterval":0}`, `{"asianSize":6}`} {
+		if _, err := canonicalSharedJSON([]byte(invalid), "terminalAppearance"); err == nil {
+			t.Fatal(invalid)
+		}
+	}
+}
 
 func TestBaselineColorPresetsAndImport(t *testing.T) {
 	presets := ColorPresets()

@@ -28,6 +28,8 @@ type promptEditor struct {
 	cols               atomic.Int32
 	pending            []byte
 	out                io.Writer
+	prompt             string
+	commands           []string
 	line               []string
 	pos                int
 	kill               string
@@ -45,8 +47,9 @@ type promptRead struct {
 }
 
 func newPromptEditor(out io.Writer) *promptEditor {
-	e := &promptEditor{done: make(chan struct{}), changed: make(chan struct{}), out: out, historyIndex: -1, match: -1}
+	e := &promptEditor{done: make(chan struct{}), changed: make(chan struct{}), out: out, prompt: "oshell> ", historyIndex: -1, match: -1}
 	e.cols.Store(80)
+	e.commands = append([]string{"help", "tools", "exit", "quit"}, core.LocalTools...)
 	return e
 }
 func (e *promptEditor) Write(b []byte) (int, error) {
@@ -181,9 +184,8 @@ func (e *promptEditor) complete() {
 	if strings.ContainsAny(prefix, " \t") {
 		return
 	}
-	names := append([]string{"help", "tools", "exit", "quit"}, core.LocalTools...)
 	var matches []string
-	for _, n := range names {
+	for _, n := range e.commands {
 		if strings.HasPrefix(n, prefix) {
 			matches = append(matches, n)
 		}
@@ -362,7 +364,7 @@ func clusterWidth(s string) int {
 	return w
 }
 func (e *promptEditor) render() {
-	prompt := "oshell> "
+	prompt := e.prompt
 	if e.search {
 		prompt = "搜索 [" + e.query + "]: "
 		if e.match < 0 {
@@ -447,7 +449,7 @@ func (e *promptEditor) ReadLine() (string, error) {
 			}
 			if ready {
 				e.pending = append([]byte(nil), pending...)
-				fmt.Fprint(e.out, "\r\x1b[2Koshell> ", line, "\r\n")
+				fmt.Fprint(e.out, "\r\x1b[2K", e.prompt, line, "\r\n")
 				return line, nil
 			}
 		}

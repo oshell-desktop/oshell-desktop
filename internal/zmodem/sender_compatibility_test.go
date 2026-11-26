@@ -197,20 +197,33 @@ func TestLrzszCRCResumeAndCompare(t *testing.T) {
 }
 
 func TestSenderHonorsReceiverWindow(t *testing.T) {
-	for _, window := range []uint32{257, 2048} {
-		t.Run(fmt.Sprint(window), func(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		flags             byte
+		window, wantBurst int
+		retry             bool
+	}{
+		{"small", CanFDX | CanOVIO, 257, 257, false},
+		{"finite", CanFDX | CanOVIO, 2048, 2048, false},
+		{"large-finite", CanFDX | CanOVIO, 32767, 32767, false},
+		{"streaming", CanFDX | CanOVIO, 0, sshAckWindow, false},
+		{"streaming-retry", CanFDX | CanOVIO, 0, sshAckWindow, true},
+		{"no-overlap", CanFDX, 0, legacyAckWindow, false},
+		{"half-duplex", CanOVIO, 0, legacyAckWindow, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			local, peer := net.Pipe()
 			defer local.Close()
 			defer peer.Close()
 			peer.SetDeadline(time.Now().Add(5 * time.Second))
-			payload := bytes.Repeat([]byte("binary\x00\xff\x7f"), 1200)
+			payload := bytes.Repeat([]byte("binary\x00\xff\x7f"), tc.wantBurst/9*2+57)
 			done := make(chan error, 1)
 			go func() {
 				done <- SendFiles(local, []SendFile{{Name: "window.bin", Size: int64(len(payload)), Reader: bytes.NewReader(payload)}}, nil)
 			}()
 			r := &receiver{conn: peer, reader: newReader(peer)}
 			defer r.reader.close()
-			peer.Write(BuildZhexHeader(FrameZRINIT, uint32(CanFDX|CanOVIO)<<24|window))
+			peer.Write(BuildZhexHeader(FrameZRINIT, uint32(tc.flags)<<24|uint32(tc.window)))
 			kind, _, err := r.readHeader()
 			if err != nil || kind != FrameZFILE {
 				t.Fatalf("file header %d: %v", kind, err)
@@ -220,6 +233,7 @@ func TestSenderHonorsReceiverWindow(t *testing.T) {
 			}
 			peer.Write(BuildZhexHeader(FrameZRPOS, 0))
 			var received []byte
+			retry := tc.retry
 			for len(received) < len(payload) {
 				kind, offset, err := r.readHeader()
 				if err != nil || kind != FrameZDATA || int(offset) != len(received) {
@@ -232,13 +246,22 @@ func TestSenderHonorsReceiverWindow(t *testing.T) {
 						t.Fatal(err)
 					}
 					burst += len(data)
-					if burst > int(window) {
-						t.Fatalf("burst %d exceeds receiver window %d", burst, window)
+					if len(data) > subpacketSize || burst > tc.wantBurst {
+						t.Fatalf("subpacket %d, burst %d exceeds negotiated limits", len(data), burst)
 					}
 					received = append(received, data...)
 					if end == ZCRCW {
 						break
 					}
+				}
+				if burst != min(tc.wantBurst, len(payload)-int(offset)) {
+					t.Fatalf("premature ACK at %d after %d bytes", offset, burst)
+				}
+				if retry {
+					retry = false
+					received = received[:137]
+					peer.Write(BuildZhexHeader(FrameZRPOS, 137))
+					continue
 				}
 				peer.Write(BuildZhexHeader(FrameZACK, uint32(len(received))))
 			}

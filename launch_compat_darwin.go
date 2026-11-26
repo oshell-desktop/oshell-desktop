@@ -11,6 +11,8 @@ import (
 	"syscall"
 )
 
+func isRegisteredClientLaunch([]string) bool { return false }
+
 func forwardExternalLaunchIfRequested() error {
 	args := os.Args[1:]
 	helper := core.CompatibilityLauncher(args)

@@ -18,24 +18,30 @@ import (
 
 // These preferences are deliberately outside Config and the shared contract.
 type localPreferences struct {
-	LastMCPClient       string                    `json:"lastMCPClient,omitempty"`
-	QuickHistoryLimit   int                       `json:"quickHistoryLimit"`
-	MCPShortcut         *core.KeyboardShortcut    `json:"mcpShortcut"`
-	Version             int                       `json:"version,omitempty"`
-	DeepFocusShortcut   core.KeyboardShortcut     `json:"deepFocusShortcut"`
-	ImagePasteLocal     bool                      `json:"imagePasteLocal"`
-	ImagePasteSSH       map[string]imagePasteRule `json:"imagePasteSSH,omitempty"`
-	DefaultTitleMode    string                    `json:"defaultTitleMode"`
-	TitleModes          map[string]string         `json:"titleModes,omitempty"`
-	ConfirmTabClose     bool                      `json:"confirmTabClose"`
-	ReduceMotion        bool                      `json:"reduceMotion"`
-	ClockFullscreenOnly bool                      `json:"clockFullscreenOnly,omitempty"`
-	Pins                map[string]bool           `json:"pins,omitempty"`
-	StartupWindow       *windowSize               `json:"startupWindow,omitempty"`
-	SidebarVisible      bool                      `json:"sidebarVisible"` // Existing installations use this as the initial window state.
-	SidebarShortcut     core.KeyboardShortcut     `json:"sidebarShortcut"`
-	WordSeparators      string                    `json:"wordSeparators"`
-	ShiftWhitespace     bool                      `json:"shiftWhitespace"`
+	TerminalBackgroundFile string                    `json:"terminalBackgroundFile,omitempty"`
+	LastMCPClient          string                    `json:"lastMCPClient,omitempty"`
+	QuickHistoryLimit      int                       `json:"quickHistoryLimit"`
+	MCPShortcut            *core.KeyboardShortcut    `json:"mcpShortcut"`
+	Version                int                       `json:"version,omitempty"`
+	DeepFocusShortcut      core.KeyboardShortcut     `json:"deepFocusShortcut"`
+	ImagePasteLocal        bool                      `json:"imagePasteLocal"`
+	ImagePasteSSH          map[string]imagePasteRule `json:"imagePasteSSH,omitempty"`
+	DefaultTitleMode       string                    `json:"defaultTitleMode"`
+	TitleModes             map[string]string         `json:"titleModes,omitempty"`
+	PlainSSH               map[string]bool           `json:"plainSSH,omitempty"` // Explicit ordinary SSH for usernames matching the legacy bastion format.
+	ConfirmTabClose        bool                      `json:"confirmTabClose"`
+	ReduceMotion           bool                      `json:"reduceMotion"`
+	ClockFullscreenOnly    bool                      `json:"clockFullscreenOnly,omitempty"`
+	Pins                   map[string]bool           `json:"pins,omitempty"`
+	StartupWindow          *windowSize               `json:"startupWindow,omitempty"`
+	SidebarVisible         bool                      `json:"sidebarVisible"` // Existing installations use this as the initial window state.
+	SidebarShortcut        core.KeyboardShortcut     `json:"sidebarShortcut"`
+	WordSeparators         string                    `json:"wordSeparators"`
+	ShiftWhitespace        bool                      `json:"shiftWhitespace"`
+	MiddleClickPaste       bool                      `json:"middleClickPaste,omitempty"`
+	TrimPasteNewlines      bool                      `json:"trimPasteNewlines,omitempty"`
+	StartLocalPrompt       bool                      `json:"startLocalPrompt,omitempty"`
+	DoubleClickNewPrompt   bool                      `json:"doubleClickNewPrompt,omitempty"`
 }
 
 const defaultWordSeparators = " /\\()\"'-:,.;<>~!@#$%^&*|+=[]{}?"
@@ -59,8 +65,21 @@ func (p localPreferences) clone() localPreferences {
 	}
 	p.ImagePasteSSH = maps.Clone(p.ImagePasteSSH)
 	p.TitleModes = maps.Clone(p.TitleModes)
+	p.PlainSSH = maps.Clone(p.PlainSSH)
 	p.Pins = maps.Clone(p.Pins)
 	return p
+}
+
+func (p *localPreferences) setPlainSSH(id string, plain bool) {
+	id = strings.ToLower(id)
+	if !plain {
+		delete(p.PlainSSH, id)
+		return
+	}
+	if p.PlainSSH == nil {
+		p.PlainSSH = map[string]bool{}
+	}
+	p.PlainSSH[id] = true
 }
 func loadLocalPreferences(dir string) localPreferences {
 	p, err := readLocalPreferences(dir)
@@ -134,6 +153,8 @@ func (a *App) saveLocalPreferences(p localPreferences) bool {
 			target.walk(tab.root, func(pane *pane) {
 				if pane.term != nil {
 					pane.term.SetSelectionPolicy(p.WordSeparators, p.ShiftWhitespace)
+					pane.term.SetMiddleClickPaste(p.MiddleClickPaste)
+					pane.term.SetAppearance(target.config.Settings.TerminalAppearance, target.terminalBackground())
 				}
 			})
 		}
@@ -234,6 +255,11 @@ func (a *App) localSelectionSettings(c *ui.Context) {
 	ui.Checkbox(c, &s.CopyOnSelect, "选中即复制")
 	ui.Checkbox(c, &s.TrimLeading, "复制时清理头部空白")
 	ui.Checkbox(c, &s.TrimTrailing, "复制时清理尾部空白")
+	sectionTitle(c, "鼠标与粘贴")
+	ui.Checkbox(c, &s.RightClickPaste, "右键粘贴；Shift+右键保留终端菜单")
+	ui.Checkbox(c, &p.MiddleClickPaste, "中键粘贴剪贴板内容").Tooltip("终端应用接管鼠标时保留应用的中键操作")
+	ui.Checkbox(c, &p.TrimPasteNewlines, "粘贴前移除末尾换行").Tooltip("避免复制单行命令时连同回车一起执行")
+	ui.Checkbox(c, &s.ConfirmMultiline, "多行粘贴前预览")
 	ui.Divider(c)
 	ui.Checkbox(c, &a.sidebar.draftShown, "在当前窗口显示会话侧栏")
 	ui.Button(c, "全心专注："+p.DeepFocusShortcut.Display(runtime.GOOS)).OnClick(func() { a.sidebar.capture = true; a.sidebar.deepCapture = true })

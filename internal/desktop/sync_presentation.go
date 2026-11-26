@@ -30,6 +30,11 @@ func (a *App) syncOperationBusy() bool {
 	}
 	return a.features.sharedSync.busy
 }
+func (a *App) syncCommitting() bool {
+	owner := a.syncStatusOwner()
+	f := &owner.features.sharedSync
+	return owner.configBusy && f.busy && f.plan != nil && f.cancel != nil
+}
 func (a *App) invalidateSyncPresentation() {
 	if a.hub == nil {
 		return

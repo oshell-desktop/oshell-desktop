@@ -72,6 +72,7 @@ func (a *App) resetAgentReplay(r *agentReplayState, target time.Duration) error 
 	if err != nil {
 		return err
 	}
+	term.SetAppearance(a.config.Settings.TerminalAppearance, a.terminalBackground())
 	r.term = term
 	r.queue = make(chan agentReplayItem, 8)
 	r.next = nil

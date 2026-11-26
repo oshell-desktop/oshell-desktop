@@ -29,7 +29,7 @@ func (a *App) hostKeyCleanupDialog(c *ui.Context) {
 		return
 	}
 	e := p.hostKeyMismatch
-	desktopModal(c.Key("host-key-cleanup"), &a.hostKeyCleanupOpen, func() {
+	terminalModal(c.Key("host-key-cleanup"), &a.hostKeyCleanupOpen, func() {
 		dialogBody(c, 560).Gap(12).Children(func() {
 			windowHeading(c, "清理旧主机密钥")
 			ui.Text(c, "实际冲突地址："+e.Address).Wrap()

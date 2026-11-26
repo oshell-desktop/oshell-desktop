@@ -30,6 +30,10 @@ func savedConnectionFixture(t *testing.T, configure ...func(*ssh.ServerConfig, s
 }
 
 func savedConnectionFixtureWithHandlers(t *testing.T, prepare func(sftp.Handlers) sftp.Handlers, configure ...func(*ssh.ServerConfig, ssh.Signer)) (*App, core.Profile, *atomic.Int32) {
+	return savedConnectionFixtureWithShell(t, prepare, nil, configure...)
+}
+
+func savedConnectionFixtureWithShell(t *testing.T, prepare func(sftp.Handlers) sftp.Handlers, shell func(ssh.Channel), configure ...func(*ssh.ServerConfig, ssh.Signer)) (*App, core.Profile, *atomic.Int32) {
 	t.Helper()
 	t.Setenv("OSHELL_TEST_NO_AGENT", "1")
 	t.Setenv("OSHELL_TEST_EXPLICIT_KEYS_ONLY", "1")
@@ -166,6 +170,10 @@ func savedConnectionFixtureWithHandlers(t *testing.T, prepare func(sftp.Handlers
 								req.Reply(true, nil)
 							case "shell":
 								req.Reply(true, nil)
+								if shell != nil {
+									go shell(channel)
+									continue
+								}
 								io.WriteString(channel, "SAVED_CREDENTIAL_READY\r\n")
 								go io.Copy(io.Discard, channel)
 							default:
@@ -229,6 +237,51 @@ func TestSavedCredentialConnectsWithoutSecondAuthenticationConfirmation(t *testi
 		t.Fatal("automatic connection retained dialog credentials")
 	}
 }
+func TestBastionLoginPromptsOncePerAccount(t *testing.T) {
+	steps := []struct{ question, password string }{
+		{"Gateway password:", "fixture-gateway"}, {"Target account password:", "fixture-target"},
+	}
+	var plainAttempts atomic.Int32
+	a, p, accepted := savedConnectionFixture(t, func(server *ssh.ServerConfig, _ ssh.Signer) {
+		server.PasswordCallback = func(ssh.ConnMetadata, []byte) (*ssh.Permissions, error) {
+			plainAttempts.Add(1)
+			return nil, fmt.Errorf("interactive login required")
+		}
+		server.KeyboardInteractiveCallback = func(_ ssh.ConnMetadata, ask ssh.KeyboardInteractiveChallenge) (*ssh.Permissions, error) {
+			for _, step := range steps {
+				answers, err := ask("Gateway", "", []string{step.question}, []bool{false})
+				if err != nil {
+					return nil, err
+				}
+				if len(answers) != 1 || answers[0] != step.password {
+					return nil, fmt.Errorf("wrong account credential")
+				}
+			}
+			return nil, nil
+		}
+	})
+	p.IdentityFile = ""
+	a.request(p, 0)
+	for _, step := range steps {
+		waitOperator(t, a, func() bool { return len(a.challenges) != 0 || a.authOpen && !a.features.authPreparing })
+		if a.authOpen || len(a.challenges) != 1 {
+			t.Fatal("unexpected password form before server challenge")
+		}
+		q := a.challenges[0]
+		if q.request.Identity != p.Identity() || len(q.request.Questions) != 1 || q.request.Questions[0] != step.question || q.allowSave {
+			t.Fatal("incorrect or repeated account prompt", q.request.Questions)
+		}
+		q.answers[0] = step.password
+		a.finishChallenge(q, false)
+	}
+	waitOperator(t, a, func() bool {
+		return a.activePane() != nil && a.activePane().term != nil && strings.Contains(a.activePane().term.Text(), "SAVED_CREDENTIAL_READY")
+	})
+	if plainAttempts.Load() != 0 || accepted.Load() != 1 || len(a.challenges) != 0 || a.vault.HasStoredCredential(p.ID) {
+		t.Fatal("unexpected authentication attempt, prompt or saved answer")
+	}
+}
+
 func TestSavedCredentialIdentityMismatchDoesNotAutomaticallyConnect(t *testing.T) {
 	a, p, accepted := savedConnectionFixture(t)
 	wrong := p.Identity()
@@ -256,12 +309,12 @@ func TestSavedCredentialBatchContinuesToUnsavedSessionWithoutLeakingPassword(t *
 	a.authQueue = []core.Profile{next}
 	a.request(p, 0)
 	waitOperator(t, a, func() bool {
-		return a.pendingProfile.ID == next.ID && !a.features.authPreparing && len(a.tabs) == 1 && a.tabs[0].active.term != nil
+		return len(a.challenges) == 1 && a.challenges[0].pane.profile.ID == next.ID && len(a.tabs) == 2 && a.tabs[0].active.term != nil
 	})
-	if !a.authOpen || len(a.authQueue) != 0 || accepted.Load() != 1 {
+	if a.authOpen || len(a.authQueue) != 0 || accepted.Load() != 2 {
 		t.Fatal("batch did not advance correctly")
 	}
-	if a.password != "" || a.features.savedPassword != "" {
+	if a.password != "" || a.features.savedPassword != "" || a.challenges[0].answers[0] != "" {
 		t.Fatal("previous session password leaked into next prompt")
 	}
 }
@@ -354,6 +407,12 @@ func TestNativeSavedCredentialFixture(t *testing.T) {
 func TestManualAuthenticationBindsTheDisplayedResolvedIdentity(t *testing.T) {
 	a, p, accepted := savedConnectionFixture(t)
 	p.IdentityFile = ""
+	// An existing credential for another endpoint requires explicit confirmation.
+	previous := p.Identity()
+	previous.Host = "old.fixture.invalid"
+	if err := a.vault.PutFor(p, "old-fixture-password", previous); err != nil {
+		t.Fatal(err)
+	}
 	a.request(p, 0)
 	waitOperator(t, a, func() bool { return !a.features.authPreparing })
 	// Model an SSH-config resolution that changes after the password prompt:

@@ -137,6 +137,51 @@ func TestEmptyWindowExposesTabDropStrip(t *testing.T) {
 	}
 }
 
+func TestDetachedTabDragBackToWorkspace(t *testing.T) {
+	for _, target := range []string{"right", "标签栏空白区域", "会话侧栏"} {
+		t.Run(target, func(t *testing.T) {
+			original, detached, _ := mergeWindowFixture(t)
+			operatorPane(t, original, "left")
+			p, conn := operatorPane(t, original, "moving")
+			operatorPane(t, original, "right")
+			original.ensureGroups()
+			moving := original.tabs[1]
+			original.transferTab(moving, detached)
+			// Put the two production views on one test surface so a pointer
+			// gesture crosses their boundary without using the system pointer.
+			view := ui.NewTester(func(c *ui.Context) {
+				ui.Column(c).Fill().Children(func() {
+					ui.Column(c).Grow(1).MinHeight(0).Children(func() { original.view(c.Key("original")) })
+					detached.groupTabBar(c.Key("detached"), detached.groupForNewTab())
+				})
+			}, 1200, 700)
+			from, ok := view.Find("moving")
+			if !ok {
+				t.Fatal("missing detached tab")
+			}
+			to, ok := view.Find(target)
+			if !ok {
+				t.Fatal("missing drop target", target)
+			}
+			view.Press(from.X+8, from.Y+12)
+			view.Move(from.X+20, from.Y+12)
+			view.Move(to.X+4, to.Y+12)
+			view.Release(to.X+4, to.Y+12)
+			view.Frame()
+			wantIndex := 2
+			if target == "right" {
+				wantIndex = 1
+			}
+			if len(original.tabs) != 3 || original.tabs[wantIndex] != moving || original.activeTab() != moving ||
+				len(detached.tabs) != 0 || !detached.closeAfterTabMove || p.owner.Load() != original {
+				t.Fatal("drop did not return the live tab to the expected position")
+			}
+			p.term.Send([]byte("back"))
+			waitOperator(t, original, func() bool { return conn.text() == "back" })
+		})
+	}
+}
+
 func TestTabDropOnBlankStripMovesToEnd(t *testing.T) {
 	a, _, _ := mergeWindowFixture(t)
 	operatorPane(t, a, "first")

@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
+	"oshell-desktop/internal/core"
 	"oshell-desktop/internal/terminal/internal/bidilayout"
 	"oshell-desktop/internal/terminal/internal/vt"
 )
@@ -65,6 +66,16 @@ func (v *view) handleInput(ev ui.InputEvent) bool {
 	}
 	if ev.Kind == ui.InputScroll && v.zoomFontWithWheel(ev) {
 		return true
+	}
+	if ev.Kind == ui.InputPointerDown && ev.Button == 2 && ev.Mods == 0 && t.opts.MiddleClickPaste {
+		t.mu.Lock()
+		tracking := t.term != nil && t.term.MouseTracking()
+		t.mu.Unlock()
+		if !tracking {
+			ev.FocusPointerTarget()
+			v.paste()
+			return true
+		}
 	}
 	if ev.Kind == ui.InputPointerDown && ev.Button == 1 && ev.Mods&ui.Shift == 0 && t.opts.RightClickPaste {
 		v.wordClicks.seed = nil
@@ -129,6 +140,9 @@ type view struct {
 	scale                  float32
 	cellW, cellH, baseline int
 	ox, oy                 int
+	rightPad, bottomPad    int
+	appearance             core.TerminalAppearance
+	backgroundImage        *ui.Bitmap
 	cols, rows             int
 
 	colors          vt.Colors
@@ -210,6 +224,7 @@ func (v *view) build(c *ui.Context, e ui.Element) {
 		if v.applied != theme {
 			theme.apply(t.term)
 			v.applied = theme
+			v.lines = v.lines[:0]
 		}
 		t.curTheme = theme
 		// Keep host state current even when reporting is disabled. The native
@@ -250,7 +265,8 @@ func (v *view) build(c *ui.Context, e ui.Element) {
 	// The cursor blinks, every 600 ms, while the terminal has the focus.
 	if v.focused && v.cursor.Blinking && v.cursor.Visible {
 		since := c.Now().Sub(v.blinkStart)
-		c.After(blinkPeriod - since%blinkPeriod)
+		period := v.cursorPeriod()
+		c.After(period - since%period)
 	}
 	if v.ticking {
 		c.After(max(time.Duration(0), v.selectionScrollNext.Sub(c.Now())))
@@ -258,6 +274,13 @@ func (v *view) build(c *ui.Context, e ui.Element) {
 }
 
 const blinkPeriod = 600 * time.Millisecond
+
+func (v *view) cursorPeriod() time.Duration {
+	if v.appearance.BlinkInterval >= 100 && v.appearance.BlinkInterval <= 2000 {
+		return time.Duration(v.appearance.BlinkInterval) * time.Millisecond
+	}
+	return blinkPeriod
+}
 
 // release frees what the view made of the library, once the terminal is
 // closed.
@@ -969,7 +992,7 @@ func (v *view) report(ev ui.InputEvent) bool {
 	}
 	pressed := v.reporting
 	_, row := v.cellAt(ev.X, ev.Y)
-	v.mouse.Sync(t.term, v.ox*2+v.cols*v.cellW, v.oy*2+v.rows*v.cellH, v.inputCellWidth(row), v.cellH, v.ox, v.oy, pressed)
+	v.mouse.Sync(t.term, v.ox+v.rightPad+v.cols*v.cellW, v.oy+v.bottomPad+v.rows*v.cellH, v.inputCellWidth(row), v.cellH, v.ox, v.oy, pressed)
 	px, py := v.mousePosition(ev.X, ev.Y)
 	out := v.mouse.Encode(action, b, vtMods(ev.Mods), px, py)
 	if len(out) > 0 {
@@ -1010,7 +1033,7 @@ func (v *view) scroll(ev ui.InputEvent) bool {
 			v.mouse = m
 		}
 		_, row := v.cellAt(ev.X, ev.Y)
-		v.mouse.Sync(t.term, v.ox*2+v.cols*v.cellW, v.oy*2+v.rows*v.cellH, v.inputCellWidth(row), v.cellH, v.ox, v.oy, false)
+		v.mouse.Sync(t.term, v.ox+v.rightPad+v.cols*v.cellW, v.oy+v.bottomPad+v.rows*v.cellH, v.inputCellWidth(row), v.cellH, v.ox, v.oy, false)
 		button := vt.WheelDown
 		if rows < 0 {
 			button = vt.WheelUp

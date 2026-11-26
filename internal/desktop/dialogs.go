@@ -14,9 +14,10 @@ import (
 func (a *App) dialogs(c *ui.Context) {
 	a.mcpDialog(c)
 	a.hostKeyCleanupDialog(c)
+	a.drawBastionPassword(c)
 	a.imagePasteDialog(c)
 	a.connectionEditor(c)
-	desktopModal(c, &a.authOpen, func() {
+	terminalModal(c, &a.authOpen, func() {
 		dialogBody(c, 440).Gap(14).Children(func() {
 			windowHeading(c, "连接 "+a.pendingProfile.Name)
 			endpoint := a.pendingProfile.Username + "@" + a.pendingProfile.Address()
@@ -63,7 +64,6 @@ func (a *App) dialogs(c *ui.Context) {
 			})
 		})
 	})
-	// Modal can also be dismissed by Escape or by clicking its backdrop.
 	if !a.authOpen {
 		a.authPasswordRevealed = false
 		if a.features.authPreparing {
@@ -84,8 +84,26 @@ func (a *App) dialogs(c *ui.Context) {
 	a.refreshAuthentication()
 }
 func (a *App) saveDraft(connect bool) {
-	if a.passwordLocked() || a.configurationBusy() || a.features.sessionPassword.busy {
+	f := &a.features.sessionPassword
+	if a.passwordLocked() || f.busy {
 		return
+	}
+	if a.configurationBusy() {
+		if a.syncCommitting() {
+			f.queuedSave, f.queuedConnect = true, connect
+			a.formError = ""
+		}
+		return
+	}
+	current, exists := a.profileByID(a.draft.ID)
+	if exists != (f.original != nil) || exists && !f.original.SameStoredProperties(current) {
+		a.formError = "此会话已在其他窗口或同步中修改或删除。草稿已保留，请核对最新属性后重新编辑。"
+		return
+	}
+	if exists {
+		// Shared UUIDs can change case during publication. Write to the current
+		// profile and vault keys instead of creating a second profile.
+		a.draft.ID, f.original.ID = current.ID, current.ID
 	}
 	if err := a.applyConnectionEditor(); err != nil {
 		a.formError = err.Error()
@@ -103,7 +121,11 @@ func (a *App) saveDraft(connect bool) {
 	}
 	p.Name = strings.TrimSpace(p.Name)
 	p.Host = strings.TrimSpace(p.Host)
-	p.Username = strings.TrimSpace(p.Username)
+	p.Username, err = a.editorLogin()
+	if err != nil {
+		a.formError = err.Error()
+		return
+	}
 	p.Group, err = core.NormalizeDirectory(p.Group)
 	if err != nil {
 		a.formError = err.Error()
@@ -145,12 +167,42 @@ func (a *App) saveDraft(connect bool) {
 	}
 	a.finishSavedDraft(p, connect)
 }
+
+// On the UI thread after publication, serialize queued saves across windows.
+func (a *App) resumeSessionSaves(loadErr error) {
+	windows := []*App{a}
+	if a.hub != nil {
+		windows = a.hub.configurationWindows()
+	}
+	for _, w := range windows {
+		f := &w.features.sessionPassword
+		if !f.queuedSave {
+			continue
+		}
+		if loadErr == nil && w.configurationBusy() {
+			continue
+		}
+		f.queuedSave = false
+		if !w.editing || w.stopped.Load() || w.passwordLocked() {
+			continue
+		}
+		if loadErr != nil {
+			w.formError = "同步后读取配置失败，草稿已保留：" + loadErr.Error()
+		} else {
+			w.saveDraft(f.queuedConnect)
+		}
+		if w.win != nil {
+			w.win.Invalidate()
+		}
+	}
+}
 func (a *App) applyAppearance() {
 	for _, t := range a.tabs {
 		a.walk(t.root, func(p *pane) {
 			if p.term != nil {
 				theme := terminalTheme(a.config.Settings.Scheme())
 				p.term.SetTheme(theme, nil)
+				p.term.SetAppearance(a.config.Settings.TerminalAppearance, a.terminalBackground())
 				p.term.SetFont(terminal.Font{Family: terminalFamily(a.config.Settings.FontFamily), Size: float32(a.config.Settings.FontSize)})
 				a.applyTerminalPreferences(p)
 			}

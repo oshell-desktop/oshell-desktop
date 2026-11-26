@@ -90,15 +90,22 @@ func TestCloseConfirmationCapturesTabAndRejectsMovedTarget(t *testing.T) {
 		t.Fatal("confirmation closed moved target")
 	}
 }
-func TestIdleCloseNeedsNoPromptAndEscapeCancelsActiveClose(t *testing.T) {
+func TestIdleCloseNeedsNoPromptAndActiveCloseRequiresChoice(t *testing.T) {
 	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
 	p, _ := operatorPane(t, a, "active")
 	tab := a.tabs[0]
 	a.requestSessionClose(tab, nil)
 	tt := ui.NewTester(a.sessionCloseDialog, 700, 400)
 	tt.Key(0, ui.KeyEscape)
+	tt.ClickAt(1, 1)
+	if a.features.sessionClose == nil || p.closed {
+		t.Fatal("active close dismissed without a choice")
+	}
+	if err := tt.Click("取消关闭"); err != nil {
+		t.Fatal(err)
+	}
 	if a.features.sessionClose != nil || p.closed {
-		t.Fatal("Escape did not cancel")
+		t.Fatal("explicit cancel failed")
 	}
 	p.term.Close()
 	waitOperator(t, a, func() bool { return !p.term.HasActiveProcess() })

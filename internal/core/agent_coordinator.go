@@ -464,6 +464,35 @@ func (s *AgentSession) Gate(ticket string, data []byte, write func() error) erro
 	}
 	return write()
 }
+
+// GatePasswordInput keeps operator ownership and prevents the password from
+// entering human_input events. Protect a possible remote echo in active audits.
+func (s *AgentSession) GatePasswordInput(password []byte, write func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.owner.Load() {
+		return fmt.Errorf("终端由 MCP 占用，请先接管")
+	}
+	s.integrated = false
+	if s.audit != nil {
+		known := false
+		for _, value := range s.redactor.values {
+			known = known || bytes.Equal(value, password)
+		}
+		if !known {
+			if len(s.redactor.values) >= 8 {
+				return fmt.Errorf("当前审计连接的敏感值已达上限")
+			}
+			s.redactor.values = append(s.redactor.values, bytes.Clone(password))
+			s.displayRedactor.values = append(s.displayRedactor.values, bytes.Clone(password))
+		}
+		if err := s.event("sensitive_input", nil, nil); err != nil {
+			return err
+		}
+	}
+	return write()
+}
+
 func (s *AgentSession) Takeover(ctx context.Context, interrupt bool) error {
 	s.mu.Lock()
 	s.takeover("人工接管；连接保留，远端命令可能仍在运行")

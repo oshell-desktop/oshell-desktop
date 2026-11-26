@@ -67,7 +67,7 @@ func (a *App) uploadConfirmationDialog(c *ui.Context) {
 		return
 	}
 	clear := func() { draft.paths = nil; a.features.uploadDraft = nil }
-	desktopModal(c.Key("upload-confirmation"), &draft.open, func() {
+	terminalModal(c.Key("upload-confirmation"), &draft.open, func() {
 		dialogBody(c, 500).Gap(10).Children(func() {
 			windowHeading(c, fmt.Sprintf("上传 %d 个项目", len(draft.paths)))
 			ui.Text(c, fmt.Sprintf("目标：%s · %s@%s:%d", draft.pane.profile.Name, draft.pane.profile.Username, draft.pane.profile.Host, draft.pane.profile.Port))

@@ -6,6 +6,7 @@ import (
 	"oshell-desktop/internal/terminal/internal/bidilayout"
 	"slices"
 	"time"
+	"unicode"
 	"unicode/utf8"
 	"unsafe"
 
@@ -73,6 +74,22 @@ func (v *view) layout(r ui.Rect, scale float32) {
 	t := v.t
 	t.mu.Lock()
 	fk := t.opts.Font.key(scale)
+	var a core.TerminalAppearance
+	if t.opts.Appearance != nil {
+		a = *t.opts.Appearance
+		fk.weight = max(100, min(900, a.FontWeight))
+	} else {
+		a.Left, a.Right, a.Top, a.Bottom = padX, padX, padY, padY
+		a.BoldStyle = "font"
+		if v.theme != nil && v.theme.BrightBold {
+			a.BoldStyle = "both"
+		}
+		a.AllowProportional = true
+	}
+	if v.backgroundImage != t.opts.BackgroundImage {
+		v.backgroundImage = t.opts.BackgroundImage
+		v.lines = v.lines[:0]
+	}
 	preferEmoji := t.opts.PreferColorEmoji
 	t.mu.Unlock()
 	if preferEmoji != v.preferColorEmoji {
@@ -80,25 +97,67 @@ func (v *view) layout(r ui.Rect, scale float32) {
 		v.shaped.clear()
 		v.lines = v.lines[:0]
 	}
-	if fk != v.font {
+	if fk != v.font || a != v.appearance {
+		v.appearance = a
 		v.font, v.scale = fk, scale
 		for i := range v.fonts {
 			v.fonts[i] = fk.variant(i)
+			v.fonts[i].Grayscale = a.FontQuality == "grayscale"
+		}
+		if !a.AllowProportional && !fixedPitch(v.fonts[0]) {
+			for i := range v.fonts {
+				v.fonts[i].Family = "monospace, Symbols Nerd Font Mono"
+			}
 		}
 		m := v.fonts[0].Metrics()
 		adv := float32(0)
 		for _, g := range ui.Shape(asciiPrintable, v.fonts[0]) {
 			adv = max(adv, g.Advance)
 		}
-		v.cellW = max(int(math.Ceil(float64(adv*scale-0.05))), 1)
-		v.cellH = max(int(math.Ceil(float64((m.Ascent+m.Descent+m.LineGap)*fk.lineHeight*scale-0.05))), 1)
+		v.cellW = max(int(math.Ceil(float64((adv+float32(a.CharacterSpacing))*scale-0.05))), 1)
+		height := (m.Ascent + m.Descent + m.LineGap) * fk.lineHeight
+		if a.AsianSize > 0 {
+			asian := v.asianFont(0).Metrics()
+			height = max(height, asian.Ascent+asian.Descent+asian.LineGap)
+		}
+		v.cellH = max(int(math.Ceil(float64((height+float32(a.LineSpacing))*scale-0.05))), 1)
 		v.baseline = int(math.Round(float64((float32(v.cellH)-(m.Ascent+m.Descent)*scale)/2 + m.Ascent*scale)))
 		v.shaped.clear()
 		v.lines = v.lines[:0]
 	}
-	v.ox, v.oy = int(math.Round(padX*float64(scale))), int(math.Round(padY*float64(scale)))
-	w, h := int(math.Round(float64(r.W*scale)))-2*v.ox, int(math.Round(float64(r.H*scale)))-2*v.oy
+	pixels := func(n int) int { return int(math.Round(float64(n) * float64(scale))) }
+	v.ox, v.oy = pixels(a.Left), pixels(a.Top)
+	v.rightPad, v.bottomPad = pixels(a.Right), pixels(a.Bottom)
+	w, h := int(math.Round(float64(r.W*scale)))-v.ox-v.rightPad, int(math.Round(float64(r.H*scale)))-v.oy-v.bottomPad
 	v.cols, v.rows = max(w/v.cellW, 1), max(h/v.cellH, 1)
+}
+
+func fixedPitch(font ui.Font) bool {
+	width := func(text string) float32 {
+		var total float32
+		for _, g := range ui.Shape(text, font) {
+			total += g.Advance
+		}
+		return total
+	}
+	return math.Abs(float64(width("iiii")-width("WWWW"))) < 0.1
+}
+
+func (v *view) asianFont(variant int) ui.Font {
+	f := v.fonts[variant&3]
+	if a := v.appearance; a.AsianFont != "" {
+		f.Family = a.AsianFont + ", " + f.Family
+	}
+	if size := v.appearance.AsianSize; size > 0 {
+		f.Size = float32(size)
+	}
+	if weight := v.appearance.AsianWeight; weight > 0 {
+		f.Weight = weight
+		if variant&1 != 0 {
+			f.Weight = min(900, max(700, weight+300))
+		}
+	}
+	return f
 }
 
 const asciiPrintable = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
@@ -209,7 +268,13 @@ func (v *view) resolve(s vt.Style) resolved {
 		return color(def), false
 	}
 	var r resolved
+	if s.Bold && (v.appearance.BoldStyle == "both" || v.appearance.BoldStyle == "bright") && s.FG.Kind == 1 && s.FG.Index < 8 {
+		s.FG.Index += 8
+	}
 	r.fg, _ = col(s.FG, v.colors.Foreground)
+	if s.Bold && s.FG.Kind == 0 && (v.appearance.BoldStyle == "both" || v.appearance.BoldStyle == "bright") && v.theme != nil && v.theme.BoldForeground.A != 0 {
+		r.fg = v.theme.BoldForeground
+	}
 	r.bg, r.hasBg = col(s.BG, v.colors.Background)
 	r.ul, r.hasUl = col(s.UnderlineColor, v.colors.Foreground)
 	if s.Inverse {
@@ -218,7 +283,7 @@ func (v *view) resolve(s vt.Style) resolved {
 	if s.Faint {
 		r.fg = r.fg.Alpha(0.5)
 	}
-	if s.Bold {
+	if s.Bold && v.appearance.BoldStyle != "bright" && v.appearance.BoldStyle != "none" {
 		r.variant |= 1
 	}
 	if s.Italic {
@@ -317,7 +382,7 @@ func (v *view) buildRow(line *rowCache, rs *vt.RenderState, cols int, presentati
 				st.variant |= 1
 			}
 		}
-		if st.hasBg && st.bg != def.bg {
+		if st.hasBg && (v.backgroundImage != nil || st.bg != def.bg) {
 			if n := len(line.bgs); n > 0 && line.bgs[n-1].x1 == x && line.bgs[n-1].c == st.bg {
 				line.bgs[n-1].x1 = x + w
 			} else {
@@ -376,6 +441,9 @@ func (v *view) buildRow(line *rowCache, rs *vt.RenderState, cols int, presentati
 		}
 		if emoji {
 			st.variant |= 4
+		}
+		if (v.appearance.AsianFont != "" || v.appearance.AsianSize > 0 || v.appearance.AsianWeight > 0) && unicode.In(cp, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul, unicode.Bopomofo) {
+			st.variant |= 16
 		}
 		if len(run.text) > 0 && (st.variant != run.variant || st.fg != run.fg) {
 			if cp == ' ' {
@@ -494,6 +562,9 @@ func (v *view) shape(text string, variant int, scale float32) []ui.Glyph {
 		return g
 	}
 	f := v.fonts[variant&3]
+	if variant&16 != 0 {
+		f = v.asianFont(variant)
+	}
 	if variant&4 != 0 {
 		f.Family = core.ColorEmojiFamily()
 	}
@@ -528,6 +599,22 @@ func (v *view) draw(p *ui.Painter, r ui.Rect) {
 	base := float32(v.baseline) / s
 	if !v.t.opts.Transparent {
 		p.Fill(r, color(v.colors.Background), 0)
+	}
+	if img := v.backgroundImage; img != nil {
+		p.Clip(r, 0, func() {
+			switch v.appearance.ImagePosition {
+			case "fit":
+				p.Image(img, r, ui.Contain)
+			case "fill":
+				p.Image(img, r, ui.Cover)
+			case "stretch":
+				p.Image(img, r, ui.FillBox)
+			default:
+				w, h := img.Size()
+				width, height := float32(w)/s, float32(h)/s
+				p.Image(img, ui.Rect{X: r.X + (r.W-width)/2, Y: r.Y + (r.H-height)/2, W: width, H: height}, ui.FillBox)
+			}
+		})
 	}
 	v.drawGraphics(p, ox, oy, 1)
 	selection := v.theme.Selection
@@ -650,7 +737,7 @@ func (v *view) cursorRect(ox, oy, cw, ch float32) (r ui.Rect, c, text ui.Color, 
 	if !cu.InView || !cu.Visible || v.preedit != "" {
 		return
 	}
-	if v.focused && cu.Blinking && time.Since(v.blinkStart)%(2*blinkPeriod) >= blinkPeriod {
+	if period := v.cursorPeriod(); v.focused && cu.Blinking && time.Since(v.blinkStart)%(2*period) >= period {
 		return
 	}
 	c = color(v.colors.Foreground)

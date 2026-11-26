@@ -2,6 +2,8 @@ package terminal
 
 import (
 	"fmt"
+	"image"
+	stdcolor "image/color"
 	"image/png"
 	"os"
 	"runtime"
@@ -13,6 +15,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"golang.org/x/image/font/gofont/gomono"
 	"golang.org/x/image/font/gofont/gomonobold"
+	"oshell-desktop/internal/core"
 	"oshell-desktop/internal/terminal/internal/vt"
 )
 
@@ -523,6 +526,77 @@ func TestAppearance(t *testing.T) {
 	tt.Type("x")
 	if term.Text() != "" {
 		t.Error("a closed terminal has text")
+	}
+}
+
+func TestSharedTerminalAppearanceRendering(t *testing.T) {
+	loadLib(t)
+	term, err := New(Options{Conn: newPipe(), NoBlink: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer term.Close()
+	tt := ui.NewTester(func(c *ui.Context) { View(c, term).Fill().AutoFocus() }, 400, 200)
+	tt.Image()
+	v := term.v
+	beforeW, beforeH := v.cellW, v.cellH
+	style := core.DefaultTerminalAppearance()
+	style.Left, style.Right, style.Top, style.Bottom = 12, 37, 7, 14
+	style.CharacterSpacing, style.LineSpacing = 4, 3
+	style.CursorShape, style.CursorBlink, style.BlinkInterval = "bar", true, 230
+	style.FontQuality = "grayscale"
+	term.SetAppearance(&style, nil)
+	tt.Frame()
+	if v.ox != 12 || v.rightPad != 37 || v.oy != 7 || v.bottomPad != 14 || v.cellW != beforeW+4 || v.cellH != beforeH+3 {
+		t.Fatalf("margins %d/%d/%d/%d, cells %dx%d, original %dx%d", v.ox, v.rightPad, v.oy, v.bottomPad, v.cellW, v.cellH, beforeW, beforeH)
+	}
+	if col, row := v.cellAt(float32(v.ox+2*v.cellW+1)/v.scale, float32(v.oy+v.cellH+1)/v.scale); col != 2 || row != 1 {
+		t.Fatalf("cell under pointer = %d,%d", col, row)
+	}
+	if !v.fonts[0].Grayscale || v.cursor.Style != vt.CursorBar || !v.cursor.Blinking || v.cursorPeriod() != 230*time.Millisecond {
+		t.Fatal("font quality or cursor settings lost")
+	}
+	red := vt.Style{Bold: true, FG: vt.Color{Kind: 1, Index: 1}}
+	if got := v.resolve(red); got.variant != 1 || got.fg != color(v.colors.Palette[9]) {
+		t.Fatal("bold ANSI color", got)
+	}
+	rgb := vt.RGB{R: 12, G: 34, B: 56}
+	if got := v.resolve(vt.Style{Bold: true, FG: vt.Color{Kind: 2, RGB: rgb}}); got.fg != color(rgb) {
+		t.Fatal("bold rendering changed a truecolor foreground", got.fg)
+	}
+	plain := style
+	plain.BoldStyle = "none"
+	term.SetAppearance(&plain, nil)
+	tt.Frame()
+	if got := v.resolve(red); got.variant != 0 || got.fg != color(v.colors.Palette[1]) {
+		t.Fatal("plain ANSI color", got)
+	}
+	pixel := stdcolor.RGBA{R: 38, G: 85, B: 170, A: 255}
+	tile := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	for y := range 4 {
+		for x := range 4 {
+			tile.SetRGBA(x, y, pixel)
+		}
+	}
+	bitmap := ui.NewBitmap(tile)
+	wall := plain
+	wall.ImagePosition = "stretch"
+	term.SetAppearance(&wall, bitmap)
+	tt.Frame()
+	if got := tt.Image().RGBAAt(2, 2); got != pixel {
+		t.Fatalf("stretched background = %v", got)
+	}
+	centered := wall
+	centered.ImagePosition = "center"
+	term.SetAppearance(&centered, bitmap)
+	tt.Frame()
+	if rendered := tt.Image(); rendered.RGBAAt(2, 2) == pixel || rendered.RGBAAt(200, 100) != pixel {
+		t.Fatal("centered background did not preserve its size")
+	}
+	term.SetAppearance(nil, nil)
+	tt.Frame()
+	if v.ox != padX || v.cellW != beforeW || v.cellH != beforeH || v.fonts[0].Grayscale {
+		t.Fatal("original layout was not restored")
 	}
 }
 

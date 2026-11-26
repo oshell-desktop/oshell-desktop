@@ -25,7 +25,9 @@ const (
 	// Eight 1024-byte subpackets per ACK = 8 KB between real round-trips.
 	// Short enough that slow serial clients with small FIFO buffers don't
 	// overflow while waiting for the wire to catch up.
-	subpacketsPerAck = 8
+	legacyAckWindow  = 8 * subpacketSize
+	sshAckWindow     = 256 << 10
+	uploadBufferSize = 32 << 10
 
 	activityTimeout    = 60 * time.Second
 	canCancelThreshold = 5
@@ -85,7 +87,9 @@ func SetNow(f func() time.Time) func() {
 // reads and writes must be routed through the returned error only. The caller
 // is responsible for restoring any pre-attached read handlers afterwards.
 func SendBuffer(conn net.Conn, data []byte, filename string) error {
-
+	if uint64(len(data)) > uint64(^uint32(0)) {
+		return fmt.Errorf("ZMODEM: file size exceeds 32-bit offsets")
+	}
 	s := newSender(conn, data, filename)
 	err := s.run()
 	if err == nil || errors.Is(err, ErrCancelled) || errors.Is(err, ErrSkipped) {
@@ -111,14 +115,14 @@ type sender struct {
 
 	reader *reader
 
-	// Receiver-advertised byte window; zero means no explicit limit.
-	receiveWindow uint32
+	// Bound outstanding data independently of the wire subpacket size.
+	maxAckWindow, ackWindow uint32
 
 	startedAt time.Time
 }
 
 func newSender(conn net.Conn, data []byte, filename string) *sender {
-	s := &sender{conn: conn, data: data, source: bytes.NewReader(data), size: int64(len(data)), filename: filename, startedAt: nowFn()}
+	s := &sender{conn: conn, data: data, source: bytes.NewReader(data), size: int64(len(data)), filename: filename, startedAt: nowFn(), maxAckWindow: legacyAckWindow}
 	s.reader = newReader(conn)
 	return s
 }
@@ -173,10 +177,21 @@ func (s *sender) run() error {
 func (s *sender) waitForZrinit() error {
 	_, count, err := s.awaitOneOfWithCount(FrameZRINIT)
 	if err == nil {
-		s.codec.allControls = s.codec.allControls || byte(count>>24)&EscCtl != 0
-		s.receiveWindow = count & 0xffff
+		s.applyReceiverInit(count)
 	}
 	return err
+}
+
+func (s *sender) applyReceiverInit(count uint32) {
+	flags := byte(count >> 24)
+	s.codec.allControls = s.codec.allControls || flags&EscCtl != 0
+	s.ackWindow = legacyAckWindow
+	if flags&(CanFDX|CanOVIO) == CanFDX|CanOVIO {
+		s.ackWindow = s.maxAckWindow
+	}
+	if advertised := count & 0xffff; advertised != 0 {
+		s.ackWindow = min(s.ackWindow, advertised)
+	}
 }
 
 func (s *sender) waitForZfin() error {
@@ -325,7 +340,7 @@ func (s *sender) buildZfile() []byte {
 }
 
 // streamData emits ZDATA bursts from `startOffset` to end-of-file, flushing
-// every `subpacketsPerAck` subpackets with a ZCRCW that waits for a ZACK.
+// each negotiated window with a ZCRCW that waits for a ZACK.
 // On ZRPOS (receiver-requested retransmit) or ZNAK (bad header), the stream
 // rewinds and resends from the requested offset.
 func (s *sender) streamData(startOffset uint32) error {
@@ -333,49 +348,50 @@ func (s *sender) streamData(startOffset uint32) error {
 		return fmt.Errorf("ZMODEM: resume offset %d exceeds file size %d", startOffset, s.size)
 	}
 	offset := startOffset
-	burstLimit := uint32(subpacketSize * subpacketsPerAck)
-	if s.receiveWindow != 0 && s.receiveWindow < burstLimit {
-		burstLimit = s.receiveWindow
+	size := uint32(s.size)
+	if offset == size {
+		return nil
 	}
-	for int(offset) < int(s.size) {
+	block := make([]byte, min(uint32(uploadBufferSize), s.ackWindow, size))
+	wire := make([]byte, 0, 2*len(block)+256)
+	for offset < size {
 		burstStart := offset
-		// Assemble one ZDATA burst (up to subpacketsPerAck subpackets or EOF).
-		frame := s.codec.header16(FrameZDATA, burstStart)
-
-		for i := 0; i < subpacketsPerAck; i++ {
-			remaining := int(s.size) - int(offset)
-			if remaining <= 0 {
-				break
+		burstEnd := offset + min(s.ackWindow, size-offset)
+		wire = append(wire[:0], s.codec.header16(FrameZDATA, offset)...)
+		for offset < burstEnd {
+			if s.reader.cancelled.Load() {
+				go s.reader.emitCancelEcho()
+				return ErrCancelled
 			}
-			size := min(remaining, subpacketSize, int(burstLimit-(offset-burstStart)))
-			chunk := make([]byte, size)
-			n, e := s.source.ReadAt(chunk, int64(offset))
-			if n != size {
+			raw := block[:min(uint32(len(block)), burstEnd-offset)]
+			n, err := s.source.ReadAt(raw, int64(offset))
+			if err != nil && err != io.EOF {
+				return err
+			}
+			if n != len(raw) {
 				return io.ErrUnexpectedEOF
 			}
-			if e != nil && e != io.EOF {
-				return e
+			for len(raw) > 0 {
+				chunk := raw[:min(len(raw), subpacketSize)]
+				raw = raw[len(chunk):]
+				offset += uint32(len(chunk))
+				kind := byte(ZCRCG)
+				if offset == burstEnd {
+					kind = ZCRCW
+				}
+				wire = s.codec.escape(wire, chunk)
+				wire = append(wire, ZDLE, kind)
+				crc := crc16Byte(CRC16(chunk), kind)
+				wire = s.codec.escape(wire, []byte{byte(crc >> 8), byte(crc)})
 			}
-
-			kind := byte(ZCRCG)
-			last := int(offset)+len(chunk) == int(s.size) || i == subpacketsPerAck-1 || offset-burstStart+uint32(len(chunk)) == burstLimit
-			if last {
-				kind = ZCRCW
+			n, err = s.conn.Write(wire)
+			if err != nil {
+				return err
 			}
-			frame = s.codec.escape(frame, chunk)
-			frame = append(frame, ZDLE, kind)
-			crcInput := make([]byte, len(chunk)+1)
-			copy(crcInput, chunk)
-			crcInput[len(chunk)] = kind
-			crc := CRC16(crcInput)
-			frame = s.codec.escape(frame, []byte{byte(crc >> 8), byte(crc)})
-			offset += uint32(len(chunk))
-			if last {
-				break
+			if n != len(wire) {
+				return io.ErrShortWrite
 			}
-		}
-		if _, err := s.conn.Write(frame); err != nil {
-			return err
+			wire = wire[:0]
 		}
 		// A ZCRCW terminator always requests a response from the receiver:
 		// ZACK on success, ZRPOS(offset) when a subpacket CRC failed, or
@@ -647,6 +663,9 @@ func (s *sender) sendCurrentFile(finalizeOnSkip bool) error {
 
 	for {
 		// The peer may reject ZEOF and request a final retransmission.
+		if int64(offset) <= s.size && s.onProgress != nil {
+			s.onProgress(int64(offset), s.size)
+		}
 		if err := s.streamData(offset); err != nil {
 			if isPeerRejection(err) && finalizeOnSkip {
 				s.gracefulClose()
@@ -662,6 +681,7 @@ func (s *sender) sendCurrentFile(finalizeOnSkip bool) error {
 		}
 		switch frame {
 		case FrameZRINIT:
+			s.applyReceiverInit(count)
 			return nil
 		case FrameZRPOS:
 			offset = count

@@ -7,7 +7,7 @@ import (
 )
 
 func TestManagerNewDirectoryContextCreatesSession(t *testing.T) {
-	for _, kind := range []string{"SSH", "SFTP", "FTP"} {
+	for _, kind := range []string{"SSH", "堡垒机 SSH", "SFTP", "FTP"} {
 		t.Run(kind, func(t *testing.T) {
 			store := &core.Store{Dir: t.TempDir()}
 			cfg := core.DefaultConfig()
@@ -28,13 +28,20 @@ func TestManagerNewDirectoryContextCreatesSession(t *testing.T) {
 			tt := ui.NewTester(a.managerView, 900, 580)
 			tt.RightClickAt(450, 300)
 			t.Log(tt.Menu())
-			if err := tt.ChooseMenuItem("新建 " + kind + " 会话…"); err != nil {
+			menu := "新建 " + kind + " 会话…"
+			if kind == "堡垒机 SSH" {
+				menu = "新建堡垒机 SSH 会话…"
+			}
+			if err := tt.ChooseMenuItem(menu); err != nil {
 				t.Fatal(err)
 			}
 			if !a.editing || a.draft.Group != "新目录" {
 				t.Fatalf("editor=%v group=%q", a.editing, a.draft.Group)
 			}
 			main.Frame()
+			if kind == "堡垒机 SSH" && (!main.HasText("快速登录字符串") || !main.HasText("服务器登录账号") || !main.HasText("服务器登录密码")) {
+				t.Fatal("missing bastion session fields")
+			}
 			if !a.editing || !main.HasText("会话属性") {
 				t.Fatalf("editor invisible after main frame: editing=%v texts=%v", a.editing, main.Texts())
 			}

@@ -53,6 +53,7 @@ func SendFiles(conn net.Conn, files []SendFile, progress func(FileProgress)) (re
 		return fmt.Errorf("未选择上传文件")
 	}
 	s := newSender(conn, nil, "")
+	s.maxAckWindow = sshAckWindow
 	// Uploads can pass through an interactive ssh inside the remote shell.
 	// ZDLE-encode LF as well as CR so file bytes never become line-start
 	// ssh escape commands (for example "~." or "~" followed by Ctrl-Z).

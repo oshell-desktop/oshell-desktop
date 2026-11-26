@@ -62,13 +62,20 @@ func (a *App) configureTerminalTransferWithPicker(p *pane, opts *terminal.Option
 		}
 		postPane(p, func(*App) { p.transfer.status = "ZMODEM · 正在协商传输" })
 		started, last := time.Now(), time.Time{}
+		fileIndex := -1
+		var startOffset, lastOffset int64
 		progress := func(value zmodem.FileProgress) {
 			now := time.Now()
+			if upload && (fileIndex != value.Index || value.Bytes < lastOffset) {
+				fileIndex, startOffset = value.Index, value.Bytes
+				started, last = now, time.Time{}
+			}
+			lastOffset = value.Bytes
 			if now.Sub(last) < 100*time.Millisecond && value.Bytes != value.Total {
 				return
 			}
 			last = now
-			speed := int64(float64(value.Bytes) / max(now.Sub(started).Seconds(), 0.1))
+			speed := int64(float64(value.Bytes-startOffset) / max(now.Sub(started).Seconds(), 0.1))
 			status := fmt.Sprintf("ZMODEM · %s · %s / %s · %s/s", value.Name, bytesLabel(value.Bytes), bytesLabel(value.Total), bytesLabel(speed))
 			postPane(p, func(*App) {
 				p.transfer.status = status

@@ -168,6 +168,11 @@ func TestSenderRetriesWhenReceiverRejectsEOF(t *testing.T) {
 	remote.Write(BuildZhexHeader(FrameZRPOS, 0))
 	for attempt := 0; attempt < 2; attempt++ {
 		header(FrameZDATA)
+		if attempt == 0 {
+			if initial := <-progress; initial.Bytes != 0 {
+				t.Fatalf("invalid starting offset: %+v", initial)
+			}
+		}
 		if data, _, err := r.readSubpacket(); err != nil || string(data) != "abc" {
 			t.Fatalf("retry data %q: %v", data, err)
 		}

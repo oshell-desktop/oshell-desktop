@@ -17,7 +17,7 @@ import (
 func main() {
 	// SsoTool deletes its temporary session five seconds after starting us.
 	// Capture it before diagnostics, updates or the native UI can delay the read.
-	if core.IsSSOToolLaunch(os.Args[1:]) {
+	if core.IsSSOToolLaunch(os.Args[1:]) || isRegisteredClientLaunch(os.Args[1:]) {
 		if err := forwardExternalLaunchIfRequested(); err != nil {
 			showStartupError(err)
 			os.Exit(1)

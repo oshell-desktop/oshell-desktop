@@ -91,6 +91,7 @@ func runDesktop() error {
 			}
 		}
 		hub.attach(initial)
+		initial.openStartupPrompt()
 		hub.installMenu()
 		hub.installDockMenu()
 		hub.startExternalLaunch()
@@ -213,7 +214,14 @@ func (h *applicationHub) save(source *App) bool {
 	return true
 }
 func (h *applicationHub) newWindow() *App {
-	return h.newWindowAt(nil)
+	a := h.newWindowAt(nil)
+	a.openStartupPrompt()
+	return a
+}
+func (a *App) openStartupPrompt() {
+	if a.localUI.StartLocalPrompt && !a.workspaceLocked() && len(a.tabs) == 0 {
+		a.newBlank()
+	}
 }
 func (h *applicationHub) newWindowAt(position *tabWindowPosition) *App {
 	a := newApp(h.store, h.config.Clone())

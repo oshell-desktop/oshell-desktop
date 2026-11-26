@@ -44,7 +44,7 @@ func (a *App) sessionEditorBlocked() bool {
 		a.status = "错误：请先解锁再编辑会话"
 		return true
 	}
-	if a.configurationBusy() || a.features.sessionPassword.busy {
+	if a.configurationBusy() && !a.syncCommitting() || a.features.sessionPassword.busy {
 		a.status = "错误：配置正在保存或同步，完成后可编辑会话"
 		return true
 	}
@@ -83,8 +83,8 @@ func (a *App) restoreManagerReturn(saved *core.Profile) {
 	selectRows := func() {
 		for i, row := range a.managerRows() {
 			for _, id := range ids {
-				if row.id == id {
-					a.managerSelection.Add(id)
+				if row.id == id || row.linkID == "" && row.profile.MatchesUUID(id) || row.linkID != "" && strings.EqualFold(row.id, id) {
+					a.managerSelection.Add(row.id)
 					if a.managerRow < 0 {
 						a.managerRow = i
 						if !row.folder {
@@ -100,7 +100,7 @@ func (a *App) restoreManagerReturn(saved *core.Profile) {
 		a.query = ""
 		a.managerProtocol = ""
 		a.managerLastProtocol = ""
-		if state.target == saved.ID {
+		if strings.EqualFold(state.target, saved.ID) {
 			a.managerGroup = saved.Group
 			a.managerAll = false
 		}
@@ -108,7 +108,7 @@ func (a *App) restoreManagerReturn(saved *core.Profile) {
 	}
 	if a.managerRow < 0 && strings.HasPrefix(state.target, "link:") {
 		for _, link := range a.config.Links {
-			if "link:"+link.ID == state.target {
+			if strings.EqualFold("link:"+link.ID, state.target) {
 				a.managerGroup = "Links"
 				if link.Folder != "" {
 					a.managerGroup += "/" + link.Folder

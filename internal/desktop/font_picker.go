@@ -51,7 +51,7 @@ func (a *App) fontPicker(c *ui.Context) {
 		seen := map[string]bool{}
 		for _, font := range fonts {
 			key := strings.ToLower(font.Name)
-			if seen[key] {
+			if seen[key] || (s.TerminalAppearance != nil && !s.TerminalAppearance.AllowProportional && !font.Monospaced) {
 				continue
 			}
 			seen[key] = true

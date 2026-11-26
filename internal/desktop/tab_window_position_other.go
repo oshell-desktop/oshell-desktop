@@ -4,6 +4,9 @@ package desktop
 
 import "github.com/egoist/mygo"
 
+// Non-Windows hosts deliver drops through the workspace's content targets.
+func (p tabWindowPosition) windowAtRelease([]*App) *App { return nil }
+
 func (p tabWindowPosition) within(window *mygo.Window) bool {
 	r := window.Bounds()
 	return p.x >= r.X && p.x < r.X+r.Width && p.y >= r.Y && p.y < r.Y+r.Height

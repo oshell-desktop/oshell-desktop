@@ -110,6 +110,8 @@ func (a *App) noteHostInput(p *pane, ev ui.InputEvent) {
 		return
 	}
 	if ev.Kind == ui.InputKeyDown || ev.Kind == ui.InputText {
+		p.offerTargetLogin = false
+		p.awaitTargetRetry = false
 		if p.hostProbe.work != nil {
 			p.hostProbe.work.Stop()
 			p.hostProbe.work = nil

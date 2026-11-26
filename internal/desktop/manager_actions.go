@@ -91,6 +91,7 @@ func (a *App) copyManagerProfiles(originals []core.Profile, destination *string,
 	candidate := a.config.Clone()
 	fromSidebar := a.sidebar.context != nil
 	titleModes := map[string]string{}
+	plainSSH := a.localUI.PlainSSH // Local preferences are replaced on the UI thread.
 	for _, p := range originals {
 		titleModes[p.ID] = a.sessionTitleMode(p)
 	}
@@ -104,6 +105,7 @@ func (a *App) copyManagerProfiles(originals []core.Profile, destination *string,
 		}()
 		copied := map[string]bool{}
 		copiedModes := map[string]string{}
+		var copiedPlainSSH []string
 		var err error
 		copyCredential := func(source, target core.Profile) error {
 			update, exists, err := vault.PrepareCredentialCopy(source, target)
@@ -130,6 +132,12 @@ func (a *App) copyManagerProfiles(originals []core.Profile, destination *string,
 			if err = copyCredential(source, duplicate); err != nil {
 				break
 			}
+			if sourceTarget, ok := source.BastionTarget(); ok && !plainSSH[strings.ToLower(source.ID)] {
+				copyTarget, _ := duplicate.BastionTarget()
+				if err = copyCredential(sourceTarget.Credential, copyTarget.Credential); err != nil {
+					break
+				}
+			}
 			if source.ProxyID == "" && source.Proxy.Kind != "" && source.Proxy.Kind != "none" {
 				if err = copyCredential(core.ProxyCredentialProfile(source.Proxy), core.ProxyCredentialProfile(duplicate.Proxy)); err != nil {
 					break
@@ -138,6 +146,9 @@ func (a *App) copyManagerProfiles(originals []core.Profile, destination *string,
 			candidate.Profiles = append(candidate.Profiles, duplicate)
 			copied[duplicate.ID] = true
 			copiedModes[strings.ToLower(duplicate.ID)] = titleModes[source.ID]
+			if plainSSH[strings.ToLower(source.ID)] {
+				copiedPlainSSH = append(copiedPlainSSH, duplicate.ID)
+			}
 		}
 		if err == nil {
 			err = a.store.CommitCredentialEdit(context.Background(), candidate, vault, updates, revision, vaultRevision)
@@ -161,6 +172,9 @@ func (a *App) copyManagerProfiles(originals []core.Profile, destination *string,
 			}
 			for id, mode := range copiedModes {
 				local.TitleModes[id] = mode
+			}
+			for _, id := range copiedPlainSSH {
+				local.setPlainSSH(id, true)
 			}
 			savedLocal := a.saveLocalPreferences(local)
 			a.markSharedSyncChanged()

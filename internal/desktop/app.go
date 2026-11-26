@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -18,6 +19,8 @@ import (
 )
 
 type pane struct {
+	offerTargetLogin       bool
+	awaitTargetRetry       bool
 	reconnectHistory       *terminal.ReconnectHistory
 	agent                  *core.AgentSession
 	hostKeyMismatch        *core.HostKeyMismatch
@@ -72,7 +75,10 @@ type sessionOpenOptions struct {
 	localDirectory string
 }
 type App struct {
+	backgroundFile                                  string
+	backgroundBitmap                                *ui.Bitmap
 	filePresentation                                filePresentationState
+	clientAliases                                   clientAliasSettings
 	mcp                                             mcpPanelState
 	agent                                           *core.AgentCoordinator
 	hostKeyCleanup                                  *pane
@@ -85,6 +91,7 @@ type App struct {
 	workspaceAuthorized                             bool
 	idleMemory                                      idleMemoryReclaimer
 	imagePaste                                      *imagePasteState
+	bastionPassword                                 *bastionPasswordDialog
 	closeAfterTabMove                               bool
 	tabNativeDrag                                   bool
 	localUIOriginal                                 localPreferences
@@ -275,6 +282,9 @@ func (a *App) dispose(p *pane) {
 		return
 	}
 	p.closed = true
+	if d := a.bastionPassword; d != nil && d.pane == p {
+		a.closeBastionPassword()
+	}
 	diagnostics.Event("pane_dispose", map[string]any{"pane": p.id, "transfer_active": p.transfer.active, "stack": diagnostics.Stack()})
 	p.search.matches = nil
 	p.search.generation++
@@ -517,8 +527,13 @@ func (a *App) requestSession(p core.Profile, options sessionOpenOptions, termina
 	probeKeys := a.vault == nil || !a.vault.HasStoredCredential(p.ID)
 	go func() {
 		resolved, e := core.ResolveSSH(ctx, p)
+		// A new direct SSH connection can wait for the server's actual challenge.
+		// Keep the credential form for proxy fields and before replacing a live pane.
+		rp := resolved.Profile
+		promptOnDemand := options.split != -1 && (rp.Kind == "ssh" || rp.Kind == "sftp") &&
+			rp.JumpHost == "" && (rp.Proxy.Kind == "" || rp.Proxy.Kind == "none") && len(rp.RuntimeProxyRoute) == 0
 		keyCandidate := false
-		if e == nil && probeKeys {
+		if e == nil && !promptOnDemand && probeKeys {
 			keyCandidate = core.SSHKeyAuthenticationCandidate(ctx, resolved.Profile)
 		}
 		a.post(func() {
@@ -532,8 +547,9 @@ func (a *App) requestSession(p core.Profile, options sessionOpenOptions, termina
 			}
 			identity := resolved.Profile.Identity()
 			a.features.savedIdentity = &identity
+			var saved string
 			if a.vault != nil {
-				saved, e := a.vault.GetFor(p, identity)
+				saved, e = a.vault.GetFor(p, identity)
 				if e == core.ErrVaultLocked {
 					a.authOpen = false
 					a.features.vaultOpen = true
@@ -545,29 +561,15 @@ func (a *App) requestSession(p core.Profile, options sessionOpenOptions, termina
 					a.status = "密码读取失败：" + e.Error()
 					return
 				}
-				if saved != "" {
-					a.authOpen = false
-					a.password = ""
-					a.authPasswordRevealed = false
-					a.keyPassword = ""
-					a.features.savedPassword = ""
-					a.features.savedIdentity = nil
-					a.openConnection(p, core.Credentials{Password: saved, ExpectedIdentity: &identity, OpenTerminal: asTerminal}, options, nil)
-					a.nextAuthentication()
-					return
-				}
-				a.password = saved
-				a.features.savedPassword = saved
-				a.features.savedIdentity = &identity
 			}
-			if keyCandidate && (a.vault == nil || !a.vault.HasStoredCredential(p.ID)) {
+			if saved != "" || (promptOnDemand || keyCandidate) && (a.vault == nil || !a.vault.HasStoredCredential(p.ID)) {
 				a.authOpen = false
 				a.password = ""
 				a.authPasswordRevealed = false
 				a.keyPassword = ""
 				a.features.savedPassword = ""
 				a.features.savedIdentity = nil
-				a.openConnection(p, core.Credentials{ExpectedIdentity: &identity, OpenTerminal: asTerminal}, options, nil)
+				a.openConnection(p, core.Credentials{Password: saved, ExpectedIdentity: &identity, OpenTerminal: asTerminal}, options, nil)
 				a.nextAuthentication()
 			}
 		})
@@ -598,6 +600,7 @@ func (a *App) open(profile core.Profile, cred core.Credentials, split int) {
 	a.openConnection(profile, cred, sessionOpenOptions{split: split}, nil)
 }
 func (a *App) openConnection(profile core.Profile, cred core.Credentials, options sessionOpenOptions, source *core.Connection, ftpSources ...*core.FTPSession) {
+	cred.PlainSSH = a.localUI.PlainSSH[strings.ToLower(profile.ID)]
 	if a.passwordLocked() || a.stopped.Load() || a.hub != nil && a.hub.quitting {
 		return
 	}
@@ -733,6 +736,7 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, option
 		return owner.post(fn)
 	}
 	settings := a.config.Settings
+	background := a.terminalBackground()
 	credentialVault := a.vault
 	vaultRevision := ""
 	if credentialVault != nil {
@@ -939,11 +943,17 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, option
 			agentSession = a.agentCoordinator().Register(p.id, profile.Name, func() { post(func() {}) })
 		}
 		opts := terminal.Options{Dir: options.localDirectory, Agent: agentSession, PreferColorEmoji: settings.PreferColorEmoji, ManagedClipboardBindings: true, AmbiguousCharactersAreWide: settings.AmbiguousCharactersAreWide, Font: terminal.Font{Family: terminalFamily(settings.FontFamily), Size: float32(settings.FontSize)}, Scrollback: settings.ScrollbackMB << 20, Theme: terminalTheme(settings.Scheme()), NoBlink: true}
+		opts.Appearance, opts.BackgroundImage = settings.TerminalAppearance, background
 
 		if conn != nil {
 			opts.Conn = conn
+			if target, ok := profile.BastionTarget(); ok && source == nil && !cred.ExternalLaunch && !cred.PlainSSH {
+				opts.InitialTargetAccount = target.Account
+			}
 		} else if profile.Kind == "blank" {
-			console := terminal.NewToolsConsole()
+			console := terminal.NewLocalConsole(func(profile core.Profile) {
+				postPane(p, func(owner *App) { owner.request(profile, 0) })
+			})
 			opts.Conn = console
 			opts.ManagedInputAllowed = console.ManagedInputAllowed
 		}
@@ -969,6 +979,7 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, option
 		opts.CustomWordSelection, opts.WordSeparators, opts.ShiftWhitespace = true, a.localUI.WordSeparators, a.localUI.ShiftWhitespace
 		opts.KeyAliases = terminalKeyAliases(settings.KeyboardShortcuts)
 		opts.RightClickPaste = settings.Input.RightClickPaste
+		opts.MiddleClickPaste = a.localUI.MiddleClickPaste
 		opts.TrimCopyLeading = settings.Input.TrimLeading
 		opts.TrimCopyTrailing = settings.Input.TrimTrailing
 		opts.OnUserInput = func(ev ui.InputEvent) {
@@ -1101,6 +1112,7 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, option
 				return
 			}
 			p.term = term
+			term.SetAppearance(a.config.Settings.TerminalAppearance, a.terminalBackground())
 			p.agent = agentSession
 			if agentSession != nil {
 				agentSession.Bind(term)
@@ -1108,6 +1120,8 @@ func (a *App) openConnection(profile core.Profile, cred core.Credentials, option
 			a.showHostname(p)
 			p.conn = conn
 			p.status = "已连接"
+			_, boundTarget := a.bastionPasswordTarget(p)
+			p.offerTargetLogin = boundTarget && opts.InitialTargetAccount != ""
 			p.focus.Focus()
 		}) {
 			term.Close()

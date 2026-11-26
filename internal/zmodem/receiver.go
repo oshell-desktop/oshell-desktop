@@ -152,8 +152,7 @@ func (r *receiver) run() (ReceiveResult, error) {
 // some vintage receivers treat 0 as "I can buffer almost nothing — ACK every
 // subpacket", which collapses real-world throughput to a handful of bytes
 // per second on a high-latency link (xprzmodem.library on Amiga is the
-// motivating case). 8192 matches our own sender's subpacketsPerAck*subpacketSize
-// burst size and keeps modern senders (lrzsz) streaming.
+// motivating case). Advertise the same finite window used by legacy senders.
 const zrinitBufsize = 8192
 
 func (r *receiver) sendZRINIT() error {

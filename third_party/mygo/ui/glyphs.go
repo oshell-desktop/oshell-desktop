@@ -22,6 +22,8 @@ type Font struct {
 	// strongest, whatever the color and the user's setting. It changes
 	// nothing elsewhere.
 	Thicken bool
+	// Grayscale disables subpixel color filtering for this font.
+	Grayscale bool
 }
 
 func (f Font) style() text.Style {
@@ -53,9 +55,10 @@ type Glyph struct {
 	// cell of a grid.
 	X, Advance float32
 
-	font  *text.Font
-	id    uint32
-	thick bool
+	font      *text.Font
+	id        uint32
+	thick     bool
+	grayscale bool
 }
 
 // Shape shapes s in font f, on one line, for Painter.Glyphs: the
@@ -68,7 +71,7 @@ func Shape(s string, f Font) []Glyph {
 	var out []Glyph
 	for _, line := range l.Lines {
 		for _, g := range line.Glyphs {
-			out = append(out, Glyph{Cluster: g.Cluster, Runes: g.Runes, X: line.X + g.X, Advance: g.Advance, font: g.Font, id: g.ID, thick: f.Thicken})
+			out = append(out, Glyph{Cluster: g.Cluster, Runes: g.Runes, X: line.X + g.X, Advance: g.Advance, font: g.Font, id: g.ID, thick: f.Thicken, grayscale: f.Grayscale})
 		}
 	}
 	return out
@@ -112,7 +115,7 @@ func (p *Painter) GlyphsScaled(glyphs []Glyph, x, y, scaleX, scaleY float32, c C
 		if g.thick {
 			shade = text.Thick
 		}
-		gi := sys.Glyph(g.font, g.id, s*factor, pen, shade, p.opaque && scaleX == factor)
+		gi := sys.Glyph(g.font, g.id, s*factor, pen, shade, !g.grayscale && p.opaque && scaleX == factor)
 		if !gi.OK {
 			continue
 		}

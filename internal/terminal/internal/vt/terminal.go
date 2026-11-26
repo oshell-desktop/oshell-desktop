@@ -459,6 +459,15 @@ func (t *Terminal) CursorLine() string {
 	text, _ := t.rowText(y, true)
 	return strings.TrimRight(string(text), " ")
 }
+
+func (t *Terminal) PreviousCursorLine() string {
+	_, y := t.Cursor()
+	if y < 1 {
+		return ""
+	}
+	text, _ := t.rowText(y-1, true)
+	return strings.TrimSpace(string(text))
+}
 func (t *Terminal) rowText(y int, screen bool) (text []rune, cols []int) {
 	c, _ := t.Size()
 	var buf [16]uint32

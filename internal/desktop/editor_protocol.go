@@ -1,6 +1,57 @@
 package desktop
 
-import "strconv"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+	"unicode"
+
+	"oshell-desktop/internal/core"
+)
+
+const bastionSSH = "bastion-ssh"
+
+func (a *App) sessionType(p core.Profile) string {
+	if p.Kind == "ssh" && !a.localUI.PlainSSH[strings.ToLower(p.ID)] {
+		if _, ok := p.BastionTarget(); ok {
+			return bastionSSH
+		}
+	}
+	return p.Kind
+}
+
+// The editor presents a routed SSH session as a distinct type. Shared profiles
+// and SSH resolution both use the same fully composed SSH username.
+func (a *App) editorLogin() (string, error) {
+	login := strings.TrimSpace(a.draft.Username)
+	if a.features.editorChoice != bastionSSH {
+		return login, nil
+	}
+	f := &a.features.sessionPassword
+	_, embedded, ok := core.SplitBastionLogin(login)
+	if login != f.lastQuickLogin {
+		_, previous, _ := core.SplitBastionLogin(f.lastQuickLogin)
+		if embedded != "" || previous != "" {
+			f.serverAccount = embedded
+		}
+		f.lastQuickLogin = login
+	}
+	if !ok {
+		return "", fmt.Errorf("快速登录字符串格式应为 堡垒机账号#编码#资产#SSH#服务器账号，最后的账号也可单独填写")
+	}
+	account := strings.TrimSpace(f.serverAccount)
+	if strings.Contains(account, "#") || strings.ContainsFunc(account, unicode.IsControl) {
+		return "", fmt.Errorf("请填写有效的服务器登录账号")
+	}
+	if embedded != account {
+		a.draft.Username = strings.TrimSuffix(login, embedded) + account
+		f.lastQuickLogin = a.draft.Username
+	}
+	if account == "" {
+		return "", fmt.Errorf("请填写服务器登录账号")
+	}
+	return f.lastQuickLogin, nil
+}
 
 func editorProtocolPages(kind string) ([]string, []int) {
 	if kind == "ftp" {

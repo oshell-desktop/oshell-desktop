@@ -1,0 +1,29 @@
+{
+  "id": "custom-xshell-ir_black",
+  "name": "IR_Black",
+  "background": "#000000",
+  "foreground": "#F1F1F1",
+  "cursor": "#00FF00",
+  "cursorText": "#000000",
+  "autoCursor": false,
+  "selection": "#405A78",
+  "selectionText": "#FFFFFF",
+  "ansi": [
+    "#7B7B7B",
+    "#FCB6B0",
+    "#CFFFAB",
+    "#FFFFCC",
+    "#B5DCFF",
+    "#FB9CFE",
+    "#E0E0FE",
+    "#FFFFFF",
+    "#4F4F4F",
+    "#FA6C60",
+    "#A8FF60",
+    "#FFFEB7",
+    "#96CAFE",
+    "#FA73FD",
+    "#C6C5FE",
+    "#EFEDEF"
+  ]
+}

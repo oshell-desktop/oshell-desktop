@@ -11,6 +11,28 @@ var tabPositionUser32 = syscall.NewLazyDLL("user32.dll")
 var tabGetCursorPos = tabPositionUser32.NewProc("GetCursorPos")
 var tabSetWindowPos = tabPositionUser32.NewProc("SetWindowPos")
 var tabGetWindowRect = tabPositionUser32.NewProc("GetWindowRect")
+var tabWindowFromPoint = tabPositionUser32.NewProc("WindowFromPoint")
+var tabGetAncestor = tabPositionUser32.NewProc("GetAncestor")
+var tabIsWindowEnabled = tabPositionUser32.NewProc("IsWindowEnabled")
+
+func (p tabWindowPosition) windowAtRelease(workspaces []*App) *App {
+	point := uint64(uint32(p.x)) | uint64(uint32(p.y))<<32
+	child, _, _ := tabWindowFromPoint.Call(uintptr(point))
+	const gaRoot = 2 // Do not follow owners of dialogs or other auxiliary windows.
+	root, _, _ := tabGetAncestor.Call(child, gaRoot)
+	if root == 0 {
+		return nil
+	}
+	if enabled, _, _ := tabIsWindowEnabled.Call(root); enabled == 0 {
+		return nil
+	}
+	for _, dest := range workspaces {
+		if dest.win != nil && dest.win.NativeHandle() == root && dest.win.IsVisible() && !dest.win.IsMinimized() {
+			return dest
+		}
+	}
+	return nil
+}
 
 func (p tabWindowPosition) within(window *mygo.Window) bool {
 	var rect struct{ left, top, right, bottom int32 }

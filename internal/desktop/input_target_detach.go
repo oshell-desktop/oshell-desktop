@@ -3,6 +3,9 @@ package desktop
 // Moving a terminal never carries its old window's input selections with it.
 // Invalidate previews as well, so moving it back cannot revive an old dispatch.
 func (a *App) detachInputTarget(p *pane) {
+	if d := a.bastionPassword; d != nil && d.pane == p {
+		a.closeBastionPassword()
+	}
 	delete(a.features.syncTargets, p.id)
 	delete(a.features.syncSelectionDraft, p.id)
 	o := &a.features.operators

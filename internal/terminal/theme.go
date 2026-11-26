@@ -10,6 +10,8 @@ import (
 // themes.
 type Theme struct {
 	Foreground, Background ui.Color
+	BoldForeground         ui.Color
+	BrightBold             bool
 	// Cursor colors the cursor: the foreground when zero. CursorText
 	// colors the text under a block cursor: the background when zero.
 	Cursor, CursorText ui.Color

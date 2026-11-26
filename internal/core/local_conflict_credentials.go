@@ -162,18 +162,26 @@ func (s *Store) PrepareLocalResolution(ctx context.Context, local Config, v *Vau
 	ok = true
 	return plan, nil
 }
+func (v *Vault) credentialVersionLocked(profile Profile) string {
+	entry, ok := v.data.Entries[profile.ID]
+	if !ok || entry.Identity != credentialIdentity(profile) {
+		return ""
+	}
+	raw, _ := json.Marshal(entry)
+	return configurationDigest(raw)
+}
+
+// CredentialVersion lets editors detect a replacement without decrypting the password.
+func (v *Vault) CredentialVersion(profile Profile) string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.credentialVersionLocked(profile)
+}
+
 func credentialConfigUnits(cfg Config, v *Vault) (map[string]json.RawMessage, []string, error) {
 	units, order, err := localConfigUnits(cfg)
 	if err != nil {
 		return nil, nil, err
-	}
-	fingerprint := func(profile Profile) string {
-		entry, ok := v.data.Entries[profile.ID]
-		if !ok || entry.Identity != credentialIdentity(profile) {
-			return ""
-		}
-		raw, _ := json.Marshal(entry)
-		return configurationDigest(raw)
 	}
 	inject := func(key, value string) {
 		var unit map[string]json.RawMessage
@@ -182,14 +190,19 @@ func credentialConfigUnits(cfg Config, v *Vault) (map[string]json.RawMessage, []
 		units[key], _ = json.Marshal(unit)
 	}
 	for _, p := range cfg.Profiles {
-		signature := fingerprint(p)
+		signature := v.credentialVersionLocked(p)
 		if p.ProxyID == "" && p.Proxy.Kind != "" && p.Proxy.Kind != "none" {
-			signature += "/" + fingerprint(ProxyCredentialProfile(p.Proxy))
+			signature += "/" + v.credentialVersionLocked(ProxyCredentialProfile(p.Proxy))
+		}
+		if target, ok := p.BastionTarget(); ok {
+			if version := v.credentialVersionLocked(target.Credential); version != "" {
+				signature += "/target:" + version
+			}
 		}
 		inject("profile:"+strings.ToUpper(p.ID), signature)
 	}
 	for _, p := range cfg.Proxies {
-		inject("proxy:"+strings.ToUpper(p.ID()), fingerprint(ProxyCredentialProfile(p.Settings)))
+		inject("proxy:"+strings.ToUpper(p.ID()), v.credentialVersionLocked(ProxyCredentialProfile(p.Settings)))
 	}
 	return units, order, nil
 }
@@ -239,6 +252,11 @@ func (p *LocalResolutionPlan) resolveCredentialsLocked(choices map[string]Shared
 		key := "profile:" + strings.ToUpper(profile.ID)
 		if err = appendCredential(profile, key); err != nil {
 			return Config{}, nil, err
+		}
+		if target, ok := profile.BastionTarget(); ok {
+			if err = appendCredential(target.Credential, key); err != nil {
+				return Config{}, nil, err
+			}
 		}
 		if profile.ProxyID == "" && profile.Proxy.Kind != "" && profile.Proxy.Kind != "none" {
 			if err = appendCredential(ProxyCredentialProfile(profile.Proxy), key); err != nil {

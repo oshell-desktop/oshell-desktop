@@ -83,7 +83,7 @@ func (a *App) standaloneRsyncDialog(c *ui.Context) {
 			return client.Download(ctx, options.Remote, options.Local, true, a.transferProgress(p, ctx))
 		})
 	}
-	desktopModal(c.Key("standalone-rsync"), &d.open, func() {
+	terminalModal(c.Key("standalone-rsync"), &d.open, func() {
 		dialogBody(c, 560).Gap(10).Children(func() {
 			windowHeading(c, "rsync 目录传输")
 			ui.Text(c, fmt.Sprintf("目标：%s · %s", d.pane.profile.Name, d.pane.profile.Host)).Wrap()

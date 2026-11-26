@@ -11,10 +11,17 @@ import (
 	"time"
 )
 
+func isRegisteredClientLaunch(args []string) bool {
+	return runtime.GOOS == "windows" && len(args) > 0 && args[0] == "--oshell-bastion-client"
+}
+
 func forwardExternalLaunchIfRequested() error {
 	args := os.Args[1:]
 	helper := core.CompatibilityLauncher(args)
-	if runtime.GOOS == "windows" && core.IsBastionSSHLaunch(args) {
+	if isRegisteredClientLaunch(args) {
+		args = args[1:]
+		helper = "OShell-Bastion"
+	} else if runtime.GOOS == "windows" && core.IsBastionSSHLaunch(args) {
 		helper = "OShell-Bastion"
 	}
 	if helper == "" {

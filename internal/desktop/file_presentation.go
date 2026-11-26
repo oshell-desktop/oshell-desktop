@@ -236,7 +236,7 @@ func (a *App) terminalFileCommandDialog(c *ui.Context) {
 	if !f.confirmOpen {
 		return
 	}
-	desktopModal(c.Key("terminal-file-command"), &f.confirmOpen, func() {
+	terminalModal(c.Key("terminal-file-command"), &f.confirmOpen, func() {
 		dialogBody(c, 540).Gap(10).Children(func() {
 			ui.Text(c, "在当前终端启动文件管理？").Bold()
 			ui.Text(c, "目标："+f.commandPane.profile.Name).Wrap()

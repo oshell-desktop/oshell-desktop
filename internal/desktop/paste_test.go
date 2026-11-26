@@ -111,6 +111,49 @@ func TestPastePreviewFreezesTargetsAndAllowsEditing(t *testing.T) {
 	}
 }
 
+func TestLocalPasteOptionsAppliedAndRestored(t *testing.T) {
+	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
+	p, conn := operatorPane(t, a, "target")
+	prefs := a.localUI.clone()
+	prefs.TrimPasteNewlines, prefs.MiddleClickPaste, prefs.StartLocalPrompt = true, true, true
+	if !a.saveLocalPreferences(prefs) {
+		t.Fatal(a.status)
+	}
+	stored := loadLocalPreferences(a.store.Dir)
+	if !stored.TrimPasteNewlines || !stored.MiddleClickPaste || !stored.StartLocalPrompt {
+		t.Fatal("local options lost")
+	}
+	a.requestPaste(p, "one\r\n\r\n")
+	waitOperator(t, a, func() bool { return conn.text() == "one" })
+	a.requestPaste(p, "first\r\nsecond\r\n")
+	if !a.features.pasteOpen || a.features.pasteText != "first\nsecond" {
+		t.Fatal("multiline preview bypassed")
+	}
+}
+
+func TestDoubleClickEmptyStripOpensLocalPrompt(t *testing.T) {
+	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
+	a.localUI.DoubleClickNewPrompt = true
+	view := ui.NewTester(a.view, 1000, 700)
+	strip, ok := view.Find("标签栏空白区域")
+	if !ok {
+		t.Fatal("missing tab strip")
+	}
+	click := func() { view.ClickAt(strip.X+8, strip.Y+strip.H/2) }
+	click()
+	if len(a.tabs) != 0 {
+		t.Fatal("single click opened a tab")
+	}
+	click()
+	view.Frame()
+	if len(a.tabs) != 1 || a.activePane().profile.Kind != "blank" {
+		t.Fatal("double click did not open a blank tab")
+	}
+	p := a.activePane()
+	defer a.dispose(p)
+	waitOperator(t, a, func() bool { return p.term != nil })
+}
+
 func TestPasteClosedTargetRejectsWholeDispatchAndEmptyCancelSendNothing(t *testing.T) {
 	for _, action := range []string{"closed", "cancel", "empty", "invalid", "oversized", "missing"} {
 		t.Run(action, func(t *testing.T) {
