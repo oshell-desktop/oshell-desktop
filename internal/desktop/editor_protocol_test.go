@@ -40,6 +40,7 @@ func TestSavingFTPDiscardsSSHOnlyConfiguration(t *testing.T) {
 	p.Username = "tester"
 	p.IdentityFile = "key"
 	p.LegacySSH = true
+	p.SSHAuthenticationMethods = []string{"publickey"}
 	p.ProxyID = core.NewID()
 	p.JumpHost = "jump.invalid"
 	a.config.Profiles = []core.Profile{p}
@@ -50,7 +51,30 @@ func TestSavingFTPDiscardsSSHOnlyConfiguration(t *testing.T) {
 	if err := a.applyConnectionEditor(); err != nil {
 		t.Fatal(err)
 	}
-	if a.port != "21" || a.draft.InitialDirectory != "/" || a.draft.ProxyID != "" || a.draft.IdentityFile != "" || a.draft.JumpHost != "" || a.draft.LegacySSH || len(a.draft.Tunnels) != 0 {
+	if a.port != "21" || a.draft.InitialDirectory != "/" || a.draft.ProxyID != "" || a.draft.IdentityFile != "" || a.draft.JumpHost != "" || a.draft.LegacySSH || len(a.draft.Tunnels) != 0 || a.draft.SSHAuthenticationMethods != nil {
 		t.Fatal("FTP retained SSH-only fields")
+	}
+}
+
+func TestEditorPreservesSharedSSHAuthenticationMethods(t *testing.T) {
+	a := newApp(&core.Store{Dir: t.TempDir()}, core.DefaultConfig())
+	p := core.NewProfile()
+	p.Host = "fixture.invalid"
+	p.SSHAuthenticationMethods = []string{"gssapi-with-mic", "keyboard-interactive"}
+	a.config.Profiles = []core.Profile{p}
+	a.edit(p)
+	a.draft.Name = "Renamed on Desktop"
+	if err := a.applyConnectionEditor(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(a.draft.SSHAuthenticationMethods, p.SSHAuthenticationMethods) {
+		t.Fatal("editing lost shared authentication policy")
+	}
+	a.draft.Kind = "sftp"
+	if err := a.applyConnectionEditor(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(a.draft.SSHAuthenticationMethods, p.SSHAuthenticationMethods) {
+		t.Fatal("SFTP lost SSH authentication policy")
 	}
 }

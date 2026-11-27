@@ -12,27 +12,28 @@ import (
 )
 
 type Profile struct {
-	RuntimeTerminalType    string          `json:"-"`
-	RuntimeBastionEndpoint string          `json:"-"`
-	ProxyID                string          `json:"proxyID,omitempty"`
-	RuntimeProxyRoute      []ProxySettings `json:"-"`
-	resolvedIdentityFiles  []string
-	QuickConnect           bool              `json:"quickConnect"`
-	TitleMode              string            `json:"titleMode"`
-	ID                     string            `json:"id"`
-	Name                   string            `json:"name"`
-	Group                  string            `json:"group"`
-	Kind                   string            `json:"kind"`
-	Host                   string            `json:"host"`
-	Port                   int               `json:"port"`
-	Username               string            `json:"username"`
-	IdentityFile           string            `json:"identityFile"`
-	JumpHost               string            `json:"jumpHost"`
-	Proxy                  ProxySettings     `json:"proxy"`
-	Tunnels                []TunnelRule      `json:"tunnels"`
-	KeepAlive              KeepAliveSettings `json:"keepAlive"`
-	LegacySSH              bool              `json:"legacySSH"`
-	InitialDirectory       string            `json:"initialDirectory"`
+	RuntimeTerminalType      string          `json:"-"`
+	RuntimeBastionEndpoint   string          `json:"-"`
+	ProxyID                  string          `json:"proxyID,omitempty"`
+	RuntimeProxyRoute        []ProxySettings `json:"-"`
+	resolvedIdentityFiles    []string
+	QuickConnect             bool              `json:"quickConnect"`
+	TitleMode                string            `json:"titleMode"`
+	ID                       string            `json:"id"`
+	Name                     string            `json:"name"`
+	Group                    string            `json:"group"`
+	Kind                     string            `json:"kind"`
+	Host                     string            `json:"host"`
+	Port                     int               `json:"port"`
+	Username                 string            `json:"username"`
+	IdentityFile             string            `json:"identityFile"`
+	JumpHost                 string            `json:"jumpHost"`
+	Proxy                    ProxySettings     `json:"proxy"`
+	Tunnels                  []TunnelRule      `json:"tunnels"`
+	KeepAlive                KeepAliveSettings `json:"keepAlive"`
+	LegacySSH                bool              `json:"legacySSH"`
+	InitialDirectory         string            `json:"initialDirectory"`
+	SSHAuthenticationMethods []string          `json:"sshAuthenticationMethods,omitempty"`
 
 	// Local ssh -G policy only; never serialized into shared configuration.
 	resolvedIdentityFilesSet bool
@@ -62,6 +63,9 @@ func (p Profile) Address() string {
 	return net.JoinHostPort(strings.Trim(p.Host, "[]"), fmt.Sprint(p.Port))
 }
 func (p Profile) Validate() error {
+	if err := p.validateSSHAuthenticationMethods(); err != nil {
+		return err
+	}
 	switch p.TitleMode {
 	case "", "shellIntegration", "activeProbe", "passive":
 	default:
@@ -176,7 +180,7 @@ func (p *Profile) UnmarshalJSON(data []byte) error {
 		v.Proxy.Port = 1080
 	}
 	*p = Profile(v)
-	return nil
+	return p.validateSSHAuthenticationMethods()
 }
 
 type QuickCommand struct {

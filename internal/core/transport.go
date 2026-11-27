@@ -205,7 +205,7 @@ func authenticate(ctx context.Context, c net.Conn, p Profile, cred Credentials, 
 	authAttempts := map[string]int{}
 	var challengeError error
 	methods := make(map[string]ssh.AuthMethod)
-	if cred.Method != "privateKey" && (cred.Password != "" || cred.Challenge != nil || cred.PasswordChallenge != nil) {
+	if p.allowsSSHAuthentication("password") && cred.Method != "privateKey" && (cred.Password != "" || cred.Challenge != nil || cred.PasswordChallenge != nil) {
 		methods["password"] = ssh.PasswordCallback(func() (string, error) {
 			if cred.Password != "" && !suppliedPasswordUsed {
 				suppliedPasswordUsed = true
@@ -239,7 +239,7 @@ func authenticate(ctx context.Context, c net.Conn, p Profile, cred Credentials, 
 			return answers[0], nil
 		})
 	}
-	if cred.Method != "privateKey" && (cred.Password != "" || cred.Challenge != nil || cred.PasswordChallenge != nil || cred.MixedPasswordChallenge != nil) {
+	if p.allowsSSHAuthentication("keyboard-interactive") && cred.Method != "privateKey" && (cred.Password != "" || cred.Challenge != nil || cred.PasswordChallenge != nil || cred.MixedPasswordChallenge != nil) {
 		methods["keyboard-interactive"] = ssh.KeyboardInteractive(func(name, instruction string, questions []string, echo []bool) ([]string, error) {
 			if len(questions) > 32 || len(questions) != len(echo) {
 				return nil, fmt.Errorf("认证问题数量无效")
@@ -282,7 +282,7 @@ func authenticate(ctx context.Context, c net.Conn, p Profile, cred Credentials, 
 			return answers, e
 		})
 	}
-	if !passwordOnly {
+	if !passwordOnly && p.allowsSSHAuthentication("publickey") {
 		var agentSigners []ssh.Signer
 		if !p.resolvedAgentDisabled {
 			if a, e := dialSSHAgent(ctx); e == nil {
@@ -309,12 +309,21 @@ func authenticate(ctx context.Context, c net.Conn, p Profile, cred Credentials, 
 		}
 	}
 	if len(methods) == 0 {
+		if slices.Contains(p.SSHAuthenticationMethods, "gssapi-with-mic") {
+			return nil, fmt.Errorf("当前 Desktop 尚不支持 GSSAPI 身份验证，且没有其他可用的已选认证方式")
+		}
+		if p.SSHAuthenticationMethods != nil {
+			return nil, fmt.Errorf("会话所选的 SSH 身份验证方式没有可用凭据")
+		}
 		return nil, fmt.Errorf("请提供密码、私钥或可用的 SSH Agent")
 	}
 	order := []string{"publickey", "password", "keyboard-interactive"}
 	if (cred.Password == "" || routedLogin) && !passwordOnly && cred.Challenge != nil {
 		// Let the server ask for the factors it needs before inventing a password prompt.
 		order = []string{"publickey", "keyboard-interactive", "password"}
+	}
+	if p.SSHAuthenticationMethods != nil {
+		order = p.SSHAuthenticationMethods
 	}
 	cfg := &ssh.ClientConfig{User: p.Username, HostKeyCallback: trust.Callback(ctx, approve), Timeout: 15 * time.Second}
 	// Reset evidence before each protocol-level attempt, including methods that
@@ -349,6 +358,9 @@ func authenticate(ctx context.Context, c net.Conn, p Profile, cred Credentials, 
 			}
 		}
 		if next == "" {
+			if slices.Contains(p.SSHAuthenticationMethods, "gssapi-with-mic") && slices.Contains(state.AllowedMethods, "gssapi-with-mic") {
+				return nil, fmt.Errorf("当前 Desktop 尚不支持服务器要求的 GSSAPI 身份验证")
+			}
 			return nil, nil
 		}
 		authAttempts[next]++

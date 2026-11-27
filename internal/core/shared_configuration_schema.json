@@ -294,6 +294,20 @@
       "initialDirectory": {
         "type": "string",
         "default": "."
+      },
+      "sshAuthenticationMethods": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 4,
+        "items": {
+          "type": "string",
+          "values": [
+            "password",
+            "publickey",
+            "keyboard-interactive",
+            "gssapi-with-mic"
+          ]
+        }
       }
     },
     "ftp": {

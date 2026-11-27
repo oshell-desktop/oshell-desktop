@@ -121,3 +121,11 @@ Windows Go 与本地 HTTP WebDAV 回归、共享合同检查已通过；不等�
 Desktop 和配套的 Mac OShell v0.6.7 源码从同一合同读取 `preferences.terminalAppearance`。启用后同步四边距、行列间距、字重、东亚字体与字号、粗体呈现、光标、字体质量、标签色和背景图位置。主字体及字号沿用 `fontName` 和 `fontSize`。背景图片及其路径仅存本机。关闭扩展外观后，下次生成共享配置时省略这个对象。
 
 从配色库选用的方案随 `customColorSchemes` 保存完整颜色表。`boldForeground` 仅在普通和粗体默认文字颜色不同时写入。未修改的 v0.6.7 能导入 XCS 和单方案 JSON，也能交换未含扩展字段的共享配置。含新增字段的共享配置需要两端同时更新；旧合同会拒绝应用。字段定义及范围见 [共享字段合同](../internal/core/shared_configuration_schema.json)。
+
+## 8. 会话 SSH 认证方式（2026-11-27）
+
+按用户授权兼容 Mac `b72fc2797f1d6f7636b08ef83d2b11e7a4e4a517` 的 `profiles[].sshAuthenticationMethods`。字段为可选字符串数组，仅用于 SSH / SFTP：包含 1–4 个不重复的 `password`、`publickey`、`keyboard-interactive`、`gssapi-with-mic`。顺序具有含义，不排序；缺失或 null 视为未指定并在写入时省略，空数组拒绝。共享信封仍读 v1/v2、写 v2；会话归档使用同一定义。
+
+Desktop 本机保存、编辑、同步、冲突比较和归档均保留完整列表及顺序。新连接仅尝试列表内有可用凭据的认证方式，沿用已有的有限重试及多因素认证流程；未指定列表时保持现有自动策略。目标会话的列表不继承到跳板和共享代理。Desktop 当前实现密码、公钥及键盘交互，尚未实现 GSSAPI：保留该值供 Mac 使用；允许列表中另有可用方式时继续尝试，只有 GSSAPI 可用时明确报错，不增加未选认证方式。
+
+旧 Desktop 不认识新会话字段，Mac 上述提交又缺少第 7 节的外观扩展，不能以相同的 v2 信封版本推断两端合同一致。Mac 对齐清单、生成命令及双端验收见 [Mac 同步兼容修复交接](macos-sync-compatibility-handoff.md)。Windows 回归不能替代真实 Swift ↔ Go 验收。

@@ -143,6 +143,7 @@ func (c Config) Clone() Config {
 	out.Settings.Highlights = slices.Clone(c.Settings.Highlights)
 	out.Profiles = slices.Clone(c.Profiles)
 	for i := range out.Profiles {
+		out.Profiles[i].SSHAuthenticationMethods = slices.Clone(out.Profiles[i].SSHAuthenticationMethods)
 		out.Profiles[i].Tunnels = slices.Clone(out.Profiles[i].Tunnels)
 		out.Profiles[i].RuntimeProxyRoute = slices.Clone(out.Profiles[i].RuntimeProxyRoute)
 		out.Profiles[i].resolvedIdentityFiles = slices.Clone(out.Profiles[i].resolvedIdentityFiles)

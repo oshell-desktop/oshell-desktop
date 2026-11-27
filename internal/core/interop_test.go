@@ -47,6 +47,11 @@ func TestSwiftSharedProtocolRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, profile := range cfg.Profiles {
+		if (profile.Kind == "ssh" || profile.Kind == "sftp") && !reflect.DeepEqual(profile.SSHAuthenticationMethods, []string{"gssapi-with-mic", "keyboard-interactive", "publickey", "password"}) {
+			t.Fatal("Swift authentication policy lost")
+		}
+	}
 	v, err := OpenVault(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -401,6 +406,7 @@ func TestSwiftAllSharedFieldsAndUnknownRejection(t *testing.T) {
 	profile := NewProfile()
 	profile.Host = "fixture.invalid"
 	profile.Username = "tester"
+	profile.SSHAuthenticationMethods = []string{"gssapi-with-mic", "keyboard-interactive", "publickey", "password"}
 	cfg.Profiles = []Profile{profile}
 	cfg.Settings.FontSize = 13.123456789012345
 	cfg.Settings.TerminalClockOpacity = .123456789012345
@@ -482,6 +488,9 @@ func TestSwiftAllSharedFieldsAndUnknownRejection(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if !reflect.DeepEqual(config.Profiles[0].SSHAuthenticationMethods, profile.SSHAuthenticationMethods) {
+			t.Fatal("authentication method order lost")
+		}
 		if config.Settings.TerminalAppearance == nil || *config.Settings.TerminalAppearance != style || config.Settings.FontSize != cfg.Settings.FontSize || !reflect.DeepEqual(config.Settings.CustomSchemes, cfg.Settings.CustomSchemes) || config.HighlightSets[0].Rules[0].Name != rule.Name || !config.HighlightSets[0].Rules[0].Bold || config.HighlightSets[0].Rules[0].Background != rule.Background {
 			t.Fatal("model fields/precision lost")
 		}
@@ -530,6 +539,16 @@ func TestSwiftAllSharedFieldsAndUnknownRejection(t *testing.T) {
 			}
 		})
 	}
+	for _, value := range []any{[]string{}, []string{"password", "password"}, []string{"future-auth"}, "password", true, []any{1}} {
+		var object map[string]any
+		json.Unmarshal(canonical, &object)
+		object["profiles"].([]any)[0].(map[string]any)["sshAuthenticationMethods"] = value
+		raw, _ := json.Marshal(object)
+		if _, err := decodeNativeDocument(raw); err == nil {
+			t.Fatal("Go accepted invalid authentication policy")
+		}
+		run(raw, "model-json", false)
+	}
 	// Identical handling of each legacy quick-send scope and of malformed values.
 	for _, value := range []any{0, 1, 2, 3, 4, 5, 6, "current", "tab", "all", "visible", "selected", "currentGroup", "selectedGroups", true, 7, -1, "unknown", 1.5} {
 		var object map[string]any
@@ -558,6 +577,7 @@ func TestSwiftSessionArchiveUsesSameDefinitions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	doc.Profiles[0].Definition.SSHAuthenticationMethods = []string{"gssapi-with-mic", "publickey"}
 	archive := PortableArchive{Format: "OShell.sessions", Version: 4, Profiles: doc.Profiles, Proxies: doc.Proxies, Directories: doc.Directories, Links: doc.Links.Entries}
 	data, err := archive.Encode()
 	if err != nil {

@@ -305,6 +305,9 @@ func (a *App) connectionEditor(c *ui.Context) {
 }
 func (a *App) applyConnectionEditor() error {
 	a.syncEditorProtocol()
+	if a.draft.Kind != "ssh" && a.draft.Kind != "sftp" {
+		a.draft.SSHAuthenticationMethods = nil
+	}
 	if a.draft.Kind == "ftp" {
 		a.draft.IdentityFile = ""
 		a.draft.JumpHost = ""

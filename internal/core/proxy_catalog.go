@@ -144,6 +144,9 @@ func RequiredProxies(sessions []Profile, proxies []ProxyProfile) ([]ProxyProfile
 	return out, nil
 }
 func (p Profile) MarshalJSON() ([]byte, error) {
+	if err := p.validateSSHAuthenticationMethods(); err != nil {
+		return nil, err
+	}
 	type plain Profile
 	data, e := json.Marshal(plain(p))
 	if e != nil {

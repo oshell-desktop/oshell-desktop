@@ -15,6 +15,9 @@ func validate(_ cfg: Configuration) throws {
  try checked(cfg.preferences.quickSendScope == .selectedGroups && cfg.preferences.terminalClockOpacity == 0.35, "preferences")
  try checked(cfg.profiles[0].tunnels.count == 1, "tunnels")
  for p in cfg.profiles {
+  if p.kind.usesSSH {
+   try checked(p.sshAuthenticationMethods == [.gssapi, .keyboardInteractive, .publicKey, .password], "authentication policy round trip")
+  }
   try checked(try SessionCipher.decrypt(p.encryptedPassword!,master:master,profile:p) == "fixture-"+p.kind.rawValue, "password round trip")
  }
 }
@@ -40,6 +43,7 @@ if args[1] == "contract" {
  var profiles: [SessionProfile] = []
  for kind in [SessionKind.ssh,.sftp,.ftp] {
   var p = SessionProfile(name: "跨端-"+kind.rawValue,group:"共享/生产",kind:kind,host:"fixture.invalid",port:kind == .ftp ? 21:22,username:"fixture")
+  if kind.usesSSH { p.sshAuthenticationMethods = [.gssapi, .keyboardInteractive, .publicKey, .password] }
   p.encryptedPassword = try SessionCipher.encrypt("fixture-"+kind.rawValue,master:master,profile:p,identity:SSHIdentity(host:p.host,user:p.username,port:p.port))
   profiles.append(p)
  }
