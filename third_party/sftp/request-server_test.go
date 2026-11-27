@@ -1030,6 +1030,7 @@ func TestCleanPath(t *testing.T) {
 	assert.Equal(t, "/a", cleanPath("/a/b/.."))
 	assert.Equal(t, "/a/b/c", cleanPath("/a/b/c"))
 	assert.Equal(t, "/", cleanPath("//"))
+	assert.Equal(t, "/a/b", cleanPath("//a///b"))
 	assert.Equal(t, "/a", cleanPath("/a/"))
 	assert.Equal(t, "/a", cleanPath("a/"))
 	assert.Equal(t, "/a/b/c", cleanPath("/a//b//c/"))

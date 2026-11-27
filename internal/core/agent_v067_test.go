@@ -198,7 +198,11 @@ func TestMCPV067BridgeRestartWaitAndReceipt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { server.Close() }()
+	defer func() {
+		if server != nil {
+			server.Close()
+		}
+	}()
 	bridge := NewMCPBridge(root, token)
 	defer bridge.Close()
 	if _, err = bridge.Call(context.Background(), "sessions_list", json.RawMessage(`{}`)); err != nil {

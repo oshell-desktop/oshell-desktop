@@ -65,9 +65,12 @@ func (s *FTPSession) OpenFiles(ctx context.Context) (RemoteFileSystem, error) {
 	password := append([]byte(nil), s.password...)
 	s.mu.Unlock()
 	defer clear(password)
-	f := &FTPFileSystem{sockets: map[net.Conn]bool{}}
+	// The opening context belongs to one directory read, not to the returned
+	// filesystem. Later passive data connections need their own lifetime.
+	dialContext, cancelDials := context.WithCancel(context.Background())
+	f := &FTPFileSystem{sockets: map[net.Conn]bool{}, cancelDials: cancelDials}
 	dial := func(network, address string) (net.Conn, error) {
-		c, e := (&net.Dialer{Timeout: 15 * time.Second}).DialContext(ctx, network, address)
+		c, e := (&net.Dialer{Timeout: 15 * time.Second}).DialContext(dialContext, network, address)
 		if e != nil {
 			return nil, e
 		}
@@ -88,6 +91,10 @@ func (s *FTPSession) OpenFiles(ctx context.Context) (RemoteFileSystem, error) {
 	if e == nil {
 		e = client.Login(p.Username, string(password))
 	}
+	stop()
+	if ctx.Err() != nil {
+		e = ctx.Err()
+	}
 	if e != nil {
 		f.Close()
 		return nil, e
@@ -102,10 +109,11 @@ func (s *FTPSession) OpenFiles(ctx context.Context) (RemoteFileSystem, error) {
 }
 
 type FTPFileSystem struct {
-	client  *ftp.ServerConn
-	mu      sync.Mutex
-	sockets map[net.Conn]bool
-	closed  bool
+	cancelDials context.CancelFunc
+	client      *ftp.ServerConn
+	mu          sync.Mutex
+	sockets     map[net.Conn]bool
+	closed      bool
 }
 
 func (f *FTPFileSystem) Close() error {
@@ -115,6 +123,9 @@ func (f *FTPFileSystem) Close() error {
 		return nil
 	}
 	f.closed = true
+	if f.cancelDials != nil {
+		f.cancelDials()
+	}
 	sockets := f.sockets
 	f.sockets = nil
 	f.mu.Unlock()

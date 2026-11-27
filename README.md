@@ -41,7 +41,7 @@ Linux 需要图形桌面、GTK 3 和 WebKitGTK。Debian / Ubuntu 可安装 `libw
 
 ## 本地构建
 
-需要 Go 1.27.1+、Python 3 和 Git；首次构建下载已校验的 Zig 工具链及依赖，后续复用缓存。
+需要 Go 1.27.4+、Python 3 和 Git；首次构建下载已校验的 Zig 工具链及依赖，后续复用缓存。
 
 ```powershell
 # Windows 单文件便携包

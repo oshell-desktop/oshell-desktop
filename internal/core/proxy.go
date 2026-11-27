@@ -75,9 +75,16 @@ func proxyHandshake(ctx context.Context, c net.Conn, p ProxySettings, password, 
 	case "socks5":
 		e = connectSOCKS5(c, target, p.Username, password)
 	case "socks4", "socks4a":
-		e = connectSOCKS4(ctx, c, target, p.Kind == "socks4a", p.Username)
+		e = connectSOCKS4(handshake, c, target, p.Kind == "socks4a", p.Username)
 	default:
 		e = fmt.Errorf("不支持的代理 %q", p.Kind)
+	}
+	// Stop cancellation before transferring ownership to the caller. A reply
+	// can arrive together with cancellation; never return a closed tunnel as
+	// successful just because its response was already buffered.
+	stop()
+	if handshake.Err() != nil {
+		e = handshake.Err()
 	}
 	if e != nil {
 		c.Close()

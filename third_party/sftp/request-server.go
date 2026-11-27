@@ -347,7 +347,9 @@ func cleanPath(p string) string {
 }
 
 func cleanPathWithBase(base, p string) string {
-	p = filepath.ToSlash(filepath.Clean(p))
+	// Windows filepath.Clean preserves a leading double separator as a UNC
+	// volume. The request path is POSIX, so normalize those separators too.
+	p = path.Clean(filepath.ToSlash(filepath.Clean(p)))
 	if !path.IsAbs(p) {
 		return path.Join(base, p)
 	}

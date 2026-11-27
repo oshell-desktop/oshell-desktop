@@ -52,7 +52,7 @@ func StartMCPServer(root string, clients *MCPClients, handler MCPHandler, discon
 	if clients == nil || handler == nil {
 		return nil, fmt.Errorf("MCP 服务尚未初始化")
 	}
-	l, release, err := listenLaunch(mcpEndpoint(root))
+	l, release, err := listenMCP(root)
 	if err != nil {
 		return nil, err
 	}
@@ -192,10 +192,16 @@ func (b *MCPBridge) Close() error {
 	return nil
 }
 func (b *MCPBridge) request(ctx context.Context, tool string, args json.RawMessage) (any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if b.conn == nil {
-		c, err := dialLaunch(ctx, mcpEndpoint(b.root))
+		c, err := dialMCP(ctx, b.root)
 		if err != nil {
 			return nil, &MCPTransportError{message: "无法连接 OShell MCP 服务；请手动开启，后续请求会自动重连，无需重新配对"}
 		}

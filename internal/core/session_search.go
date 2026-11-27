@@ -29,6 +29,16 @@ func NewSessionQuery(text string) SessionQuery {
 	return SessionQuery{Terms: words, Valid: true}
 }
 func NormalizeSessionSearch(text string) string {
+	ascii := true
+	for i := 0; i < len(text); i++ {
+		if text[i] >= 0x80 {
+			ascii = false
+			break
+		}
+	}
+	if ascii {
+		return strings.ToLower(text)
+	}
 	text = norm.NFD.String(cases.Fold().String(width.Fold.String(text)))
 	return norm.NFC.String(strings.Map(func(r rune) rune {
 		if unicode.Is(unicode.Mn, r) {

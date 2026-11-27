@@ -4,7 +4,7 @@
 
 ## 运行与构建
 
-需要 Go 1.27.1+、Python 3、Git。构建脚本自动下载并校验 Zig 0.16.0，缓存源码和终端运行库；只构建 Windows / Linux。Linux 还需要图形桌面或虚拟显示，以及 GTK 3 / WebKitGTK。
+需要 Go 1.27.4+、Python 3、Git。构建脚本自动下载并校验 Zig 0.16.0，缓存源码和终端运行库；只构建 Windows / Linux。Linux 还需要图形桌面或虚拟显示，以及 GTK 3 / WebKitGTK。
 
 ```sh
 python scripts/terminal_runtime.py --target windows/amd64 -- go run .

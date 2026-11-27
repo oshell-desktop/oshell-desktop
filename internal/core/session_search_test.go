@@ -31,3 +31,24 @@ func TestSessionQueryNormalizationAndBounds(t *testing.T) {
 		t.Fatal("local title absent")
 	}
 }
+
+func TestSessionSearchASCIIAndUnicodeEquivalence(t *testing.T) {
+	var ascii, folded strings.Builder
+	for i := byte(0); i < 128; i++ {
+		ascii.WriteByte(i)
+		if i >= 'A' && i <= 'Z' {
+			folded.WriteByte(i + 'a' - 'A')
+		} else {
+			folded.WriteByte(i)
+		}
+	}
+	for _, tc := range []struct{ input, want string }{
+		{"", ""}, {ascii.String(), folded.String()},
+		{"Straße CAFÉ ＰＲＯＤ", "strasse cafe prod"},
+		{"A\u0301BC", "abc"}, {"生产 SSH", "生产 ssh"},
+	} {
+		if got := NormalizeSessionSearch(tc.input); got != tc.want {
+			t.Fatalf("normalize %q: %q != %q", tc.input, got, tc.want)
+		}
+	}
+}

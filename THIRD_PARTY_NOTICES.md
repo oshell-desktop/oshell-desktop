@@ -41,7 +41,7 @@ Development fallback library hashes are pinned by internal/terminal/mygo-plugin.
 
 The OShell listing path also limits MLSD/LIST/NLST responses to 4 MiB and treats size/UTF-8 violations as terminal errors. Strict LIST parsing retains UTC timestamps from RFC3659 facts; legacy ls/DIR dates without an explicit zone (or year) are displayed as unknown rather than inferred.
 
-`third_party/sftp` contains github.com/pkg/sftp v1.13.11 (BSD-2-Clause; see LICENSE), patched to retain verified UNIX long-listing owner/group display hints. Numeric SFTP attributes remain authoritative.
+`third_party/sftp` contains github.com/pkg/sftp v1.13.11 (BSD-2-Clause; see LICENSE), patched to retain verified UNIX long-listing owner/group display hints and normalize server request paths to POSIX form on Windows. Numeric SFTP attributes remain authoritative.
 
 ## Fixed legacy SSH algorithms (SF-C03)
 

@@ -86,7 +86,8 @@ func sortSessionList[T any](items []T, key func(T) sessionSortKey) {
 
 func (a *App) buildManagerRows() []sessionRow {
 	cfg := a.presentationConfig()
-	var folders, profiles []sessionRow
+	var folders []sessionRow
+	profiles := make([]sessionRow, 0, len(cfg.Profiles)+len(cfg.Links))
 	seen := map[string]bool{}
 	query := core.NewSessionQuery(a.query)
 	if !query.Valid {
@@ -140,13 +141,18 @@ func (a *App) buildManagerRows() []sessionRow {
 		}
 		profiles = append(profiles, r)
 	}
-	sources := map[string]core.Profile{}
 	for _, p := range cfg.Profiles {
-		sources[p.ID] = p
 		add(sessionRow{id: p.ID, name: p.Name, group: p.Group, profile: p})
 	}
+	sources := map[string]int{}
+	if len(cfg.Links) > 0 {
+		for i, p := range cfg.Profiles {
+			sources[p.ID] = i
+		}
+	}
 	for _, l := range cfg.Links {
-		if p, ok := sources[l.ProfileID]; ok {
+		if index, ok := sources[l.ProfileID]; ok {
+			p := cfg.Profiles[index]
 			g := "Links"
 			if l.Folder != "" {
 				g += "/" + l.Folder
